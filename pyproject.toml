@@ -1,0 +1,24 @@
+[project]
+name = "market-lens"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "market-lens-utils",
+    "market-lens-pipeline",
+    "market-lens-models",
+    "market-lens-dashboard",
+]
+
+[tool.uv.sources]
+market-lens-utils = { workspace = true }
+market-lens-pipeline = { workspace = true }
+market-lens-models = { workspace = true }
+market-lens-dashboard = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "utils",
+    "packages/pipeline",
+    "packages/models",
+    "packages/dashboard/backend",
+]

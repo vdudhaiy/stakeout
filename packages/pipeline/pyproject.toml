@@ -1,0 +1,19 @@
+[project]
+name = "market-lens-pipeline"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas",
+    "yfinance",
+    "python-dotenv",
+    "market-lens-utils",
+]
+
+[project.scripts]
+pipeline = "src.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.uv.sources]
+market-lens-utils = { workspace = true }
