@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import clsx from 'clsx'
-import { TrendingUp, TrendingDown, RefreshCw } from 'lucide-react'
+import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2 } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
 import { HealthDashboard } from './components/HealthDashboard'
@@ -11,7 +11,8 @@ import { VolumeChart, volUnit } from './components/VolumeChart'
 import { OHLCVStats } from './components/OHLCVStats'
 import { StockInfoCard } from './components/StockInfoCard'
 import { AnalystPanel } from './components/AnalystPanel'
-import { fetchCurrentStock, fetchHealth, fetchMarketStatus, fetchStock, fetchStockDetails } from './api'
+import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchMarketStatus, fetchStock, fetchStockDetails, deleteStock } from './api'
+import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr } from './utils/time'
 import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, ComparisonGroup } from './types'
 
 const DAYS_OPTIONS = [
@@ -29,7 +30,8 @@ const MAX_HISTORY = 50
 
 export default function App() {
   const [view, setView] = useState<View>('home')
-  const [ticker, setTicker] = useState('NVDA')
+  const [ticker, setTicker] = useState('')
+  const [allTickers, setAllTickers] = useState<string[] | null>(null)
   const [days, setDays] = useState(30)
   const [data, setData] = useState<OHLCV[]>([])
   const [loading, setLoading] = useState(false)
@@ -43,6 +45,9 @@ export default function App() {
   const [currentData, setCurrentData] = useState<OHLCV | null>(null)
   const [currentFetchedAt, setCurrentFetchedAt] = useState<Date | null>(null)
   const [currentLoading, setCurrentLoading] = useState(false)
+  const [showMarketHours, setShowMarketHours] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   useEffect(() => {
     const check = () =>
@@ -72,7 +77,12 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    fetchAllStocks().then(setAllTickers).catch(() => setAllTickers([]))
+  }, [])
+
   const loadCurrent = useCallback(() => {
+    if (!ticker) return Promise.resolve()
     setCurrentLoading(true)
     return fetchCurrentStock(ticker)
       .then(res => {
@@ -103,12 +113,31 @@ export default function App() {
     return () => clearInterval(id)
   }, [isPreMarket, loadCurrent])
 
+  useEffect(() => {
+    if (!showMarketHours) return
+    function close(e: MouseEvent) {
+      if (!infoRef.current?.contains(e.target as Node)) setShowMarketHours(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [showMarketHours])
+
   // Tracks which ticker was last loaded so we know whether to fetch details too
   const prevTicker = useRef<string>('')
   // Incremented on every load; stale responses from aborted loads are ignored
   const loadGen = useRef(0)
+  const infoRef = useRef<HTMLDivElement>(null)
+  const initialTickerSet = useRef(false)
+
+  useEffect(() => {
+    if (!initialTickerSet.current && allTickers && allTickers.length > 0) {
+      initialTickerSet.current = true
+      setTicker(allTickers[0])
+    }
+  }, [allTickers])
 
   const load = useCallback(async () => {
+    if (!ticker) return
     const gen = ++loadGen.current
     const isNewTicker = prevTicker.current !== ticker
     prevTicker.current = ticker
@@ -150,6 +179,22 @@ export default function App() {
     load()
   }, [load])
 
+  const handleDelete = useCallback(async () => {
+    setDeleteLoading(true)
+    try {
+      await deleteStock(ticker)
+      const updated = await fetchAllStocks()
+      setAllTickers(updated)
+      const next = updated[0] ?? ''
+      setTicker(next)
+      setData([])
+      setDetails(null)
+    } finally {
+      setDeleteLoading(false)
+      setDeleteConfirm(false)
+    }
+  }, [ticker])
+
   const today = new Date().toISOString().slice(0, 10)
   // Strip today's entry unless market is confirmed closed — partial candles skew the chart
   const displayData = marketOpen !== false ? data.filter(d => d.date !== today) : data
@@ -157,17 +202,41 @@ export default function App() {
   const latest = displayData[displayData.length - 1]
   const prev = displayData[displayData.length - 2]
 
-  // When market is open, currentData has today's live price and latest has yesterday in the archive.
-  // When market is closed, currentData and latest share the same date so we step back one more.
-  const prevClose = (() => {
-    if (!currentData || !latest) return prev?.close ?? null
-    return currentData.date === latest.date ? prev?.close ?? null : latest.close
-  })()
+  // Last complete trading day (archive)
+  const archiveClose = latest?.close ?? null
+  const archiveChange = archiveClose != null && prev?.close != null ? archiveClose - prev.close : null
+  const archiveChangePct = archiveChange != null && prev?.close ? (archiveChange / prev.close) * 100 : null
 
-  const displayPrice = currentData?.close ?? latest?.close ?? null
-  const change = displayPrice != null && prevClose != null ? displayPrice - prevClose : null
-  const changePct = change != null && prevClose != null ? (change / prevClose) * 100 : null
-  const isPositive = change != null ? change >= 0 : null
+  // Live intraday price — only valid while market is open
+  const liveClose = marketOpen ? (currentData?.close ?? null) : null
+  const liveChange = liveClose != null && archiveClose != null ? liveClose - archiveClose : null
+  const liveChangePct = liveChange != null && archiveClose ? (liveChange / archiveClose) * 100 : null
+
+  // Pre-market price — only valid when isPreMarket
+  const preMarketClose = isPreMarket ? (currentData?.close ?? null) : null
+  const preMarketChange = preMarketClose != null && archiveClose != null ? preMarketClose - archiveClose : null
+  const preMarketChangePct = preMarketChange != null && archiveClose ? (preMarketChange / archiveClose) * 100 : null
+  const preMarketTime = isPreMarket ? (currentData?.date?.split('T')[1] ?? null) : null
+  const offHoursLabel = preMarketTime != null && preMarketTime >= '16:00' ? 'AFTER-HOURS' : 'PRE-MARKET'
+  const preMarketLocalTime = isPreMarket && currentData?.date
+    ? fmtHHMMWithTz(parseEtDateStr(currentData.date))
+    : null
+  const localTz = localTzAbbr()
+  const scheduleLocal = {
+    pmStart:  etToLocalHHMM('04:00'),
+    mktOpen:  etToLocalHHMM('09:30'),
+    mktClose: etToLocalHHMM('16:00'),
+    ahEnd:    etToLocalHHMM('20:00'),
+  }
+
+  // Header primary price: live when market open, otherwise archive close
+  const headerPrice = liveClose ?? archiveClose
+  const headerChange = liveClose != null ? liveChange : archiveChange
+  const headerChangePct = liveClose != null ? liveChangePct : archiveChangePct
+
+  // OHLCV stats block source and its baseline for change calculation
+  const mainOHLCV = marketOpen ? currentData : latest
+  const mainOHLCVPrevClose = marketOpen ? archiveClose : (prev?.close ?? null)
 
   const displayName = details?.info?.displayName as string | undefined
   const shortName = details?.info?.shortName as string | undefined
@@ -188,10 +257,20 @@ export default function App() {
         />
       ) : (
         <div className="flex flex-1 overflow-hidden">
+          {allTickers === null ? (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="flex items-center gap-2 text-zinc-500 text-sm">
+                <RefreshCw size={14} className="animate-spin" />
+                Loading stocks...
+              </div>
+            </div>
+          ) : <>
           <TickerSidebar
             selected={ticker}
+            tickers={allTickers}
             onSelect={t => { setComparisonGroup(null); setTicker(t) }}
             onCompare={setComparisonGroup}
+            onTickersUpdated={setAllTickers}
           />
 
           {comparisonGroup ? (
@@ -209,37 +288,32 @@ export default function App() {
                         <span className="text-zinc-500 font-normal text-lg ml-2">({ticker})</span>
                       )}
                     </h1>
-                    {displayPrice != null && (
+
+                    {/* Primary price: archive close (or live when market open) */}
+                    {headerPrice != null && (
                       <span className="font-mono text-xl font-semibold text-zinc-100">
-                        ${displayPrice.toFixed(2)}
+                        ${headerPrice.toFixed(2)}
                       </span>
                     )}
-                    {change !== null && (
-                      <span
-                        className={clsx(
-                          'flex items-center gap-1 text-sm font-mono',
-                          isPositive ? 'text-emerald-400' : 'text-red-400',
-                        )}
-                      >
-                        {isPositive ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
-                        {isPositive ? '+' : ''}
-                        {change.toFixed(2)} ({isPositive ? '+' : ''}
-                        {changePct!.toFixed(2)}%)
+                    {headerChange !== null && (
+                      <span className={clsx(
+                        'flex items-center gap-1 text-sm font-mono',
+                        headerChange >= 0 ? 'text-emerald-400' : 'text-red-400',
+                      )}>
+                        {headerChange >= 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                        {headerChange >= 0 ? '+' : ''}{headerChange.toFixed(2)} ({headerChange >= 0 ? '+' : ''}{headerChangePct!.toFixed(2)}%)
                       </span>
                     )}
+
                   </div>
-                  {(currentData ?? latest) && (
+
+                  {(latest ?? currentData) && (
                     <div className="flex items-center gap-1.5 mt-1">
                       <p className="text-zinc-500 text-xs">
-                        {(marketOpen || isPreMarket) && currentFetchedAt
-                          ? `Last updated at ${currentFetchedAt.toLocaleTimeString()}`
-                          : `Last updated ${(currentData ?? latest!).date}`}
+                        {marketOpen && currentFetchedAt
+                          ? `Live · ${currentFetchedAt.toLocaleTimeString()}`
+                          : `Last updated ${latest?.date ?? ''}`}
                       </p>
-                      {isPreMarket && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 leading-none">
-                          Pre-market
-                        </span>
-                      )}
                       <button
                         onClick={loadCurrent}
                         disabled={currentLoading}
@@ -277,23 +351,95 @@ export default function App() {
                   >
                     <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
                   </button>
+                  <button
+                    onClick={() => setDeleteConfirm(true)}
+                    title={`Delete ${ticker}`}
+                    className="p-2 text-red-600 hover:text-red-400 hover:bg-zinc-900 rounded-lg transition-colors"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               </div>
 
-              {/* Company info (sector / industry / summary) */}
-              {details?.info && <StockInfoCard info={details.info} />}
+              {/* Pre-market / after-hours block */}
+              {isPreMarket && preMarketClose != null && (
+                <div className="flex items-center gap-5 bg-zinc-900 border border-amber-500/20 rounded-xl px-5 py-3">
+                  <span className="text-[10px] font-semibold tracking-widest text-amber-400 shrink-0">
+                    {offHoursLabel}
+                  </span>
+                  <span className="font-mono text-sm font-semibold text-zinc-100">
+                    ${preMarketClose.toFixed(2)}
+                  </span>
+                  {preMarketChange != null && (
+                    <span className={clsx(
+                      'flex items-center gap-1 text-sm font-mono',
+                      preMarketChange >= 0 ? 'text-emerald-400' : 'text-red-400',
+                    )}>
+                      {preMarketChange >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                      {preMarketChange >= 0 ? '+' : ''}{preMarketChange.toFixed(2)} ({preMarketChange >= 0 ? '+' : ''}{preMarketChangePct!.toFixed(2)}%)
+                    </span>
+                  )}
 
-              {/* OHLCV stats */}
-              {(currentData ?? latest) && (
+                  <div className="ml-auto flex items-center gap-2.5 shrink-0">
+                    {preMarketTime && (
+                      <span className="text-zinc-600 text-xs">
+                        as of {preMarketTime} ET
+                        {preMarketLocalTime && <> ({preMarketLocalTime})</>}
+                      </span>
+                    )}
+
+                    {/* Market hours info popover */}
+                    <div ref={infoRef} className="relative">
+                      <button
+                        onClick={() => setShowMarketHours(s => !s)}
+                        title="NYSE market hours"
+                        className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                      >
+                        <Info size={14} />
+                      </button>
+                      {showMarketHours && (
+                        <div className="absolute right-0 top-6 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl">
+                          <p className="text-[10px] font-semibold tracking-widest text-zinc-400 mb-3">
+                            NYSE MARKET HOURS
+                          </p>
+                          <div className="space-y-3">
+                            {([
+                              { label: 'Pre-market',  color: 'text-amber-400',   et: '04:00 – 09:30', local: `${scheduleLocal.pmStart} – ${scheduleLocal.mktOpen}` },
+                              { label: 'Regular',     color: 'text-emerald-400', et: '09:30 – 16:00', local: `${scheduleLocal.mktOpen} – ${scheduleLocal.mktClose}` },
+                              { label: 'After-hours', color: 'text-blue-400',    et: '16:00 – 20:00', local: `${scheduleLocal.mktClose} – ${scheduleLocal.ahEnd}` },
+                            ] as const).map(({ label, color, et, local }) => (
+                              <div key={label} className="space-y-0.5">
+                                <span className={`text-[10px] font-semibold tracking-widest ${color}`}>
+                                  {label.toUpperCase()}
+                                </span>
+                                <div className="flex items-center justify-between text-xs font-mono">
+                                  <span className="text-zinc-400">{et} ET</span>
+                                  <span className="text-zinc-300">({local} {localTz})</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* OHLCV stats — last complete trading day, or live today when market is open */}
+              {mainOHLCV && (
                 <OHLCVStats
-                  open={(currentData ?? latest!).open}
-                  high={(currentData ?? latest!).high}
-                  low={(currentData ?? latest!).low}
-                  close={(currentData ?? latest!).close}
-                  volume={(currentData ?? latest!).volume}
-                  prevClose={prevClose ?? undefined}
+                  open={mainOHLCV.open}
+                  high={mainOHLCV.high}
+                  low={mainOHLCV.low}
+                  close={mainOHLCV.close}
+                  volume={mainOHLCV.volume}
+                  prevClose={mainOHLCVPrevClose ?? undefined}
                 />
               )}
+
+              {/* Company info (sector / industry / summary) */}
+              {details?.info && <StockInfoCard info={details.info} />}
 
               {/* Charts */}
               {error ? (
@@ -322,7 +468,7 @@ export default function App() {
                       CLOSE PRICE
                     </p>
                     <div className="h-64">
-                      <PriceChart data={displayData} />
+                      <PriceChart data={displayData} days={days} />
                     </div>
                   </div>
 
@@ -331,7 +477,7 @@ export default function App() {
                       VOLUME ({volUnit(displayData)})
                     </p>
                     <div className="h-36">
-                      <VolumeChart data={displayData} />
+                      <VolumeChart data={displayData} days={days} />
                     </div>
                   </div>
 
@@ -350,6 +496,34 @@ export default function App() {
             </div>
           </main>
           )}
+          </>}
+        </div>
+      )}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">
+            <h2 className="text-sm font-semibold text-zinc-100 mb-1">Delete {ticker}?</h2>
+            <p className="text-xs text-zinc-400 mb-5">
+              All archived data for {ticker} will be removed. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteConfirm(false)}
+                disabled={deleteLoading}
+                className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleteLoading}
+                className="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40 flex items-center gap-1.5"
+              >
+                {deleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

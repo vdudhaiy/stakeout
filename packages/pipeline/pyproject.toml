@@ -6,6 +6,7 @@ dependencies = [
     "pandas",
     "yfinance",
     "python-dotenv",
+    "pandas-market-calendars",
     "market-lens-utils",
 ]
 

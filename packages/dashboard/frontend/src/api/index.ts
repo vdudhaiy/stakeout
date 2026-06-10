@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockCreateResponse } from '../types'
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -59,6 +59,23 @@ export async function fetchCurrentStock(ticker: string): Promise<OHLCVResponse> 
     throw new Error(err.detail ?? `Failed to load current data for ${ticker}`)
   }
   return res.json()
+}
+
+export async function addStock(ticker: string): Promise<StockCreateResponse> {
+  const res = await fetch(`/stocks/${encodeURIComponent(ticker)}`, { method: 'POST' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to add ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function deleteStock(ticker: string): Promise<void> {
+  const res = await fetch(`/stocks/${encodeURIComponent(ticker)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to delete ${ticker}`)
+  }
 }
 
 export async function fetchMarketStatus(): Promise<boolean | null> {

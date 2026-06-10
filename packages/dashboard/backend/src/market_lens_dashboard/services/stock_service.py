@@ -9,7 +9,31 @@ import yfinance as yf
 from ..config import ARCHIVE_DATA_DIR
 from ..schemas.stocks import *
 import pandas_market_calendars as mcal
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone, timedelta
+
+# Tracks the last _last_completed_trading_day we already attempted to fetch for each ticker.
+# Prevents hammering yfinance when Yahoo Finance hasn't published the day's data yet;
+# the attempt resets automatically once a newer completed trading day becomes available.
+_update_attempted: dict[str, pd.Timestamp] = {}
+
+async def _last_completed_trading_day() -> pd.Timestamp | None:
+    '''
+    Return the most recent NYSE trading day whose market session has fully closed,
+    using UTC-aware timestamps throughout so server timezone is irrelevant.
+    '''
+    nyse = mcal.get_calendar('NYSE')
+    now_utc = datetime.now(timezone.utc)
+    schedule = nyse.schedule(
+        start_date=(now_utc - timedelta(days=10)).date(),
+        end_date=now_utc.date(),
+    )
+    if schedule.empty:
+        return None
+    closed = schedule[schedule['market_close'] <= pd.Timestamp(now_utc)]
+    if closed.empty:
+        return None
+    return pd.Timestamp(closed.index[-1].date())
+
 
 async def get_market_status():
     '''
@@ -21,11 +45,18 @@ async def get_market_status():
 
     now = datetime.now(timezone.utc)
 
-    schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
+    schedule = nyse.schedule(
+        start_date=now.date(),
+        end_date=now.date(),
+    )
 
-    is_open = nyse.open_at_time(schedule, now)
+    if schedule.empty:
+        return False
 
-    return is_open
+    market_open = schedule.iloc[0]["market_open"]
+    market_close = schedule.iloc[0]["market_close"]
+
+    return market_open <= now <= market_close
 
 
 async def get_all_stocks():
@@ -56,9 +87,29 @@ async def add_stock(ticker: str):
         service = StockService()
         stock = yf.Ticker(ticker)
         detailed_info = service.get_stock_details(stock)  # Get detailed info for the stock
-        return ohlcv, detailed_info
+        return StockCreateResponse(exist=False, ohlcv=ohlcv, details=detailed_info)
     except Exception as e:
         raise ValueError(f"Error creating stock data for {ticker}: {str(e)}")
+
+
+async def delete_stock(ticker: str):
+    '''
+    Delete stock data for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+    Returns:
+        dict: A message indicating whether the deletion was successful.
+    '''
+    try:
+        files = os.listdir(ARCHIVE_DATA_DIR)
+        ticker_files = [f for f in files if f.startswith(ticker) and f.endswith(".csv")]
+        if not ticker_files:
+            raise ValueError(f"No CSV data found for ticker: {ticker}")
+        for f in ticker_files:
+            os.remove(os.path.join(ARCHIVE_DATA_DIR, f))
+        return {"message": f"Stock data for {ticker} deleted successfully."}
+    except Exception as e:
+        raise ValueError(f"Error deleting stock data for {ticker}: {str(e)}")
 
 
 async def fetch(ticker: str, days: int = 30):
@@ -75,19 +126,33 @@ async def fetch(ticker: str, days: int = 30):
     if not ticker_files:
         raise ValueError(f"No CSV data found for ticker: {ticker}")
     
-    # Check last date in the latest file and compare with today's date
+    def _read_archive(path: str, n: int) -> tuple[pd.DataFrame, list]:
+        d = pd.read_csv(path)
+        d.columns = [col.lower() for col in d.columns]
+        d = d.dropna(subset=['close'])  # ignore rows Yahoo Finance hasn't finalised yet
+        return d, d.tail(n).to_dict(orient='records')
+
     file_path = os.path.join(ARCHIVE_DATA_DIR, ticker_files[-1])
-    df = pd.read_csv(file_path)
-    df.columns = [col.lower() for col in df.columns]
-    records = df.tail(days).to_dict(orient="records")
+    _, records = _read_archive(file_path, days)
+    if not records:
+        raise ValueError(f"No confirmed OHLCV data found for ticker: {ticker}")
     last_date = pd.to_datetime(records[-1]['date'])
-    if (pd.Timestamp.now() - last_date).days > 1 and last_date.weekday() < 5:  # If data is outdated and last date is not a weekend
-        # Data is outdated, fetch new data and update the archive
+
+    last_completed = await _last_completed_trading_day()
+    already_attempted = _update_attempted.get(ticker)
+    need_update = (
+        last_completed is not None
+        and last_date.date() < last_completed.date()
+        and (already_attempted is None or already_attempted.date() < last_completed.date())
+    )
+    if need_update:
+        _update_attempted[ticker] = last_completed
         from market_lens_pipeline.fetchers.price import append_price_data
         append_price_data(ticker)
-        df = pd.read_csv(file_path)
-        df.columns = [col.lower() for col in df.columns]
-        records = df.tail(days).to_dict(orient="records")
+        # Re-discover: append_price_data deletes the old file and writes a new one
+        ticker_files = sorted(f for f in os.listdir(ARCHIVE_DATA_DIR) if f.startswith(ticker) and f.endswith(".csv"))
+        file_path = os.path.join(ARCHIVE_DATA_DIR, ticker_files[-1])
+        _, records = _read_archive(file_path, days)
 
     return OHLCVResponse(
         ticker=ticker,
@@ -147,13 +212,18 @@ async def fetch_current(ticker: str):
                 raise ValueError(f"No data available for {ticker} to determine current price")
             df_current = stock.history(
                 interval="1m",
-                period="1d",
+                period="2d",
                 prepost=True
             )
+            today = pd.Timestamp.now(tz=df_current.index.tz).date()
+            df_current = df_current[
+                df_current.index.date == today
+            ]
             # Convert index and filter to outside Regular Trading Hours only
             df = df_current.copy()
             df.index = pd.to_datetime(df.index)
-            df = df[~df.index.to_series().between_time("09:30", "16:00")]
+            mask = ((df.index.time >= time(9, 30)) & (df.index.time <= time(16, 0)))
+            df = df[~mask]
             if df.empty:
                 return last_data  # Return last known data if no after-hours data is available
             last_row = df.iloc[-1]
@@ -163,11 +233,11 @@ async def fetch_current(ticker: str):
                 ticker=ticker,
                 data=[OHLCV(
                     date=today,
-                    open=float(last_data.data[0].open),
-                    high=float(last_data.data[0].high),
-                    low=float(last_data.data[0].low),
+                    open=None,
+                    high=None,
+                    low=None,
                     close=float(current_price),
-                    volume=int(last_data.data[0].volume),
+                    volume=None,
                 )]
             )
     except Exception as e:

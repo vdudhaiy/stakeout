@@ -90,13 +90,28 @@ async def add_stock(ticker: str):
         StockCreateResponse: The stock data for the specified ticker and time period, along with detailed information about the stock, including financials, calendar events, analyst price targets, and recommendations.
     '''
     try:
-        ohlcv_data, detailed_info = await stock_service.add_stock(ticker)
+        all_stocks = await stock_service.get_all_stocks()
+        if ticker in all_stocks:
+            return StockCreateResponse(exist=True, ohlcv=OHLCVResponse(ticker=ticker, data=[]), details=StockDetailedResponse(ticker=ticker))
+        return await stock_service.add_stock(ticker)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return {
-        "ohlcv": ohlcv_data, 
-        "details": detailed_info
-    }
+
+
+@router.delete("/{ticker}")
+async def delete_stock(ticker: str):
+    '''
+    Delete stock data for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+    Returns:
+        dict: A message indicating whether the deletion was successful.
+    '''
+    try:
+        await stock_service.delete_stock(ticker)
+        return {"message": f"Stock data for {ticker} deleted successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{ticker}/details", response_model=StockDetailedResponse)

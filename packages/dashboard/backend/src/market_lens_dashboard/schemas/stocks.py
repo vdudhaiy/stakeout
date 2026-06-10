@@ -14,11 +14,11 @@ class MarketResponse(BaseModel):
 
 class OHLCV(BaseModel):
     date: str
-    open: float
-    high: float
-    low: float
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
     close: float
-    volume: int
+    volume: Optional[int] = None
 
 
 class OHLCVResponse(BaseModel):
@@ -126,6 +126,7 @@ class StockDetailedResponse(BaseModel):
 
 
 class StockCreateResponse(BaseModel):
+    exist: bool
     ohlcv: OHLCVResponse
     details: StockDetailedResponse
 

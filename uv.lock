@@ -483,6 +483,7 @@ source = { editable = "packages/pipeline" }
 dependencies = [
     { name = "market-lens-utils" },
     { name = "pandas" },
+    { name = "pandas-market-calendars" },
     { name = "python-dotenv" },
     { name = "yfinance" },
 ]
@@ -491,6 +492,7 @@ dependencies = [
 requires-dist = [
     { name = "market-lens-utils", editable = "utils" },
     { name = "pandas" },
+    { name = "pandas-market-calendars" },
     { name = "python-dotenv" },
     { name = "yfinance" },
 ]

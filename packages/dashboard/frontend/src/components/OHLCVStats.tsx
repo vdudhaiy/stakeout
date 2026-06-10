@@ -1,19 +1,21 @@
 import clsx from 'clsx'
 
 interface Props {
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+  volume: number | null
   prevClose?: number
 }
 
-function fmtPrice(n: number) {
+function fmtPrice(n: number | null) {
+  if (n == null) return '—'
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function fmtVolume(n: number) {
+function fmtVolume(n: number | null) {
+  if (n == null) return '—'
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K'
@@ -21,15 +23,15 @@ function fmtVolume(n: number) {
 }
 
 export function OHLCVStats({ open, high, low, close, volume, prevClose }: Props) {
-  const change = prevClose !== undefined ? close - prevClose : null
+  const change = prevClose !== undefined && close != null ? close - prevClose : null
   const changePct = change !== null && prevClose ? (change / prevClose) * 100 : null
   const isPositive = change !== null ? change >= 0 : null
 
   const stats = [
-    { label: 'OPEN', value: `$${fmtPrice(open)}`, colored: false },
-    { label: 'HIGH', value: `$${fmtPrice(high)}`, colored: false },
-    { label: 'LOW', value: `$${fmtPrice(low)}`, colored: false },
-    { label: 'CLOSE', value: `$${fmtPrice(close)}`, colored: false },
+    { label: 'OPEN',  value: open  != null ? `$${fmtPrice(open)}`  : '—', colored: false },
+    { label: 'HIGH',  value: high  != null ? `$${fmtPrice(high)}`  : '—', colored: false },
+    { label: 'LOW',   value: low   != null ? `$${fmtPrice(low)}`   : '—', colored: false },
+    { label: 'CLOSE', value: close != null ? `$${fmtPrice(close)}` : '—', colored: false },
     {
       label: 'CHANGE',
       value:

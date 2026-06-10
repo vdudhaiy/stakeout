@@ -9,6 +9,7 @@ import {
   ReferenceLine,
 } from 'recharts'
 import type { OHLCV } from '../types'
+import { computeXTicks, xTickFormatter } from '../utils/chart'
 
 interface TooltipProps {
   active?: boolean
@@ -23,11 +24,11 @@ function CustomTooltip({ active, payload }: TooltipProps) {
       <p className="text-zinc-400 mb-2">{d.date}</p>
       <div className="grid grid-cols-2 gap-x-5 gap-y-1">
         <span className="text-zinc-500">O</span>
-        <span className="text-zinc-200">${d.open.toFixed(2)}</span>
+        <span className="text-zinc-200">${d.open?.toFixed(2) ?? '—'}</span>
         <span className="text-zinc-500">H</span>
-        <span className="text-emerald-400">${d.high.toFixed(2)}</span>
+        <span className="text-emerald-400">${d.high?.toFixed(2) ?? '—'}</span>
         <span className="text-zinc-500">L</span>
-        <span className="text-red-400">${d.low.toFixed(2)}</span>
+        <span className="text-red-400">${d.low?.toFixed(2) ?? '—'}</span>
         <span className="text-zinc-500">C</span>
         <span className="text-white font-medium">${d.close.toFixed(2)}</span>
       </div>
@@ -37,13 +38,16 @@ function CustomTooltip({ active, payload }: TooltipProps) {
 
 interface Props {
   data: OHLCV[]
+  days: number
 }
 
-export function PriceChart({ data }: Props) {
+export function PriceChart({ data, days }: Props) {
   if (data.length === 0) return null
 
-  const min = Math.min(...data.map(d => d.low)) * 0.99
-  const max = Math.max(...data.map(d => d.high)) * 1.01
+  const xTicks = computeXTicks(data.map(d => d.date), days)
+
+  const min = Math.min(...data.map(d => d.low ?? d.close)) * 0.99
+  const max = Math.max(...data.map(d => d.high ?? d.close)) * 1.01
   const firstClose = data[0].close
   const lastClose = data[data.length - 1].close
   const isPositive = lastClose >= firstClose
@@ -64,8 +68,9 @@ export function PriceChart({ data }: Props) {
           tick={{ fill: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono' }}
           tickLine={false}
           axisLine={false}
-          interval="preserveStartEnd"
-          tickFormatter={v => v.slice(5)}
+          ticks={xTicks}
+          interval={0}
+          tickFormatter={v => xTickFormatter(v, days)}
         />
         <YAxis
           domain={[min, max]}

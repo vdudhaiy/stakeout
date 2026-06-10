@@ -1,8 +1,9 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import type { OHLCV } from '../types'
+import { computeXTicks, xTickFormatter } from '../utils/chart'
 
-export function volUnit(data: { volume: number }[]): string {
-  const max = Math.max(...data.map(d => d.volume))
+export function volUnit(data: { volume: number | null }[]): string {
+  const max = Math.max(...data.map(d => d.volume ?? 0))
   if (max >= 1e9) return 'B'
   if (max >= 1e6) return 'M'
   return 'K'
@@ -17,10 +18,13 @@ function fmtVol(v: number) {
 
 interface Props {
   data: OHLCV[]
+  days: number
 }
 
-export function VolumeChart({ data }: Props) {
+export function VolumeChart({ data, days }: Props) {
   if (data.length === 0) return null
+
+  const xTicks = computeXTicks(data.map(d => d.date), days)
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -30,8 +34,9 @@ export function VolumeChart({ data }: Props) {
           tick={{ fill: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono' }}
           tickLine={false}
           axisLine={false}
-          interval="preserveStartEnd"
-          tickFormatter={v => v.slice(5)}
+          ticks={xTicks}
+          interval={0}
+          tickFormatter={v => xTickFormatter(v, days)}
         />
         <YAxis
           tick={{ fill: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono' }}
@@ -54,7 +59,7 @@ export function VolumeChart({ data }: Props) {
         />
         <Bar dataKey="volume" radius={[2, 2, 0, 0]}>
           {data.map((d, i) => (
-            <Cell key={i} fill={d.close >= d.open ? '#10b98128' : '#ef444428'} />
+            <Cell key={i} fill={d.close >= (d.open ?? d.close) ? '#10b98128' : '#ef444428'} />
           ))}
         </Bar>
       </BarChart>

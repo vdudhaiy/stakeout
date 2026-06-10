@@ -1,10 +1,10 @@
 export interface OHLCV {
   date: string
-  open: number
-  high: number
-  low: number
+  open: number | null
+  high: number | null
+  low: number | null
   close: number
-  volume: number
+  volume: number | null
 }
 
 export interface OHLCVResponse {
@@ -66,6 +66,12 @@ export interface StockDetails {
   recommendations_summary?: RecommendationPeriod[] | null
   earnings_estimate?: EarningsEstimateRow[] | null
   revenue_estimate?: RevenueEstimateRow[] | null
+}
+
+export interface StockCreateResponse {
+  exist: boolean
+  ohlcv: OHLCVResponse
+  details: StockDetails
 }
 
 export type GroupedStocks = Record<string, string[]>
