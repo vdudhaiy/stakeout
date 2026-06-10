@@ -63,11 +63,15 @@ async def get_all_stocks():
     '''
     Get a list of all available stocks in the system.
     Returns:
-        list: A list of stock ticker symbols available in the archive directory.
+        dict: A dictionary mapping stock ticker symbols to their display names.
     '''
     files = os.listdir(ARCHIVE_DATA_DIR)
     tickers = set(f.split("_")[0] for f in files if f.endswith(".csv"))
-    return sorted(tickers)
+    stocks = {
+        t.ticker: (t.info.get("displayName") or t.info.get("shortName") or t.ticker)
+        for t in (yf.Ticker(sym) for sym in sorted(tickers))
+    }
+    return stocks
 
 
 async def add_stock(ticker: str):

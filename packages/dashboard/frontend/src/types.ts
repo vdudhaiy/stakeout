@@ -96,6 +96,8 @@ export interface RevenueHistoryResponse {
   revenue_history: RevenueHistoryRow[]
 }
 
+export type StockMap = Record<string, string>
+
 export type GroupedStocks = Record<string, string[]>
 
 export interface ComparisonGroup {

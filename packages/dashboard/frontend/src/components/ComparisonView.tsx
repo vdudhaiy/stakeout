@@ -35,9 +35,10 @@ interface Props {
   group: ComparisonGroup
   onBack: () => void
   marketOpen: boolean | null
+  tickerNames?: Record<string, string>
 }
 
-export function ComparisonView({ group, onBack, marketOpen }: Props) {
+export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props) {
   const [days, setDays] = useState(30)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -192,7 +193,7 @@ export function ComparisonView({ group, onBack, marketOpen }: Props) {
                 key={t}
                 onClick={() => hasData && toggleTicker(t)}
                 disabled={!hasData}
-                title={!hasData ? 'No data available' : undefined}
+                title={!hasData ? 'No data available' : (tickerNames?.[t] ?? t)}
                 className={clsx(
                   'px-3 py-1 rounded-full text-xs font-mono font-medium transition-all border',
                   active && hasData ? 'opacity-100' : 'opacity-30 grayscale',

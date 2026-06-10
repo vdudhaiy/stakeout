@@ -14,7 +14,7 @@ import { AnalystPanel } from './components/AnalystPanel'
 import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
 import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchMarketStatus, fetchStock, fetchStockDetails, fetchEpsHistory, fetchRevenueHistory, deleteStock } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr } from './utils/time'
-import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow } from './types'
+import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow } from './types'
 
 const DAYS_OPTIONS = [
   { label: '7D', value: 7 },
@@ -32,7 +32,7 @@ const MAX_HISTORY = 50
 export default function App() {
   const [view, setView] = useState<View>('home')
   const [ticker, setTicker] = useState('')
-  const [allTickers, setAllTickers] = useState<string[] | null>(null)
+  const [allTickers, setAllTickers] = useState<StockMap | null>(null)
   const [days, setDays] = useState(30)
   const [data, setData] = useState<OHLCV[]>([])
   const [loading, setLoading] = useState(false)
@@ -81,7 +81,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    fetchAllStocks().then(setAllTickers).catch(() => setAllTickers([]))
+    fetchAllStocks().then(setAllTickers).catch(() => setAllTickers({}))
   }, [])
 
   const loadCurrent = useCallback(() => {
@@ -133,9 +133,9 @@ export default function App() {
   const initialTickerSet = useRef(false)
 
   useEffect(() => {
-    if (!initialTickerSet.current && allTickers && allTickers.length > 0) {
+    if (!initialTickerSet.current && allTickers && Object.keys(allTickers).length > 0) {
       initialTickerSet.current = true
-      setTicker(allTickers[0])
+      setTicker(Object.keys(allTickers)[0])
     }
   }, [allTickers])
 
@@ -198,7 +198,7 @@ export default function App() {
       await deleteStock(ticker)
       const updated = await fetchAllStocks()
       setAllTickers(updated)
-      const next = updated[0] ?? ''
+      const next = Object.keys(updated)[0] ?? ''
       setTicker(next)
       setData([])
       setDetails(null)
@@ -280,14 +280,14 @@ export default function App() {
           ) : <>
           <TickerSidebar
             selected={ticker}
-            tickers={allTickers}
+            tickers={allTickers ?? {}}
             onSelect={t => { setComparisonGroup(null); setTicker(t) }}
             onCompare={setComparisonGroup}
             onTickersUpdated={setAllTickers}
           />
 
           {comparisonGroup ? (
-            <ComparisonView group={comparisonGroup} onBack={() => setComparisonGroup(null)} marketOpen={marketOpen} />
+            <ComparisonView group={comparisonGroup} onBack={() => setComparisonGroup(null)} marketOpen={marketOpen} tickerNames={allTickers ?? {}} />
           ) : (
           <main className="flex-1 overflow-y-auto p-6 min-w-0">
             <div className="flex flex-col gap-5 max-w-6xl">

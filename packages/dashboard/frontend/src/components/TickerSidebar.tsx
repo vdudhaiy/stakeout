@@ -2,16 +2,16 @@ import { useState, useEffect, useRef } from 'react'
 import clsx from 'clsx'
 import { Search, ChevronDown, ChevronRight, BarChart2, PlusCircle, Check, X } from 'lucide-react'
 import { fetchAllStocks, fetchIndustryMap, fetchSectorMap, addStock } from '../api'
-import type { GroupedStocks, ComparisonGroup } from '../types'
+import type { GroupedStocks, StockMap, ComparisonGroup } from '../types'
 
 type SidebarTab = 'general' | 'industry' | 'sector'
 
 interface Props {
   selected: string
-  tickers: string[]
+  tickers: StockMap
   onSelect: (ticker: string) => void
   onCompare: (group: ComparisonGroup) => void
-  onTickersUpdated: (tickers: string[]) => void
+  onTickersUpdated: (tickers: StockMap) => void
   onAdded?: (ticker: string) => void
 }
 
@@ -22,6 +22,7 @@ function GroupSection({
   selected,
   onSelect,
   onCompare,
+  tickerNames,
 }: {
   name: string
   tickers: string[]
@@ -29,6 +30,7 @@ function GroupSection({
   selected: string
   onSelect: (t: string) => void
   onCompare: (g: ComparisonGroup) => void
+  tickerNames?: StockMap
 }) {
   const [open, setOpen] = useState(true)
 
@@ -60,6 +62,7 @@ function GroupSection({
         <button
           key={ticker}
           onClick={() => onSelect(ticker)}
+          title={tickerNames?.[ticker]}
           className={clsx(
             'w-full flex items-center pl-8 pr-3 py-2 text-left transition-colors',
             selected === ticker
@@ -137,7 +140,8 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
   }
 
   const q = search.toUpperCase()
-  const filteredTickers = tickers.filter(t => t.includes(q))
+  const tickerSymbols = Object.keys(tickers)
+  const filteredTickers = tickerSymbols.filter(t => t.includes(q))
 
   function filteredGroups(map: GroupedStocks): [string, string[]][] {
     return Object.entries(map)
@@ -257,6 +261,7 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
                   <button
                     key={ticker}
                     onClick={() => onSelect(ticker)}
+                    title={tickers[ticker]}
                     className={clsx(
                       'w-full flex items-center px-4 py-2.5 text-left transition-colors',
                       selected === ticker
@@ -277,15 +282,16 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
               ? <p className="text-zinc-600 text-xs text-center py-4">No data</p>
               : filteredGroups(activeMap).length === 0
                 ? <p className="text-zinc-600 text-xs text-center py-4">No results</p>
-                : filteredGroups(activeMap).map(([name, tickers]) => (
+                : filteredGroups(activeMap).map(([name, groupTickers]) => (
                   <GroupSection
                     key={name}
                     name={name}
-                    tickers={tickers}
+                    tickers={groupTickers}
                     type={tab === 'industry' ? 'industry' : 'sector'}
                     selected={selected}
                     onSelect={onSelect}
                     onCompare={onCompare}
+                    tickerNames={tickers}
                   />
                 ))
         )}

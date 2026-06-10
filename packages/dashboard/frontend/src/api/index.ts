@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse } from '../types'
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -13,11 +13,11 @@ export async function fetchHealth(): Promise<HealthInfo> {
   }
 }
 
-export async function fetchAllStocks(): Promise<string[]> {
+export async function fetchAllStocks(): Promise<StockMap> {
   const res = await fetch('/stocks/')
   if (!res.ok) throw new Error('Failed to fetch stocks list')
   const data = await res.json()
-  return (data.stocks as string[]) ?? []
+  return (data.stocks as StockMap) ?? {}
 }
 
 export async function fetchStockDetails(ticker: string): Promise<StockDetails> {
