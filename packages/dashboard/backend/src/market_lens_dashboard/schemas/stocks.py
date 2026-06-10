@@ -4,7 +4,7 @@ Schema for stocks.
 
 from pydantic import BaseModel
 from typing import List, Optional
-import pandas as pd
+import datetime
 
 
 class MarketResponse(BaseModel):
@@ -62,7 +62,7 @@ class RecommendationPeriod(BaseModel):
 
 
 class UpgradeDowngrade(BaseModel):
-    date: Optional[str] = None
+    date: Optional[datetime.date] = None
     firm: Optional[str] = None
     to_grade: Optional[str] = None
     from_grade: Optional[str] = None
@@ -90,7 +90,7 @@ class RevenueEstimateRow(BaseModel):
 
 
 class EarningsHistoryRow(BaseModel):
-    date: Optional[str] = None
+    date: Optional[datetime.date] = None
     eps_estimate: Optional[float] = None
     eps_actual: Optional[float] = None
     eps_difference: Optional[float] = None
@@ -147,3 +147,25 @@ class IndustryMapResponse(BaseModel):
 
 class SectorMapResponse(BaseModel):
     sectors: dict[str, list[str]]
+
+
+class EPSHistoryRow(BaseModel):
+    date: Optional[datetime.date] = None
+    surprise_percent: Optional[float] = None
+    eps_growth: Optional[float] = None
+
+
+class EPSHistoryResponse(BaseModel):
+    ticker: str
+    earnings_history: List[EPSHistoryRow]
+
+
+class RevenueHistoryRow(BaseModel):
+    date: Optional[datetime.date] = None
+    revenue: Optional[float] = None
+    percent_change: Optional[float] = None
+
+
+class RevenueHistoryResponse(BaseModel):
+    ticker: str
+    revenue_history: List[RevenueHistoryRow]

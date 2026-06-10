@@ -381,3 +381,66 @@ async def fetch_sector_stocks(sector: str):
             ohlcv_data = await fetch(ticker)
             response["ohlcv"].append(ohlcv_data)
     return SectorStocksResponse(**response)
+
+
+async def fetch_eps_history(ticker: str):
+    '''
+    Fetch EPS history for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+    Returns:
+        EPSHistoryResponse: A list of earnings history responses for the specified ticker.
+    '''
+    try:
+        stock = yf.Ticker(ticker)
+        earnings = stock.get_earnings_dates()
+        if earnings is None or earnings.empty:
+            raise ValueError(f"No earnings history data found for ticker: {ticker}")
+        # Remove future earnings rows
+        earnings = earnings[earnings["Reported EPS"].notna()].copy()
+        # Sort oldest -> newest so pct_change works correctly
+        earnings = earnings.sort_index(ascending=True)
+        # Calculate % increase from past quarter to current quarter for each row
+        earnings["eps_growth"] = (earnings["Reported EPS"].pct_change()*100).round(2)
+        # Remove 'Reported EPS' and 'EPS Estimate' columns if they exist
+        earnings = earnings.drop(columns=["Reported EPS", "EPS Estimate"], errors="ignore")
+        earnings = earnings.rename(columns={"Surprise(%)": "surprise_percent"})
+        # Reset index to turn the earnings date into a column, and rename it to "date"
+        earnings = earnings.reset_index().rename(columns={"Earnings Date": "date"})
+        earnings["date"] = pd.to_datetime(earnings["date"]).dt.date
+        # Return both % increase and surprise % for the last 4 quarters
+        earnings_history = earnings.tail(4).to_dict(orient="records")
+        return EPSHistoryResponse(ticker=ticker, earnings_history=[EPSHistoryRow(**row) for row in earnings_history])
+    except Exception as e:
+        raise ValueError(f"Error fetching earnings history for {ticker}: {str(e)}")
+
+
+async def fetch_revenue_history(ticker: str):
+    '''
+    Fetch revenue history for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+    Returns:
+        RevenueHistoryResponse: A list of revenue history responses for the specified ticker.
+    '''
+    try:
+        stock = yf.Ticker(ticker)
+        income_stmt = stock.quarterly_income_stmt
+        if income_stmt is None or income_stmt.empty:
+            raise ValueError(f"No revenue history data found for ticker: {ticker}")
+        # Remove future revenue rows        
+        revenue = income_stmt.loc["Total Revenue"].dropna().copy()
+        # Sort oldest -> newest so pct_change works correctly
+        revenue = revenue.sort_index(ascending=True)
+        # Calculate % increase from past quarter to current quarter for each row
+        revenue = revenue.to_frame().rename(columns={"Total Revenue": "revenue"})
+        revenue["percent_change"] = (revenue["revenue"].pct_change()*100).round(2)
+        # Reset index to turn the date into a column named "date"
+        revenue.index.name = "date"
+        revenue = revenue.reset_index()
+        revenue["date"] = pd.to_datetime(revenue["date"]).dt.date
+        # Return both revenue and % increase for the last 4 quarters
+        revenue_history = revenue.tail(4).to_dict(orient="records")
+        return RevenueHistoryResponse(ticker=ticker, revenue_history=[RevenueHistoryRow(**row) for row in revenue_history])
+    except Exception as e:
+        raise ValueError(f"Error fetching revenue history for {ticker}: {str(e)}")

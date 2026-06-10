@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockCreateResponse } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse } from '../types'
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -76,6 +76,24 @@ export async function deleteStock(ticker: string): Promise<void> {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to delete ${ticker}`)
   }
+}
+
+export async function fetchEpsHistory(ticker: string): Promise<EPSHistoryResponse> {
+  const res = await fetch(`/stocks/${ticker}/eps`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load EPS history for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function fetchRevenueHistory(ticker: string): Promise<RevenueHistoryResponse> {
+  const res = await fetch(`/stocks/${ticker}/revenue`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load revenue history for ${ticker}`)
+  }
+  return res.json()
 }
 
 export async function fetchMarketStatus(): Promise<boolean | null> {

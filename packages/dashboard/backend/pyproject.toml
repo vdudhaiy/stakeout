@@ -9,6 +9,7 @@ dependencies = [
     "sqlalchemy",
     "market-lens-utils",
     "yfinance>=1.4.1",
+    "lxml",
     "pandas_market_calendars",
     "market-lens-pipeline",
 ]

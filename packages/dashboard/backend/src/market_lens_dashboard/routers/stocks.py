@@ -2,7 +2,7 @@
 Router for stock-related endpoints.
 '''
 from fastapi import HTTPException, APIRouter
-from ..schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse
+from ..schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse
 from ..services import stock_service
 
 
@@ -161,3 +161,34 @@ async def get_sector_stocks(sector: str):
         raise HTTPException(status_code=404, detail=str(e))
     return data
 
+
+@router.get("/{ticker}/eps", response_model=EPSHistoryResponse)
+async def get_eps_history(ticker: str):
+    '''
+    Get EPS history for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+    Returns:
+        EPSHistoryResponse: A list of earnings history responses for the specified ticker.
+    '''
+    try:
+        data = await stock_service.fetch_eps_history(ticker)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return data
+
+
+@router.get("/{ticker}/revenue", response_model=RevenueHistoryResponse)
+async def get_revenue_history(ticker: str):
+    '''
+    Get revenue history for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+    Returns:
+        RevenueHistoryResponse: A list of revenue history responses for the specified ticker.
+    '''
+    try:
+        data = await stock_service.fetch_revenue_history(ticker)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return data

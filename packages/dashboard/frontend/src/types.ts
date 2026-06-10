@@ -74,6 +74,28 @@ export interface StockCreateResponse {
   details: StockDetails
 }
 
+export interface EPSHistoryRow {
+  date?: string | null
+  surprise_percent?: number | null
+  eps_growth?: number | null
+}
+
+export interface EPSHistoryResponse {
+  ticker: string
+  earnings_history: EPSHistoryRow[]
+}
+
+export interface RevenueHistoryRow {
+  date?: string | null
+  revenue?: number | null
+  percent_change?: number | null
+}
+
+export interface RevenueHistoryResponse {
+  ticker: string
+  revenue_history: RevenueHistoryRow[]
+}
+
 export type GroupedStocks = Record<string, string[]>
 
 export interface ComparisonGroup {

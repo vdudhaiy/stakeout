@@ -11,9 +11,10 @@ import { VolumeChart, volUnit } from './components/VolumeChart'
 import { OHLCVStats } from './components/OHLCVStats'
 import { StockInfoCard } from './components/StockInfoCard'
 import { AnalystPanel } from './components/AnalystPanel'
-import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchMarketStatus, fetchStock, fetchStockDetails, deleteStock } from './api'
+import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
+import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchMarketStatus, fetchStock, fetchStockDetails, fetchEpsHistory, fetchRevenueHistory, deleteStock } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr } from './utils/time'
-import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, ComparisonGroup } from './types'
+import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow } from './types'
 
 const DAYS_OPTIONS = [
   { label: '7D', value: 7 },
@@ -46,6 +47,8 @@ export default function App() {
   const [currentFetchedAt, setCurrentFetchedAt] = useState<Date | null>(null)
   const [currentLoading, setCurrentLoading] = useState(false)
   const [showMarketHours, setShowMarketHours] = useState(false)
+  const [epsHistory, setEpsHistory] = useState<EPSHistoryRow[] | null>(null)
+  const [revenueHistory, setRevenueHistory] = useState<RevenueHistoryRow[] | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [deleteLoading, setDeleteLoading] = useState(false)
 
@@ -146,20 +149,26 @@ export default function App() {
     setLoading(true)
 
     if (isNewTicker) {
-      // Clear both so nothing renders until both arrive
+      // Clear all so nothing renders until data arrives
       setData([])
       setDetails(null)
+      setEpsHistory(null)
+      setRevenueHistory(null)
     }
 
     try {
       if (isNewTicker) {
-        const [ohlcvRes, detailsRes] = await Promise.all([
+        const [ohlcvRes, detailsRes, epsRes, revenueRes] = await Promise.all([
           fetchStock(ticker, days),
           fetchStockDetails(ticker).catch(() => null),
+          fetchEpsHistory(ticker).catch(() => null),
+          fetchRevenueHistory(ticker).catch(() => null),
         ])
         if (gen !== loadGen.current) return
         setData(ohlcvRes.data)
         setDetails(detailsRes)
+        setEpsHistory(epsRes?.earnings_history ?? null)
+        setRevenueHistory(revenueRes?.revenue_history ?? null)
       } else {
         // Only days changed — details are still valid
         const ohlcvRes = await fetchStock(ticker, days)
@@ -169,7 +178,11 @@ export default function App() {
     } catch (e) {
       if (gen !== loadGen.current) return
       setError(e instanceof Error ? e.message : 'Failed to load data')
-      if (isNewTicker) setData([])
+      if (isNewTicker) {
+        setData([])
+        setEpsHistory(null)
+        setRevenueHistory(null)
+      }
     } finally {
       if (gen === loadGen.current) setLoading(false)
     }
@@ -471,6 +484,12 @@ export default function App() {
                       <PriceChart data={displayData} days={days} />
                     </div>
                   </div>
+
+                  <EarningsHistoryPanel
+                    key={ticker}
+                    epsHistory={epsHistory}
+                    revenueHistory={revenueHistory}
+                  />
 
                   <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
                     <p className="text-[10px] text-zinc-500 tracking-widest font-medium mb-3">
