@@ -5,13 +5,6 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
-@router.get("/")
-async def root():
-    '''
-    Root endpoint that provides basic information about the API.
-    '''
-    return {"message": "Welcome to the Dashboard Backend API. Use /docs for API documentation."}
-
 @router.get("/health")
 async def health_check():
     '''
