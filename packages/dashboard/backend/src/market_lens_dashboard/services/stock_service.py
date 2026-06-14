@@ -3,6 +3,7 @@ Read relevant stock data from the data/ directory and returns it in a format sui
 '''
 
 import os
+import time as _time
 from pathlib import Path
 import pandas as pd
 import yfinance as yf
@@ -15,6 +16,37 @@ from datetime import datetime, time, timezone, timedelta
 # Prevents hammering yfinance when Yahoo Finance hasn't published the day's data yet;
 # the attempt resets automatically once a newer completed trading day becomes available.
 _update_attempted: dict[str, pd.Timestamp] = {}
+
+
+class _SnapshotCache:
+    """In-memory TTL cache for static stock data (info, estimates, recommendations)."""
+
+    def __init__(self, ttl_seconds: int):
+        self._ttl = ttl_seconds
+        self._store: dict[str, tuple[object, float]] = {}
+
+    def get(self, key: str) -> object | None:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        data, expires_at = entry
+        if _time.monotonic() > expires_at:
+            del self._store[key]
+            return None
+        return data
+
+    def set(self, key: str, value: object) -> None:
+        self._store[key] = (value, _time.monotonic() + self._ttl)
+
+    def invalidate(self, key: str) -> None:
+        self._store.pop(key, None)
+
+    def invalidate_ticker(self, ticker: str) -> None:
+        for k in [k for k in self._store if k.startswith(f"{ticker}:")]:
+            del self._store[k]
+
+
+_snapshot_cache = _SnapshotCache(ttl_seconds=6 * 3600)  # 6-hour TTL
 
 async def _last_completed_trading_day() -> pd.Timestamp | None:
     '''
@@ -65,12 +97,16 @@ async def get_all_stocks():
     Returns:
         dict: A dictionary mapping stock ticker symbols to their display names.
     '''
+    cached = _snapshot_cache.get("all_stocks")
+    if cached is not None:
+        return cached
     files = os.listdir(ARCHIVE_DATA_DIR)
     tickers = set(f.split("_")[0] for f in files if f.endswith(".csv"))
     stocks = {
         t.ticker: (t.info.get("displayName") or t.info.get("shortName") or t.ticker)
         for t in (yf.Ticker(sym) for sym in sorted(tickers))
     }
+    _snapshot_cache.set("all_stocks", stocks)
     return stocks
 
 
@@ -87,6 +123,7 @@ async def add_stock(ticker: str):
         # Fetch data from yfinance and save to archive directory using pipeline's price fetcher
         from market_lens_pipeline.fetchers.price import fetch_historical_price_data
         fetch_historical_price_data(ticker)
+        _snapshot_cache.invalidate("all_stocks")
         ohlcv = await fetch(ticker)  # Return the fetched data
         service = StockService()
         stock = yf.Ticker(ticker)
@@ -111,20 +148,20 @@ async def delete_stock(ticker: str):
             raise ValueError(f"No CSV data found for ticker: {ticker}")
         for f in ticker_files:
             os.remove(os.path.join(ARCHIVE_DATA_DIR, f))
+        _snapshot_cache.invalidate_ticker(ticker)
+        _snapshot_cache.invalidate("all_stocks")
         return {"message": f"Stock data for {ticker} deleted successfully."}
     except Exception as e:
         raise ValueError(f"Error deleting stock data for {ticker}: {str(e)}")
 
 
-async def fetch_intraday(ticker: str):
+async def fetch_intraday(stock: yf.Ticker):
     '''
     Fetch intraday stock data for a given ticker.
     Args:
-        ticker (str): The stock ticker symbol.
+        stock (yf.Ticker): The yfinance Ticker object.
     '''
     try:
-        stock = yf.Ticker(ticker)
-        
         df_current = stock.history(
                 interval="15m",
                 period="1d",
@@ -136,9 +173,9 @@ async def fetch_intraday(ticker: str):
         mask = ((df.index.time >= time(9, 30)) & (df.index.time <= time(16, 0)))
         df = df[mask]
         if df.empty:
-            raise ValueError(f"No intraday data available for {ticker}")
+            raise ValueError(f"No intraday data available for {stock.ticker}")
         return OHLCVResponse(
-            ticker=ticker,
+            ticker=stock.ticker,
             data=[OHLCV(
                 date=row.name.strftime("%Y-%m-%dT%H:%M"),
                 open=float(row["Open"]) if not pd.isna(row["Open"]) else None,
@@ -149,7 +186,7 @@ async def fetch_intraday(ticker: str):
             ) for _, row in df.iterrows()]
         )
     except Exception as e:
-        raise ValueError(f"Error fetching current stock data for {ticker}: {str(e)}")
+        raise ValueError(f"Error fetching current stock data for {stock.ticker}: {str(e)}")
 
 
 async def fetch(ticker: str, days: int = 30):
@@ -200,16 +237,16 @@ async def fetch(ticker: str, days: int = 30):
     )
 
 
-async def fetch_current(ticker: str):
+async def fetch_current(stock: yf.Ticker):
     '''
     Fetch the current stock price for a given ticker.
     Args:
-        ticker (str): The stock ticker symbol.
+        stock (yf.Ticker): The yfinance Ticker object.
     Returns:
         OHLCVResponse: The current stock data for the specified ticker.
     '''
     try:
-        stock = yf.Ticker(ticker)
+        ticker = stock.ticker
         is_market_open = await get_market_status()
 
         if is_market_open:
@@ -281,7 +318,7 @@ async def fetch_current(ticker: str):
                 )]
             )
     except Exception as e:
-        raise ValueError(f"Error fetching current stock data for {ticker}: {str(e)}")
+        raise ValueError(f"Error fetching current stock data for {stock.ticker}: {str(e)}")
 
 
 class StockService:
@@ -340,17 +377,21 @@ class StockService:
         return df.to_dict(orient="records")
 
 
-async def fetch_detailed(ticker: str):
+async def fetch_detailed(stock: yf.Ticker):
     '''
     Fetch detailed stock information for a given ticker.
     Args:
-        ticker (str): The stock ticker symbol.
+        stock (yf.Ticker): The yfinance Ticker object.
     Returns:
         StockDetailedResponse: Detailed information about the stock, including financials, calendar events, analyst price targets, and recommendations.
     '''
-    service = StockService()
-    stock = yf.Ticker(ticker)
-    return service.get_stock_details(stock)
+    key = f"{stock.ticker}:detailed"
+    cached = _snapshot_cache.get(key)
+    if cached is not None:
+        return cached
+    result = StockService().get_stock_details(stock)
+    _snapshot_cache.set(key, result)
+    return result
 
 
 async def get_industry_map() -> dict:
@@ -423,16 +464,20 @@ async def fetch_sector_stocks(sector: str):
     return SectorStocksResponse(**response)
 
 
-async def fetch_eps_history(ticker: str):
+async def fetch_eps_history(stock: yf.Ticker):
     '''
     Fetch EPS history for a given ticker.
     Args:
-        ticker (str): The stock ticker symbol.
+        stock (yf.Ticker): The yfinance Ticker object.
     Returns:
         EPSHistoryResponse: A list of earnings history responses for the specified ticker.
     '''
+    key = f"{stock.ticker}:eps"
+    cached = _snapshot_cache.get(key)
+    if cached is not None:
+        return cached
     try:
-        stock = yf.Ticker(ticker)
+        ticker = stock.ticker
         earnings = stock.get_earnings_dates()
         if earnings is None or earnings.empty:
             raise ValueError(f"No earnings history data found for ticker: {ticker}")
@@ -450,25 +495,31 @@ async def fetch_eps_history(ticker: str):
         earnings["date"] = pd.to_datetime(earnings["date"]).dt.date
         # Return both % increase and surprise % for the last 4 quarters
         earnings_history = earnings.tail(4).to_dict(orient="records")
-        return EPSHistoryResponse(ticker=ticker, earnings_history=[EPSHistoryRow(**row) for row in earnings_history])
+        result = EPSHistoryResponse(ticker=ticker, earnings_history=[EPSHistoryRow(**row) for row in earnings_history])
+        _snapshot_cache.set(key, result)
+        return result
     except Exception as e:
-        raise ValueError(f"Error fetching earnings history for {ticker}: {str(e)}")
+        raise ValueError(f"Error fetching earnings history for {stock.ticker}: {str(e)}")
 
 
-async def fetch_revenue_history(ticker: str):
+async def fetch_revenue_history(stock: yf.Ticker):
     '''
     Fetch revenue history for a given ticker.
     Args:
-        ticker (str): The stock ticker symbol.
+        stock (yf.Ticker): The yfinance Ticker object.
     Returns:
         RevenueHistoryResponse: A list of revenue history responses for the specified ticker.
     '''
+    key = f"{stock.ticker}:revenue"
+    cached = _snapshot_cache.get(key)
+    if cached is not None:
+        return cached
     try:
-        stock = yf.Ticker(ticker)
+        ticker = stock.ticker
         income_stmt = stock.quarterly_income_stmt
         if income_stmt is None or income_stmt.empty:
             raise ValueError(f"No revenue history data found for ticker: {ticker}")
-        # Remove future revenue rows        
+        # Remove future revenue rows
         revenue = income_stmt.loc["Total Revenue"].dropna().copy()
         # Sort oldest -> newest so pct_change works correctly
         revenue = revenue.sort_index(ascending=True)
@@ -481,6 +532,38 @@ async def fetch_revenue_history(ticker: str):
         revenue["date"] = pd.to_datetime(revenue["date"]).dt.date
         # Return both revenue and % increase for the last 4 quarters
         revenue_history = revenue.tail(4).to_dict(orient="records")
-        return RevenueHistoryResponse(ticker=ticker, revenue_history=[RevenueHistoryRow(**row) for row in revenue_history])
+        result = RevenueHistoryResponse(ticker=ticker, revenue_history=[RevenueHistoryRow(**row) for row in revenue_history])
+        _snapshot_cache.set(key, result)
+        return result
     except Exception as e:
-        raise ValueError(f"Error fetching revenue history for {ticker}: {str(e)}")
+        raise ValueError(f"Error fetching revenue history for {stock.ticker}: {str(e)}")
+    
+
+async def fetch_stock_dashboard(ticker: str, days: int = 30):
+    '''
+    Fetch all relevant stock data for a given ticker to be displayed on the stock dashboard.
+    Args:
+        ticker (str): The stock ticker symbol.
+        days (int): The number of days of OHLCV data to include.
+    Returns:
+        StockResponse: A comprehensive response containing the stock's OHLCV data and detailed information for the dashboard.
+    '''
+    try:
+        stock = yf.Ticker(ticker)
+        ohlcv = await fetch(ticker, days)
+        detailed = await fetch_detailed(stock)
+        eps = await fetch_eps_history(stock)
+        revenue = await fetch_revenue_history(stock)
+        return StockResponse(
+            ticker=ticker,
+            ohlcv=ohlcv.data,
+            info=detailed.info,
+            analyst_price_targets=detailed.analyst_price_targets,
+            recommendations_summary=detailed.recommendations_summary,
+            earnings_estimate=detailed.earnings_estimate,
+            revenue_estimate=detailed.revenue_estimate,
+            earnings_history=eps.earnings_history,
+            revenue_history=revenue.revenue_history,
+        )
+    except Exception as e:
+        raise ValueError(f"Error fetching dashboard data for {ticker}: {str(e)}")

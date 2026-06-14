@@ -96,6 +96,18 @@ export interface RevenueHistoryResponse {
   revenue_history: RevenueHistoryRow[]
 }
 
+export interface StockDashboardResponse {
+  ticker: string
+  ohlcv: OHLCV[]
+  info?: Record<string, unknown> | null
+  analyst_price_targets?: Record<string, number | null> | null
+  recommendations_summary?: RecommendationPeriod[] | null
+  earnings_estimate?: EarningsEstimateRow[] | null
+  revenue_estimate?: RevenueEstimateRow[] | null
+  earnings_history?: EPSHistoryRow[] | null
+  revenue_history?: RevenueHistoryRow[] | null
+}
+
 export type StockMap = Record<string, string>
 
 export type GroupedStocks = Record<string, string[]>

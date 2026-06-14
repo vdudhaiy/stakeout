@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse } from '../types'
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -101,6 +101,15 @@ export async function fetchRevenueHistory(ticker: string): Promise<RevenueHistor
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to load revenue history for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function fetchStockDashboard(ticker: string, days: number): Promise<StockDashboardResponse> {
+  const res = await fetch(`/stocks/${ticker}/dashboard?days=${days}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load dashboard for ${ticker}`)
   }
   return res.json()
 }

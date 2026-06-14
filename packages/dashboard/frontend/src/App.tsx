@@ -12,7 +12,7 @@ import { OHLCVStats } from './components/OHLCVStats'
 import { StockInfoCard } from './components/StockInfoCard'
 import { AnalystPanel } from './components/AnalystPanel'
 import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
-import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDetails, fetchEpsHistory, fetchRevenueHistory, deleteStock } from './api'
+import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
 import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow } from './types'
 
@@ -164,18 +164,22 @@ export default function App() {
 
     try {
       if (isNewTicker) {
-        const [ohlcvRes, detailsRes, epsRes, revenueRes, intradayRes] = await Promise.all([
-          fetchStock(ticker, effectiveDays),
-          fetchStockDetails(ticker).catch(() => null),
-          fetchEpsHistory(ticker).catch(() => null),
-          fetchRevenueHistory(ticker).catch(() => null),
+        const [dashboardRes, intradayRes] = await Promise.all([
+          fetchStockDashboard(ticker, effectiveDays),
           days === 0 ? fetchIntradayStock(ticker).catch(() => null) : Promise.resolve(null),
         ])
         if (gen !== loadGen.current) return
-        setData(ohlcvRes.data)
-        setDetails(detailsRes)
-        setEpsHistory(epsRes?.earnings_history ?? null)
-        setRevenueHistory(revenueRes?.revenue_history ?? null)
+        setData(dashboardRes.ohlcv)
+        setDetails({
+          ticker: dashboardRes.ticker,
+          info: dashboardRes.info,
+          analyst_price_targets: dashboardRes.analyst_price_targets,
+          recommendations_summary: dashboardRes.recommendations_summary,
+          earnings_estimate: dashboardRes.earnings_estimate,
+          revenue_estimate: dashboardRes.revenue_estimate,
+        } as StockDetails)
+        setEpsHistory(dashboardRes.earnings_history ?? null)
+        setRevenueHistory(dashboardRes.revenue_history ?? null)
         setIntradayData(intradayRes?.data ?? null)
       } else if (days === 0) {
         // Switching into 1D mode — only fetch intraday, keep existing daily data for header

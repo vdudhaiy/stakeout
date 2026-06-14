@@ -169,3 +169,15 @@ class RevenueHistoryRow(BaseModel):
 class RevenueHistoryResponse(BaseModel):
     ticker: str
     revenue_history: List[RevenueHistoryRow]
+
+
+class StockResponse(BaseModel):
+    ticker: str
+    ohlcv: List[OHLCV]
+    info: Optional[dict] = None
+    analyst_price_targets: Optional[dict] = None
+    recommendations_summary: Optional[list[RecommendationPeriod]] = None
+    earnings_estimate: Optional[list[EarningsEstimateRow]] = None
+    revenue_estimate: Optional[list[RevenueEstimateRow]] = None
+    earnings_history: Optional[list[EPSHistoryRow]] = None
+    revenue_history: Optional[list[RevenueHistoryRow]] = None

@@ -2,7 +2,8 @@
 Router for stock-related endpoints.
 '''
 from fastapi import HTTPException, APIRouter
-from ..schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse
+import yfinance as yf
+from ..schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse, StockResponse
 from ..services import stock_service
 
 
@@ -60,7 +61,7 @@ async def get_current_stock_price(ticker: str):
     Returns:
         OHLCVResponse: The current stock data for the specified ticker.
     '''
-    return await stock_service.fetch_current(ticker)
+    return await stock_service.fetch_current(yf.Ticker(ticker))
 
 
 @router.get("/{ticker}/intraday", response_model=OHLCVResponse)
@@ -72,7 +73,7 @@ async def get_intraday_stock_data(ticker: str):
     Returns:
         OHLCVResponse: The intraday stock data for the specified ticker.
     '''
-    return await stock_service.fetch_intraday(ticker)
+    return await stock_service.fetch_intraday(yf.Ticker(ticker))
 
 
 @router.get("/{ticker}", response_model=OHLCVResponse)
@@ -136,7 +137,7 @@ async def get_stock_details(ticker: str):
         StockDetailedResponse: Detailed information about the stock, including financials, calendar events, analyst price targets, and recommendations.
     '''
     try:
-        data = await stock_service.fetch_detailed(ticker)
+        data = await stock_service.fetch_detailed(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return data
@@ -184,7 +185,7 @@ async def get_eps_history(ticker: str):
         EPSHistoryResponse: A list of earnings history responses for the specified ticker.
     '''
     try:
-        data = await stock_service.fetch_eps_history(ticker)
+        data = await stock_service.fetch_eps_history(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return data
@@ -200,7 +201,24 @@ async def get_revenue_history(ticker: str):
         RevenueHistoryResponse: A list of revenue history responses for the specified ticker.
     '''
     try:
-        data = await stock_service.fetch_revenue_history(ticker)
+        data = await stock_service.fetch_revenue_history(yf.Ticker(ticker))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return data
+
+
+@router.get("/{ticker}/dashboard", response_model=StockResponse)
+async def get_stock_dashboard(ticker: str, days: int = 30):
+    '''
+    Get all dashboard data for a given ticker.
+    Args:
+        ticker (str): The stock ticker symbol.
+        days (int): The number of days of OHLCV data to include.
+    Returns:
+        StockResponse: All dashboard data for the specified ticker, including OHLCV data, financials, calendar events, analyst price targets, and recommendations.
+    '''
+    try:
+        data = await stock_service.fetch_stock_dashboard(ticker, days)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return data
