@@ -43,6 +43,14 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> flo
         response = await fetch_current(yf.Ticker(ticker), is_market_open)
         return response.data[0].close if response.data else 0.0
     except Exception:
+        pass
+    # Archive may not exist (e.g. deleted from dashboard) — fetch last close directly.
+    try:
+        def _direct() -> float:
+            hist = yf.Ticker(ticker).history(period="5d")
+            return float(hist["Close"].iloc[-1]) if not hist.empty else 0.0
+        return await asyncio.to_thread(_direct)
+    except Exception:
         return 0.0
 
 

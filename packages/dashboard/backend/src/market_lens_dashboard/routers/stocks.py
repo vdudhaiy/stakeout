@@ -61,7 +61,10 @@ async def get_current_stock_price(ticker: str):
     Returns:
         OHLCVResponse: The current stock data for the specified ticker.
     '''
-    return await stock_service.fetch_current(yf.Ticker(ticker))
+    try:
+        return await stock_service.fetch_current(yf.Ticker(ticker))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{ticker}/intraday", response_model=OHLCVResponse)
@@ -73,7 +76,10 @@ async def get_intraday_stock_data(ticker: str):
     Returns:
         OHLCVResponse: The intraday stock data for the specified ticker.
     '''
-    return await stock_service.fetch_intraday(yf.Ticker(ticker))
+    try:
+        return await stock_service.fetch_intraday(yf.Ticker(ticker))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{ticker}", response_model=OHLCVResponse)

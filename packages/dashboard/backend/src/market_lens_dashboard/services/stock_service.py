@@ -163,18 +163,17 @@ async def fetch_intraday(stock: yf.Ticker):
         stock (yf.Ticker): The yfinance Ticker object.
     '''
     try:
-        df_current = stock.history(
-                interval="15m",
-                period="1d",
-                prepost=True
-            )
-        # Convert index and filter to Regular Trading Hours only
+        df_current = stock.history(interval="15m", period="5d", prepost=True)
         df = df_current.copy()
         df.index = pd.to_datetime(df.index)
-        mask = ((df.index.time >= time(9, 30)) & (df.index.time <= time(16, 0)))
+        # Keep only regular trading hours (9:30–16:00)
+        mask = (df.index.time >= time(9, 30)) & (df.index.time <= time(16, 0))
         df = df[mask]
         if df.empty:
             raise ValueError(f"No intraday data available for {stock.ticker}")
+        # Use the most recent trading day that has data (handles closed/weekend)
+        last_date = df.index.normalize()[-1]
+        df = df[df.index.normalize() == last_date]
         return OHLCVResponse(
             ticker=stock.ticker,
             data=[OHLCV(
@@ -489,8 +488,10 @@ async def fetch_eps_history(stock: yf.Ticker):
         # Remove 'Reported EPS' and 'EPS Estimate' columns if they exist
         earnings = earnings.drop(columns=["Reported EPS", "EPS Estimate"], errors="ignore")
         earnings = earnings.rename(columns={"Surprise(%)": "surprise_percent"})
-        # Reset index to turn the earnings date into a column, and rename it to "date"
-        earnings = earnings.reset_index().rename(columns={"Earnings Date": "date"})
+        # Reset index to turn the earnings date into a column named "date".
+        # Rename the index first so the column name is predictable regardless of yfinance version.
+        earnings.index.name = "date"
+        earnings = earnings.reset_index()
         earnings["date"] = pd.to_datetime(earnings["date"]).dt.date
         # Return both % increase and surprise % for the last 4 quarters
         earnings_history = earnings.tail(4).to_dict(orient="records")
@@ -551,8 +552,14 @@ async def fetch_stock_dashboard(ticker: str, days: int = 30):
         stock = yf.Ticker(ticker)
         ohlcv = await fetch(ticker, days)
         detailed = await fetch_detailed(stock)
-        eps = await fetch_eps_history(stock)
-        revenue = await fetch_revenue_history(stock)
+        try:
+            eps = await fetch_eps_history(stock)
+        except Exception:
+            eps = None
+        try:
+            revenue = await fetch_revenue_history(stock)
+        except Exception:
+            revenue = None
         return StockResponse(
             ticker=ticker,
             ohlcv=ohlcv.data,
@@ -561,8 +568,8 @@ async def fetch_stock_dashboard(ticker: str, days: int = 30):
             recommendations_summary=detailed.recommendations_summary,
             earnings_estimate=detailed.earnings_estimate,
             revenue_estimate=detailed.revenue_estimate,
-            earnings_history=eps.earnings_history,
-            revenue_history=revenue.revenue_history,
+            earnings_history=eps.earnings_history if eps else None,
+            revenue_history=revenue.revenue_history if revenue else None,
         )
     except Exception as e:
         raise ValueError(f"Error fetching dashboard data for {ticker}: {str(e)}")
