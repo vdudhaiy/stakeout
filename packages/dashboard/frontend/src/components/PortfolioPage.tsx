@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import clsx from 'clsx'
 import {
-  Plus, TrendingUp, TrendingDown, ChevronDown, ChevronUp,
+  Plus, ChevronDown, ChevronUp,
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
   BarChart2, AlertTriangle,
 } from 'lucide-react'
@@ -27,9 +27,6 @@ const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
 const sign   = (n: number) => n >= 0 ? '+' : '−'
 
 const gainText   = (n: number) => n >= 0 ? 'text-emerald-400' : 'text-red-400'
-const gainBg     = (n: number) => n >= 0
-  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-  : 'bg-red-500/10 text-red-400 border-red-500/20'
 const gainBorder = (n: number) => n >= 0 ? 'border-l-emerald-500/50' : 'border-l-red-500/50'
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
