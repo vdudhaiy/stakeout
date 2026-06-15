@@ -2,7 +2,6 @@
 
 **A free, open-source desktop app for monitoring stock market trends.**
 
-[![Latest Release](https://img.shields.io/github/v/release/vdudhaiy/market-lens?label=latest%20release&color=4f46e5)](https://github.com/vdudhaiy/market-lens/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3b82f6)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-20%2B-84cc16)](https://nodejs.org/)
@@ -36,6 +35,7 @@ You're also encouraged to fork this project and build your own version. The code
 - **Earnings & Revenue History** — bar charts with toggles for Growth %, Surprise %, and Actual values
 - **Peer Comparison** — normalized % change chart to compare stocks in the same industry or sector side-by-side
 - **Watchlist Management** — add and remove tickers from your personal list; stocks are organized by industry and sector tabs
+- **Portfolio Tracker** — log buy and sell transactions with FIFO cost-basis, track unrealized and realized P&L per holding, and export your full portfolio to Excel
 - **Health Dashboard** — monitor API latency with a rolling history chart so you know when data is stale
 
 ---
@@ -195,10 +195,15 @@ The workflow builds `market-lens-windows.exe`, `market-lens-macos`, and `market-
 
 The backend exposes a REST API at `http://127.0.0.1:8000`. Interactive Swagger docs are available at **`/openapi`** when the server is running.
 
+**Stocks**
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | API health status and latency |
 | `GET` | `/stocks/` | List all tracked stocks |
+| `GET` | `/stocks/market` | Current market open/closed status |
+| `GET` | `/stocks/industries` | Industry → ticker groupings |
+| `GET` | `/stocks/sectors` | Sector → ticker groupings |
 | `POST` | `/stocks/{ticker}` | Add a stock to the watchlist |
 | `DELETE` | `/stocks/{ticker}` | Remove a stock from the watchlist |
 | `GET` | `/stocks/{ticker}?days=N` | Historical OHLCV data for N days |
@@ -207,9 +212,19 @@ The backend exposes a REST API at `http://127.0.0.1:8000`. Interactive Swagger d
 | `GET` | `/stocks/{ticker}/details` | Analyst targets, recommendations, EPS/revenue estimates |
 | `GET` | `/stocks/{ticker}/eps` | EPS history (last 4 quarters) |
 | `GET` | `/stocks/{ticker}/revenue` | Revenue history (last 4 quarters) |
-| `GET` | `/stocks/industries` | Industry → ticker groupings |
-| `GET` | `/stocks/sectors` | Sector → ticker groupings |
-| `GET` | `/stocks/market` | Current market open/closed status |
+| `GET` | `/stocks/{ticker}/dashboard` | All dashboard data for a ticker in one request |
+
+**Portfolio**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/portfolio/` | Full portfolio overview with P&L per holding |
+| `GET` | `/portfolio/download` | Download portfolio as an Excel (.xlsx) file |
+| `GET` | `/portfolio/{ticker}` | Holding details for a single ticker |
+| `POST` | `/portfolio/{ticker}/buy` | Record a buy transaction (`shares`, `bought_at`, optional `date`) |
+| `POST` | `/portfolio/{ticker}/sell` | Record a sell transaction (`shares`, `sold_at`, optional `date`) |
+| `DELETE` | `/portfolio/{ticker}/transactions/{id}` | Delete a specific transaction |
+| `DELETE` | `/portfolio/{ticker}` | Remove a holding and all its transactions |
 
 All market data is sourced from [Yahoo Finance](https://finance.yahoo.com/) via the `yfinance` library.
 
@@ -221,7 +236,6 @@ Market Lens is designed to be forked. Here are some directions you might take it
 
 - Add new data sources beyond Yahoo Finance
 - Build out the `packages/models/` ML module for price prediction
-- Add a portfolio tracker with cost-basis and P&L
 - Create custom alert rules for price thresholds or analyst rating changes
 - Package it as a proper Electron app with a native menu bar
 
