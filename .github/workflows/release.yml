@@ -1,12 +1,16 @@
 name: Build Release Executables
 
-# Triggered when a version tag is pushed (e.g. git tag v1.0.0 && git push --tags).
-# Builds platform-specific binaries on Windows, macOS, and Linux, then attaches
-# them to the GitHub Release for that tag.
+# Runs the full build matrix on every push to main and every PR targeting main.
+# The upload step is skipped unless the trigger is a version tag (e.g. v1.0.0).
 on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write   # required to create releases and upload assets
@@ -73,6 +77,7 @@ jobs:
           fi
 
       - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ matrix.artifact_name }}
