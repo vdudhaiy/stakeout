@@ -73,8 +73,8 @@ def _replay_fifo(holding: Holding, transactions: list[Transaction]) -> None:
 
     Also recalculates bought_at on each sell (FIFO cost of consumed lots) and
     updates holding.shares, holding.sold_shares, holding.average_cost.
-    Raises ValueError if sells would exceed available buy lots after replay.
-    Transactions must be sorted oldest-first (as returned by _fetch_transactions).
+    Raises ValueError if sells would exceed buy lots available on or before the
+    sell date. Transactions must be sorted oldest-first.
     """
     buy_txns = [t for t in transactions if not t.sale]
     sell_txns = [t for t in transactions if t.sale]
@@ -88,14 +88,17 @@ def _replay_fifo(holding: Holding, transactions: list[Transaction]) -> None:
         for lot in buy_txns:
             if remaining <= 0:
                 break
+            if lot.date > sell.date:
+                # buy_txns is date-sorted; all subsequent lots are also in the future
+                break
             consumed = min(lot.shares_remaining, remaining)
             fifo_cost += consumed * lot.bought_at
             lot.shares_remaining -= consumed
             remaining -= consumed
         if remaining > 0:
             raise ValueError(
-                "Cannot delete this transaction: the remaining transactions would leave "
-                "more shares sold than bought."
+                f"Only {sell.shares - remaining} share(s) were available on or before "
+                f"{sell.date} — cannot sell {sell.shares}."
             )
         sell.bought_at = fifo_cost / sell.shares
 
@@ -168,7 +171,24 @@ async def get_stock_holding(session: AsyncSession, ticker: str, price: float | N
     return _build_stock_holding(holding, transactions, price if price is not None else await _current_price(ticker))
 
 
-async def add_stock_purchase(session: AsyncSession, ticker: str, shares: int, bought_at: float) -> StockHolding:
+def _resolve_date(date: str | None) -> str:
+    today = datetime.date.today()
+    if date is None:
+        return today.isoformat()
+    try:
+        d = datetime.date.fromisoformat(date)
+    except ValueError:
+        raise ValueError(f"Invalid date '{date}'. Expected yyyy-mm-dd.")
+    if d > today:
+        raise ValueError("Transaction date cannot be in the future.")
+    return date
+
+
+async def add_stock_purchase(
+    session: AsyncSession, ticker: str, shares: int, bought_at: float,
+    date: str | None = None,
+) -> StockHolding:
+    txn_date = _resolve_date(date)
     holding = await _fetch_holding(session, ticker)
     is_new = holding is None
     if is_new:
@@ -177,75 +197,69 @@ async def add_stock_purchase(session: AsyncSession, ticker: str, shares: int, bo
         session.add(holding)
         await session.flush()
 
-    # Keep average_cost maintained for display; it is not used for financial calculations
-    total_cost = (holding.shares * holding.average_cost) + (shares * bought_at)
-    holding.shares += shares
-    holding.average_cost = total_cost / holding.shares
-
-    transaction = Transaction(
+    new_txn = Transaction(
         holding_id=holding.id,
         sale=False,
-        date=datetime.date.today().isoformat(),
+        date=txn_date,
         shares=shares,
         bought_at=bought_at,
         shares_remaining=shares,
     )
-    session.add(transaction)
+    # Merge the new buy into the date-sorted list and replay FIFO before persisting.
+    # This ensures a backdated buy correctly redistributes shares_remaining on all
+    # subsequent lots and recalculates bought_at on any sells that follow it.
+    existing = await _fetch_transactions(session, holding.id)
+    all_txns = sorted(existing + [new_txn], key=lambda t: t.date)
+    _replay_fifo(holding, all_txns)
+
+    session.add(new_txn)
     await session.commit()
     await session.refresh(holding)
 
     if is_new:
-        # Non-blocking: add to dashboard archive while response is returned
         asyncio.create_task(_ensure_in_dashboard(ticker))
 
     return await get_stock_holding(session, ticker)
 
 
-async def sell_stock_shares(session: AsyncSession, ticker: str, shares: int, sold_at: float) -> StockHolding:
+async def sell_stock_shares(
+    session: AsyncSession, ticker: str, shares: int, sold_at: float,
+    date: str | None = None,
+) -> StockHolding:
+    txn_date = _resolve_date(date)
     holding = await _fetch_holding(session, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
-    if shares > holding.shares:
-        raise ValueError(f"Cannot sell {shares} shares — only {holding.shares} held.")
 
-    holding.shares -= shares
-    holding.sold_shares += shares
-
-    # FIFO: consume buy lots oldest-first; accumulate cost basis for this sell transaction
-    result = await session.execute(
-        select(Transaction)
-        .where(
-            Transaction.holding_id == holding.id,
-            Transaction.sale == False,  # noqa: E712 — SQLAlchemy requires == not 'is'
-            Transaction.shares_remaining > 0,
-        )
+    # Upfront guard: sell date must not precede the earliest buy.
+    earliest_row = await session.execute(
+        select(Transaction.date)
+        .where(Transaction.holding_id == holding.id, Transaction.sale == False)  # noqa: E712
         .order_by(Transaction.date)
+        .limit(1)
     )
-    buy_lots = result.scalars().all()
-    shares_to_consume = shares
-    fifo_cost = 0.0
-    for lot in buy_lots:
-        if shares_to_consume <= 0:
-            break
-        consumed = min(lot.shares_remaining, shares_to_consume)
-        fifo_cost += consumed * lot.bought_at
-        lot.shares_remaining -= consumed
-        shares_to_consume -= consumed
+    earliest_buy = earliest_row.scalar_one_or_none()
+    if earliest_buy and txn_date < earliest_buy:
+        raise ValueError(
+            f"Sale date {txn_date} is before the earliest purchase on {earliest_buy}."
+        )
 
-    # bought_at on a sell = weighted-avg purchase price of the FIFO lots consumed,
-    # enabling per-transaction buy-vs-sell comparison
-    fifo_avg = fifo_cost / shares if shares else 0.0
-
-    transaction = Transaction(
+    new_txn = Transaction(
         holding_id=holding.id,
         sale=True,
-        date=datetime.date.today().isoformat(),
+        date=txn_date,
         shares=shares,
-        bought_at=fifo_avg,
+        bought_at=0.0,   # set correctly by _replay_fifo
         sold_at=sold_at,
         shares_remaining=0,
     )
-    session.add(transaction)
+    # Merge into the date-sorted list and validate via FIFO replay before touching
+    # the DB. If replay raises, nothing has been flushed so no rollback is needed.
+    existing = await _fetch_transactions(session, holding.id)
+    all_txns = sorted(existing + [new_txn], key=lambda t: t.date)
+    _replay_fifo(holding, all_txns)
+
+    session.add(new_txn)
     await session.commit()
     await session.refresh(holding)
     return await get_stock_holding(session, ticker)
@@ -361,3 +375,4 @@ async def get_portfolio(session: AsyncSession, prices: dict[str, float] | None =
         net_profit_loss=net_profit_loss,
         holdings=portfolio_holdings,
     )
+

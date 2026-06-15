@@ -54,6 +54,7 @@ collected_datas, collected_bins, collected_hidden = _collect(
     "h11",
     "httptools",
     "websockets",
+    "xlsxwriter",
 )
 
 # ---------------------------------------------------------------------------

@@ -123,9 +123,9 @@ export async function fetchPortfolio(): Promise<PortfolioResponse> {
   return res.json()
 }
 
-export async function logBuy(ticker: string, shares: number, bought_at: number): Promise<StockHolding> {
+export async function logBuy(ticker: string, shares: number, bought_at: number, date: string): Promise<StockHolding> {
   const res = await fetch(
-    `/portfolio/${encodeURIComponent(ticker)}/buy?shares=${shares}&bought_at=${bought_at}`,
+    `/portfolio/${encodeURIComponent(ticker)}/buy?shares=${shares}&bought_at=${bought_at}&date=${date}`,
     { method: 'POST' },
   )
   if (!res.ok) {
@@ -135,9 +135,9 @@ export async function logBuy(ticker: string, shares: number, bought_at: number):
   return res.json()
 }
 
-export async function logSell(ticker: string, shares: number, sold_at: number): Promise<StockHolding> {
+export async function logSell(ticker: string, shares: number, sold_at: number, date: string): Promise<StockHolding> {
   const res = await fetch(
-    `/portfolio/${encodeURIComponent(ticker)}/sell?shares=${shares}&sold_at=${sold_at}`,
+    `/portfolio/${encodeURIComponent(ticker)}/sell?shares=${shares}&sold_at=${sold_at}&date=${date}`,
     { method: 'POST' },
   )
   if (!res.ok) {
@@ -156,6 +156,46 @@ export async function deleteTransaction(ticker: string, transactionId: number): 
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? 'Failed to delete transaction')
   }
+}
+
+export async function downloadPortfolio(): Promise<void> {
+  const res = await fetch('/portfolio/download')
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to download portfolio')
+  }
+  const blob = await res.blob()
+  const suggestedName = `portfolio-${new Date().toISOString().split('T')[0]}.xlsx`
+
+  // File System Access API: shows a native "Save As" dialog (Chrome/Edge)
+  if ('showSaveFilePicker' in window) {
+    try {
+      const handle = await (window as typeof window & { showSaveFilePicker: Function }).showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: 'Excel Workbook',
+          accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
+        }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      return
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return  // user cancelled — do nothing
+      // Any other error: fall through to legacy download below
+    }
+  }
+
+  // Fallback for browsers without File System Access API (Firefox, Safari)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = suggestedName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 export async function deletePortfolioHolding(ticker: string): Promise<void> {

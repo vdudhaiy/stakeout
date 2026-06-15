@@ -3,10 +3,10 @@ import clsx from 'clsx'
 import {
   Plus, ChevronDown, ChevronUp,
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
-  BarChart2, AlertTriangle,
+  BarChart2, AlertTriangle, FileDown,
 } from 'lucide-react'
 import type { PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
-import { fetchPortfolio, logBuy, logSell, deletePortfolioHolding, deleteTransaction } from '../api'
+import { fetchPortfolio, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio } from '../api'
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -96,13 +96,15 @@ interface TxModalProps {
   tickerEditable?: boolean
   maxShares?: number
   onClose: () => void
-  onSubmit: (ticker: string, shares: number, price: number) => Promise<void>
+  onSubmit: (ticker: string, shares: number, price: number, date: string) => Promise<void>
 }
 
 function TxModal({ mode, ticker: initTicker, tickerEditable = false, maxShares, onClose, onSubmit }: TxModalProps) {
+  const today = new Date().toLocaleDateString('en-CA')  // yyyy-mm-dd in local time
   const [ticker, setTicker]   = useState(initTicker.toUpperCase())
   const [shares, setShares]   = useState('')
   const [price, setPrice]     = useState('')
+  const [date, setDate]       = useState(today)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
 
@@ -125,7 +127,7 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, maxShares, 
     setLoading(true)
     setError(null)
     try {
-      await onSubmit(ticker.trim().toUpperCase(), sharesNum, priceNum)
+      await onSubmit(ticker.trim().toUpperCase(), sharesNum, priceNum, date)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed')
@@ -215,6 +217,20 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, maxShares, 
                 placeholder="0.00"
               />
             </div>
+          </div>
+
+          {/* Date */}
+          <div>
+            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+              DATE
+            </label>
+            <input
+              type="date"
+              value={date}
+              max={today}
+              onChange={e => setDate(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none focus:border-indigo-500 transition-colors"
+            />
           </div>
 
           {/* Total preview */}
@@ -489,6 +505,7 @@ export function PortfolioPage({
   const [txnDeleteLoading, setTxnDeleteLoading] = useState(false)
   const [txnDeleteError, setTxnDeleteError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated]       = useState<Date | null>(null)
+  const [downloading, setDownloading]       = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -510,13 +527,13 @@ export function PortfolioPage({
     return () => clearInterval(id)
   }, [load])
 
-  async function submitBuy(ticker: string, shares: number, price: number) {
-    await logBuy(ticker, shares, price)
+  async function submitBuy(ticker: string, shares: number, price: number, date: string) {
+    await logBuy(ticker, shares, price, date)
     await load()
   }
 
-  async function submitSell(ticker: string, shares: number, price: number) {
-    await logSell(ticker, shares, price)
+  async function submitSell(ticker: string, shares: number, price: number, date: string) {
+    await logSell(ticker, shares, price, date)
     await load()
   }
 
@@ -593,6 +610,19 @@ export function PortfolioPage({
                 </span>
               )}
             </div>
+            <button
+              onClick={async () => {
+                setDownloading(true)
+                try { await downloadPortfolio() } catch {}
+                setDownloading(false)
+              }}
+              disabled={downloading || !portfolio || portfolio.holdings.length === 0}
+              title="Download portfolio as Excel"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <FileDown size={14} className={downloading ? 'animate-bounce' : ''} />
+              Export
+            </button>
             <button
               onClick={() => setAddOpen(true)}
               className="flex items-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
