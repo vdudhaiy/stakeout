@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { TrendingUp, House, LayoutDashboard, Activity } from 'lucide-react'
+import { TrendingUp, House, LayoutDashboard, Activity, Briefcase } from 'lucide-react'
 import type { HealthStatus, View } from '../types'
 
 interface Props {
@@ -17,6 +17,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { view: 'home', label: 'Home', icon: House },
   { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { view: 'portfolio', label: 'Portfolio', icon: Briefcase },
   {
     view: 'health',
     label: 'Health',

@@ -17,6 +17,8 @@ def _base_dir() -> Path:
 
 _BASE = _base_dir()
 
+BASE_DIR = _BASE
+
 ARCHIVE_DATA_DIR = _BASE / os.getenv("ARCHIVE_DATA_DIR", "data/archive_stock_data/")
 
 MODEL_DIR = _BASE / os.getenv("MODEL_DIR", "model-store/")

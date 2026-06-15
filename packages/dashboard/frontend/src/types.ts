@@ -25,7 +25,7 @@ export interface LatencyRecord {
   status: HealthStatus
 }
 
-export type View = 'home' | 'dashboard' | 'health'
+export type View = 'home' | 'dashboard' | 'health' | 'portfolio'
 
 export interface RecommendationPeriod {
   period?: string | null
@@ -106,6 +106,42 @@ export interface StockDashboardResponse {
   revenue_estimate?: RevenueEstimateRow[] | null
   earnings_history?: EPSHistoryRow[] | null
   revenue_history?: RevenueHistoryRow[] | null
+}
+
+export interface StockPurchaseHistory {
+  id: number
+  sale: boolean
+  ticker: string
+  date: string
+  shares: number
+  bought_at: number
+  sold_at: number
+}
+
+export interface StockHolding {
+  ticker: string
+  company_name: string
+  shares: number
+  sold_shares: number
+  average_cost: number
+  current_price: number
+  stock_value: number
+  total_earned: number
+  total_invested: number
+  profit_loss: number
+  profit_loss_percentage: number
+  trade_history: StockPurchaseHistory[]
+}
+
+export interface PortfolioResponse {
+  portfolio_value: number
+  realized_gains: number
+  total_shares: number
+  total_invested: number
+  total_return: number
+  return_percentage: number
+  net_profit_loss: number
+  holdings: StockHolding[]
 }
 
 export type StockMap = Record<string, string>

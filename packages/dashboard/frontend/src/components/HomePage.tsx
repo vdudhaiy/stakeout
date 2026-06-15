@@ -1,24 +1,28 @@
-import { useState, useEffect } from 'react'
-import { TrendingUp, BarChart2, Activity, ArrowRight, Database, LineChart, RefreshCw } from 'lucide-react'
-import { fetchAllStocks } from '../api'
+import { TrendingUp, BarChart2, Activity, ArrowRight, LineChart, Briefcase } from 'lucide-react'
 import type { View } from '../types'
 
 interface Props {
-  onNavigate: (v: Extract<View, 'dashboard' | 'health'>) => void
+  onNavigate: (v: Extract<View, 'dashboard' | 'health' | 'portfolio'>) => void
 }
 
 const FEATURES = [
   {
     icon: LineChart,
-    title: 'Stock Charts',
+    title: 'Price Charts',
     description:
-      'OHLCV price and volume charts with selectable time ranges from 7 days up to 3 years, backed by archived market data.',
+      'OHLCV price and volume charts with selectable time ranges from 1 day to 3 years, backed by archived market data and live intraday feeds.',
+  },
+  {
+    icon: Briefcase,
+    title: 'Portfolio Tracking',
+    description:
+      'Log buys and sells, track unrealized and realized P&L with FIFO cost basis, and monitor performance across all your positions in one view.',
   },
   {
     icon: BarChart2,
     title: 'Analyst Insights',
     description:
-      'Analyst price targets with upside calculations, buy/hold/sell recommendation breakdowns, and earnings and revenue estimates.',
+      'Analyst price targets with upside calculations, buy/hold/sell recommendation breakdowns, and earnings and revenue estimates per ticker.',
   },
   {
     icon: Activity,
@@ -29,17 +33,6 @@ const FEATURES = [
 ]
 
 export function HomePage({ onNavigate }: Props) {
-  const [stocks, setStocks] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
-  const [stocksError, setStocksError] = useState(false)
-
-  useEffect(() => {
-    fetchAllStocks()
-      .then(data => setStocks(Object.keys(data)))
-      .catch(() => setStocksError(true))
-      .finally(() => setLoading(false))
-  }, [])
-
   return (
     <div className="flex-1 overflow-y-auto">
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
@@ -51,60 +44,32 @@ export function HomePage({ onNavigate }: Props) {
         <h1 className="text-4xl font-bold tracking-tight text-white mb-4">Market Lens</h1>
 
         <p className="text-zinc-400 text-lg leading-relaxed max-w-xl mb-8">
-          A financial intelligence dashboard for exploring stock price history,
-          surfacing analyst data, and keeping an eye on application health —
+          A personal investment dashboard for exploring stock price history,
+          tracking your portfolio positions, and surfacing analyst insights —
           all in one place.
         </p>
 
-        <button
-          onClick={() => onNavigate('dashboard')}
-          className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors"
-        >
-          Explore Dashboard
-          <ArrowRight size={14} />
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => onNavigate('dashboard')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            Explore Dashboard
+            <ArrowRight size={14} />
+          </button>
+          <button
+            onClick={() => onNavigate('portfolio')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Briefcase size={14} />
+            My Portfolio
+          </button>
+        </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-6 pb-16 space-y-10">
-        {/* ── Stock counter ────────────────────────────────────────────────── */}
-        <div className="flex justify-center">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-10 py-6 flex items-center gap-5">
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
-              <Database size={22} className="text-indigo-400" />
-            </div>
-            <div>
-              <p className="text-4xl font-bold font-mono text-white leading-none">
-                {loading
-                  ? <RefreshCw size={28} className="animate-spin text-zinc-600" />
-                  : stocksError ? '—' : stocks.length}
-              </p>
-              <p className="text-zinc-500 text-sm mt-1">Stocks currently tracked</p>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Ticker chips ─────────────────────────────────────────────────── */}
-        {loading ? (
-          <div className="flex flex-wrap justify-center gap-2">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <span key={i} className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 rounded-md w-14 h-6 animate-pulse" />
-            ))}
-          </div>
-        ) : stocks.length > 0 && (
-          <div className="flex flex-wrap justify-center gap-2">
-            {stocks.map(ticker => (
-              <span
-                key={ticker}
-                className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 text-zinc-400 text-xs font-mono rounded-md"
-              >
-                {ticker}
-              </span>
-            ))}
-          </div>
-        )}
-
         {/* ── Feature cards ────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {FEATURES.map(({ icon: Icon, title, description }) => (
             <div
               key={title}

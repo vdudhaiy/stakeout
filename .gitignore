@@ -3,10 +3,12 @@ venv/
 .env
 __pycache__/
 
-# Ignore logs, data, and model artifacts
+# Ignore logs, data, model artifacts, and database files
 logs/
 data/
 model-store/
+*.db
+*.sqlite
 
 # Ignore Python packaging artifacts
 *.egg-info

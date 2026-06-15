@@ -4,6 +4,7 @@ import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2 } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
 import { HealthDashboard } from './components/HealthDashboard'
+import { PortfolioPage } from './components/PortfolioPage'
 import { TickerSidebar } from './components/TickerSidebar'
 import { ComparisonView } from './components/ComparisonView'
 import { PriceChart } from './components/PriceChart'
@@ -12,7 +13,7 @@ import { OHLCVStats } from './components/OHLCVStats'
 import { StockInfoCard } from './components/StockInfoCard'
 import { AnalystPanel } from './components/AnalystPanel'
 import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
-import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock } from './api'
+import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
 import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow } from './types'
 
@@ -53,6 +54,7 @@ export default function App() {
   const [intradayData, setIntradayData] = useState<OHLCV[] | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  const [preparingTicker, setPreparingTicker] = useState<string | null>(null)
 
   useEffect(() => {
     const check = () =>
@@ -282,6 +284,31 @@ export default function App() {
 
       {view === 'home' ? (
         <HomePage onNavigate={setView} />
+      ) : view === 'portfolio' ? (
+        <PortfolioPage
+          onViewTicker={async (t) => {
+            setView('dashboard')
+            if (allTickers && t in allTickers) {
+              setTicker(t)
+              return
+            }
+            setPreparingTicker(t)
+            try {
+              await addStock(t)
+              setAllTickers(await fetchAllStocks())
+            } catch {}
+            setPreparingTicker(null)
+            setTicker(t)
+          }}
+          onTickerRemoved={async (t) => {
+            const updated = await fetchAllStocks()
+            setAllTickers(updated)
+            if (ticker === t) {
+              const next = Object.keys(updated).find(k => k !== t) ?? ''
+              setTicker(next)
+            }
+          }}
+        />
       ) : view === 'health' ? (
         <HealthDashboard
           status={health.status}
@@ -309,6 +336,13 @@ export default function App() {
 
           {comparisonGroup ? (
             <ComparisonView group={comparisonGroup} onBack={() => setComparisonGroup(null)} marketOpen={marketOpen} tickerNames={allTickers ?? {}} />
+          ) : preparingTicker ? (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="flex items-center gap-2 text-zinc-500 text-sm">
+                <RefreshCw size={14} className="animate-spin" />
+                Loading {preparingTicker}...
+              </div>
+            </div>
           ) : (
           <main className="flex-1 overflow-y-auto p-6 min-w-0">
             <div className="flex flex-col gap-5 max-w-6xl">

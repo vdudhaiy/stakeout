@@ -2,21 +2,33 @@
 
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
+
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from .routers import stocks
-from .routers import health
+from fastapi.staticfiles import StaticFiles
+
+from .database import init_db
+from .routers import health, portfolio, stocks
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
 
 app = FastAPI(
     title=os.getenv("APP_NAME", "Dashboard Backend API"),
     openapi_url="/openapi",
     docs_url="/docs",
+    lifespan=lifespan,
 )
 
 app.include_router(stocks.router)
 app.include_router(health.router)
+app.include_router(portfolio.router)
 
 
 @app.get("/version", include_in_schema=False)

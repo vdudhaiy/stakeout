@@ -2,6 +2,7 @@
 Read relevant stock data from the data/ directory and returns it in a format suitable for the endpoint to use.
 '''
 
+import asyncio
 import os
 import time as _time
 from pathlib import Path
@@ -237,23 +238,23 @@ async def fetch(ticker: str, days: int = 30):
     )
 
 
-async def fetch_current(stock: yf.Ticker):
+async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
     '''
     Fetch the current stock price for a given ticker.
     Args:
         stock (yf.Ticker): The yfinance Ticker object.
+        is_market_open: Pre-fetched market status. If None, fetches it internally.
     Returns:
         OHLCVResponse: The current stock data for the specified ticker.
     '''
     try:
         ticker = stock.ticker
-        is_market_open = await get_market_status()
+        if is_market_open is None:
+            is_market_open = await get_market_status()
 
         if is_market_open:
-            df_current = stock.history(
-                interval="1m",
-                period="1d",
-                prepost=True
+            df_current = await asyncio.to_thread(
+                stock.history, interval="1m", period="1d", prepost=True
             )
             # Convert index and filter to Regular Trading Hours only
             df = df_current.copy()
@@ -287,10 +288,8 @@ async def fetch_current(stock: yf.Ticker):
             last_data = await fetch(ticker, days=1)
             if not last_data.data:
                 raise ValueError(f"No data available for {ticker} to determine current price")
-            df_current = stock.history(
-                interval="1m",
-                period="2d",
-                prepost=True
+            df_current = await asyncio.to_thread(
+                stock.history, interval="1m", period="2d", prepost=True
             )
             today = pd.Timestamp.now(tz=df_current.index.tz).date()
             df_current = df_current[

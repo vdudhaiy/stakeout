@@ -7,6 +7,7 @@ export default defineConfig({
     proxy: {
       '/stocks': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
+      '/portfolio': 'http://localhost:8000',
     },
   },
 })

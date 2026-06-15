@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding } from '../types'
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -112,6 +112,58 @@ export async function fetchStockDashboard(ticker: string, days: number): Promise
     throw new Error(err.detail ?? `Failed to load dashboard for ${ticker}`)
   }
   return res.json()
+}
+
+export async function fetchPortfolio(): Promise<PortfolioResponse> {
+  const res = await fetch('/portfolio/')
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to load portfolio')
+  }
+  return res.json()
+}
+
+export async function logBuy(ticker: string, shares: number, bought_at: number): Promise<StockHolding> {
+  const res = await fetch(
+    `/portfolio/${encodeURIComponent(ticker)}/buy?shares=${shares}&bought_at=${bought_at}`,
+    { method: 'POST' },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to record purchase of ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function logSell(ticker: string, shares: number, sold_at: number): Promise<StockHolding> {
+  const res = await fetch(
+    `/portfolio/${encodeURIComponent(ticker)}/sell?shares=${shares}&sold_at=${sold_at}`,
+    { method: 'POST' },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to record sale of ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function deleteTransaction(ticker: string, transactionId: number): Promise<void> {
+  const res = await fetch(
+    `/portfolio/${encodeURIComponent(ticker)}/transactions/${transactionId}`,
+    { method: 'DELETE' },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to delete transaction')
+  }
+}
+
+export async function deletePortfolioHolding(ticker: string): Promise<void> {
+  const res = await fetch(`/portfolio/${encodeURIComponent(ticker)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to remove ${ticker}`)
+  }
 }
 
 export async function fetchMarketStatus(): Promise<boolean | null> {
