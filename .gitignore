@@ -17,6 +17,12 @@ model-store/
 # PyInstaller build output (executables go to dist/, already ignored above)
 build/
 
+# Pytest cache and coverage reports
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
 # Frontend
 node_modules/
 dist/

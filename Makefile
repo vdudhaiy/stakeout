@@ -3,7 +3,7 @@
         fetch-price fetch-data update-price process-data \
         pipeline \
         backend frontend dashboard \
-        test \
+        test coverage \
         release
 
 # ── Environment ──────────────────────────────────────────────────────────────
@@ -45,6 +45,10 @@ frontend:
 
 test:
 	uv run --group dev pytest -v
+
+coverage:
+	uv run --group dev pytest --cov=market_lens_dashboard --cov-report=term-missing --cov-report=html
+	@echo "HTML report: htmlcov/index.html"
 
 # ── Release ───────────────────────────────────────────────────────────────────
 
