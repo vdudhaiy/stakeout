@@ -22,3 +22,14 @@ members = [
     # "packages/models",  # TODO: uncomment once packages/models/ is committed
     "packages/dashboard/backend",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages/dashboard/backend/tests"]

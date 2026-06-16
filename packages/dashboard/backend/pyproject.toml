@@ -16,6 +16,8 @@ dependencies = [
     "market-lens-pipeline",
     "xlsxwriter",
     "platformdirs",
+    "asyncpg",
+    "alembic",
 ]
 
 [tool.setuptools.packages.find]

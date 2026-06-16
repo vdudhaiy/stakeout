@@ -3,6 +3,7 @@
         fetch-price fetch-data update-price process-data \
         pipeline \
         backend frontend dashboard \
+        test \
         release
 
 # ── Environment ──────────────────────────────────────────────────────────────
@@ -39,6 +40,11 @@ backend:
 
 frontend:
 	cd packages/dashboard/frontend && npm run dev
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+test:
+	uv run --group dev pytest -v
 
 # ── Release ───────────────────────────────────────────────────────────────────
 
