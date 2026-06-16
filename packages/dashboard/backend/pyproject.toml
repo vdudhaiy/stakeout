@@ -15,6 +15,7 @@ dependencies = [
     "pandas_market_calendars",
     "market-lens-pipeline",
     "xlsxwriter",
+    "platformdirs",
 ]
 
 [tool.setuptools.packages.find]

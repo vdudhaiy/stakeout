@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import clsx from 'clsx'
-import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2 } from 'lucide-react'
+import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
 import { HealthDashboard } from './components/HealthDashboard'
@@ -8,6 +8,7 @@ import { PortfolioPage } from './components/PortfolioPage'
 import { TickerSidebar } from './components/TickerSidebar'
 import { ComparisonView } from './components/ComparisonView'
 import { PriceChart } from './components/PriceChart'
+import { CandlestickChart } from './components/CandlestickChart'
 import { VolumeChart, volUnit } from './components/VolumeChart'
 import { OHLCVStats } from './components/OHLCVStats'
 import { StockInfoCard } from './components/StockInfoCard'
@@ -55,6 +56,7 @@ export default function App() {
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [preparingTicker, setPreparingTicker] = useState<string | null>(null)
+  const [chartType, setChartType] = useState<'candle' | 'area'>('candle')
 
   useEffect(() => {
     const check = () =>
@@ -534,22 +536,49 @@ export default function App() {
                   <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
                     <div className="flex items-center justify-between mb-3">
                       <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
-                        CLOSE PRICE
+                        {chartType === 'candle' ? 'PRICE' : 'CLOSE PRICE'}
                       </p>
-                      {days === 0 && chartData.length > 0 && (() => {
-                        const dateStr = chartData[0].date.slice(0, 10)
-                        const etDate = formatEtDate(dateStr)
-                        const localDate = formatLocalDate(dateStr)
-                        const tz = localTzAbbr()
-                        return (
-                          <span className="text-[10px] font-mono text-zinc-500">
-                            {etDate} ET{etDate !== localDate ? ` (${localDate} ${tz})` : ` (${tz})`}
-                          </span>
-                        )
-                      })()}
+                      <div className="flex items-center gap-2">
+                        {days === 0 && chartData.length > 0 && (() => {
+                          const dateStr = chartData[0].date.slice(0, 10)
+                          const etDate = formatEtDate(dateStr)
+                          const localDate = formatLocalDate(dateStr)
+                          const tz = localTzAbbr()
+                          return (
+                            <span className="text-[10px] font-mono text-zinc-500">
+                              {etDate} ET{etDate !== localDate ? ` (${localDate} ${tz})` : ` (${tz})`}
+                            </span>
+                          )
+                        })()}
+                        <div className="flex items-center rounded-md border border-zinc-700 overflow-hidden">
+                          <button
+                            onClick={() => setChartType('candle')}
+                            className={clsx(
+                              'flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                              chartType === 'candle' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'
+                            )}
+                          >
+                            <CandleIcon size={11} />
+                            Candle
+                          </button>
+                          <button
+                            onClick={() => setChartType('area')}
+                            className={clsx(
+                              'flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                              chartType === 'area' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'
+                            )}
+                          >
+                            <LineChartIcon size={11} />
+                            Line
+                          </button>
+                        </div>
+                      </div>
                     </div>
                     <div className="h-64">
-                      <PriceChart data={chartData} days={days} />
+                      {chartType === 'candle'
+                        ? <CandlestickChart data={chartData} days={days} />
+                        : <PriceChart data={chartData} days={days} />
+                      }
                     </div>
                   </div>
 
