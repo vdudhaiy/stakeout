@@ -25,7 +25,7 @@ export interface LatencyRecord {
   status: HealthStatus
 }
 
-export type View = 'home' | 'dashboard' | 'health' | 'portfolio'
+export type View = 'home' | 'dashboard' | 'portfolio'
 
 export interface RecommendationPeriod {
   period?: string | null
@@ -153,4 +153,53 @@ export interface ComparisonGroup {
   name: string
   tickers: string[]
   type: 'industry' | 'sector' | 'all'
+}
+
+export interface EnrichedOHLCV extends OHLCV {
+  bbUpper?: number | null
+  bbMiddle?: number | null
+  bbLower?: number | null
+  // dynamic fields: sma_10, sma_20, ema_9, ema_50, etc.
+  [key: string]: unknown
+}
+
+export interface IndicatorPoint {
+  date: string
+  value: number | null
+}
+
+export interface MACDDataPoint {
+  date: string
+  macd: number | null
+  signal: number | null
+  histogram: number | null
+}
+
+export interface BollingerPoint {
+  date: string
+  upper: number | null
+  middle: number | null
+  lower: number | null
+}
+
+export interface SMAResponse {
+  ticker: string
+  period: number
+  values: IndicatorPoint[]
+}
+
+export interface EMAResponse {
+  ticker: string
+  period: number
+  values: IndicatorPoint[]
+}
+
+export interface IndicatorsResponse {
+  ticker: string
+  days: number
+  sma: SMAResponse[]
+  ema: EMAResponse[]
+  rsi: { ticker: string; period: number; values: IndicatorPoint[] } | null
+  macd: { ticker: string; fast: number; slow: number; signal_period: number; values: MACDDataPoint[] } | null
+  bollinger: { ticker: string; period: number; std_dev: number; values: BollingerPoint[] } | null
 }

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import init_db
-from .routers import health, portfolio, stocks
+from .routers import health, indicators, portfolio, stocks
 from .services.portfolio_service import repair_all_fifo
 
 
@@ -31,6 +31,7 @@ app = FastAPI(
 app.include_router(stocks.router)
 app.include_router(health.router)
 app.include_router(portfolio.router)
+app.include_router(indicators.router)
 
 
 @app.get("/version", include_in_schema=False)

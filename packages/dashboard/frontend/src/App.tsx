@@ -1,22 +1,27 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
-import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon } from 'lucide-react'
+import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon, ChevronDown } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
-import { HealthDashboard } from './components/HealthDashboard'
 import { PortfolioPage } from './components/PortfolioPage'
 import { TickerSidebar } from './components/TickerSidebar'
 import { ComparisonView } from './components/ComparisonView'
 import { PriceChart } from './components/PriceChart'
 import { CandlestickChart } from './components/CandlestickChart'
+import { RSIChart } from './components/RSIChart'
+import { MACDChart } from './components/MACDChart'
 import { VolumeChart, volUnit } from './components/VolumeChart'
 import { OHLCVStats } from './components/OHLCVStats'
 import { StockInfoCard } from './components/StockInfoCard'
 import { AnalystPanel } from './components/AnalystPanel'
 import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
-import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock } from './api'
+import { Footer } from './components/Footer'
+import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock, fetchIndicators } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
-import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow } from './types'
+import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV } from './types'
+import { SMA_PERIODS, EMA_PERIODS, SMA_COLORS, EMA_COLORS } from './utils/indicators'
+import type { OverlayConfig } from './utils/indicators'
 
 const DAYS_OPTIONS = [
   { label: '1D', value: 0 },
@@ -32,8 +37,22 @@ const DAYS_OPTIONS = [
 
 const MAX_HISTORY = 50
 
+const SUBCHART_TITLES = {
+  rsi:  'Relative Strength Index (14-day)',
+  macd: 'Moving Average Convergence Divergence (12, 26, 9)',
+} as const
+
+const PATH_TO_VIEW: Record<string, View> = {
+  '/': 'home',
+  '/dashboard': 'dashboard',
+  '/portfolio': 'portfolio',
+}
+
 export default function App() {
-  const [view, setView] = useState<View>('home')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const view: View = PATH_TO_VIEW[location.pathname] ?? 'home'
+
   const [ticker, setTicker] = useState('')
   const [allTickers, setAllTickers] = useState<StockMap | null>(null)
   const [days, setDays] = useState(30)
@@ -57,34 +76,42 @@ export default function App() {
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [preparingTicker, setPreparingTicker] = useState<string | null>(null)
   const [chartType, setChartType] = useState<'candle' | 'area'>('candle')
+  const [indicators, setIndicators] = useState<IndicatorsResponse | null>(null)
+  const [activeSMA, setActiveSMA] = useState<number[]>([])
+  const [activeEMA, setActiveEMA] = useState<number[]>([])
+  const [overlayBB, setOverlayBB] = useState(false)
+  const [openDropdown, setOpenDropdown] = useState<'sma' | 'ema' | null>(null)
+  const [subCharts, setSubCharts] = useState({ rsi: false, macd: false })
 
-  useEffect(() => {
-    const check = () =>
-      fetchHealth().then(info => {
-        const now = new Date()
-        setHealth(info)
-        setLastChecked(now)
-        setLatencyHistory(prev => {
-          const record: LatencyRecord = {
-            time: now.toLocaleTimeString(),
-            latencyMs: info.latencyMs,
-            status: info.status,
-          }
-          const next = [...prev, record]
-          return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
-        })
+  const checkHealth = useCallback(() =>
+    fetchHealth().then(info => {
+      const now = new Date()
+      setHealth(info)
+      setLastChecked(now)
+      setLatencyHistory(prev => {
+        const record: LatencyRecord = {
+          time: now.toLocaleTimeString(),
+          latencyMs: info.latencyMs,
+          status: info.status,
+        }
+        const next = [...prev, record]
+        return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
       })
-    check()
-    const id = setInterval(check, 30_000)
-    return () => clearInterval(id)
-  }, [])
+    }), [])
 
   useEffect(() => {
-    const check = () => fetchMarketStatus().then(setMarketOpen)
-    check()
-    const id = setInterval(check, 60_000)
+    checkHealth()
+    const id = setInterval(checkHealth, 30_000)
     return () => clearInterval(id)
-  }, [])
+  }, [checkHealth])
+
+  const checkMarket = useCallback(() => fetchMarketStatus().then(setMarketOpen), [])
+
+  useEffect(() => {
+    checkMarket()
+    const id = setInterval(checkMarket, 5 * 60_000)
+    return () => clearInterval(id)
+  }, [checkMarket])
 
   useEffect(() => {
     fetchAllStocks().then(setAllTickers).catch(() => setAllTickers({}))
@@ -131,11 +158,21 @@ export default function App() {
     return () => document.removeEventListener('mousedown', close)
   }, [showMarketHours])
 
+  useEffect(() => {
+    if (!openDropdown) return
+    function close(e: MouseEvent) {
+      if (!overlayRef.current?.contains(e.target as Node)) setOpenDropdown(null)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [openDropdown])
+
   // Tracks which ticker was last loaded so we know whether to fetch details too
   const prevTicker = useRef<string>('')
   // Incremented on every load; stale responses from aborted loads are ignored
   const loadGen = useRef(0)
   const infoRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const initialTickerSet = useRef(false)
 
   useEffect(() => {
@@ -161,6 +198,7 @@ export default function App() {
       setEpsHistory(null)
       setRevenueHistory(null)
       setIntradayData(null)
+      setIndicators(null)
     }
 
     // When in 1D mode, fetch regular daily data at 30D for header metrics
@@ -168,9 +206,10 @@ export default function App() {
 
     try {
       if (isNewTicker) {
-        const [dashboardRes, intradayRes] = await Promise.all([
+        const [dashboardRes, intradayRes, indicatorsRes] = await Promise.all([
           fetchStockDashboard(ticker, effectiveDays),
           days === 0 ? fetchIntradayStock(ticker).catch(() => null) : Promise.resolve(null),
+          days > 0 ? fetchIndicators(ticker, effectiveDays).catch(() => null) : Promise.resolve(null),
         ])
         if (gen !== loadGen.current) return
         setData(dashboardRes.ohlcv)
@@ -185,16 +224,22 @@ export default function App() {
         setEpsHistory(dashboardRes.earnings_history ?? null)
         setRevenueHistory(dashboardRes.revenue_history ?? null)
         setIntradayData(intradayRes?.data ?? null)
+        setIndicators(indicatorsRes)
       } else if (days === 0) {
         // Switching into 1D mode — only fetch intraday, keep existing daily data for header
+        setIndicators(null)
         const intradayRes = await fetchIntradayStock(ticker)
         if (gen !== loadGen.current) return
         setIntradayData(intradayRes.data)
       } else {
         // Only days changed — details are still valid
-        const ohlcvRes = await fetchStock(ticker, days)
+        const [ohlcvRes, indicatorsRes] = await Promise.all([
+          fetchStock(ticker, days),
+          fetchIndicators(ticker, days).catch(() => null),
+        ])
         if (gen !== loadGen.current) return
         setData(ohlcvRes.data)
+        setIndicators(indicatorsRes)
       }
     } catch (e) {
       if (gen !== loadGen.current) return
@@ -236,6 +281,28 @@ export default function App() {
 
   // For charts: use intraday data in 1D mode, otherwise the regular daily series
   const chartData = days === 0 ? (intradayData ?? []) : displayData
+
+  const enrichedChartData = useMemo((): EnrichedOHLCV[] => {
+    if (!indicators) return chartData as EnrichedOHLCV[]
+    const smaMaps = new Map(
+      indicators.sma.map(s => [s.period, new Map(s.values.map(p => [p.date, p.value]))])
+    )
+    const emaMaps = new Map(
+      indicators.ema.map(e => [e.period, new Map(e.values.map(p => [p.date, p.value]))])
+    )
+    const bbMap = new Map(indicators.bollinger?.values.map(p => [p.date, p]) ?? [])
+    return chartData.map(d => {
+      const result: Record<string, unknown> = {
+        ...d,
+        bbUpper:  bbMap.get(d.date)?.upper  ?? null,
+        bbMiddle: bbMap.get(d.date)?.middle ?? null,
+        bbLower:  bbMap.get(d.date)?.lower  ?? null,
+      }
+      for (const [period, map] of smaMaps) result[`sma_${period}`] = map.get(d.date) ?? null
+      for (const [period, map] of emaMaps) result[`ema_${period}`] = map.get(d.date) ?? null
+      return result as EnrichedOHLCV
+    })
+  }, [chartData, indicators])
 
   const latest = displayData[displayData.length - 1]
   const prev = displayData[displayData.length - 2]
@@ -282,14 +349,22 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
-      <Navbar view={view} onViewChange={setView} healthStatus={health.status} marketOpen={marketOpen} />
+      <Navbar
+        healthStatus={health.status}
+        latencyMs={health.latencyMs}
+        lastChecked={lastChecked}
+        latencyHistory={latencyHistory}
+        onRefreshHealth={checkHealth}
+        marketOpen={marketOpen}
+        onRefreshMarket={checkMarket}
+      />
 
       {view === 'home' ? (
-        <HomePage onNavigate={setView} />
+        <HomePage />
       ) : view === 'portfolio' ? (
         <PortfolioPage
           onViewTicker={async (t) => {
-            setView('dashboard')
+            navigate('/dashboard')
             if (allTickers && t in allTickers) {
               setTicker(t)
               return
@@ -310,13 +385,6 @@ export default function App() {
               setTicker(next)
             }
           }}
-        />
-      ) : view === 'health' ? (
-        <HealthDashboard
-          status={health.status}
-          latencyMs={health.latencyMs}
-          lastChecked={lastChecked}
-          history={latencyHistory}
         />
       ) : (
         <div className="flex flex-1 overflow-hidden">
@@ -550,6 +618,132 @@ export default function App() {
                             </span>
                           )
                         })()}
+
+                        {/* Overlay controls — hidden in 1D mode */}
+                        {days > 0 && indicators && (
+                          <div ref={overlayRef} className="flex items-center gap-1">
+                            {/* SMA dropdown */}
+                            <div className="relative">
+                              <button
+                                onClick={() => setOpenDropdown(d => d === 'sma' ? null : 'sma')}
+                                title="Simple Moving Average"
+                                className={clsx(
+                                  'flex items-center gap-0.5 px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                                  activeSMA.length > 0
+                                    ? 'border-amber-500/50 text-amber-300 bg-amber-950/50'
+                                    : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
+                                )}
+                              >
+                                SMA <ChevronDown size={8} />
+                              </button>
+                              {openDropdown === 'sma' && (
+                                <div className="absolute right-0 top-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-1 z-50 shadow-xl">
+                                  {SMA_PERIODS.map(period => (
+                                    <button
+                                      key={period}
+                                      onClick={() => setActiveSMA(prev =>
+                                        prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
+                                      )}
+                                      title={`${period}-day Simple Moving Average`}
+                                      className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
+                                    >
+                                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: SMA_COLORS[period] }} />
+                                      <span className={activeSMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
+                                        {period}
+                                      </span>
+                                      {activeSMA.includes(period) && (
+                                        <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
+                                      )}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            {/* Active SMA chips */}
+                            {[...activeSMA].sort((a, b) => a - b).map(period => (
+                              <span
+                                key={`chip-sma-${period}`}
+                                className="flex items-center px-1.5 py-0.5 text-[9px] rounded border"
+                                style={{ borderColor: `${SMA_COLORS[period]}60`, color: SMA_COLORS[period] }}
+                              >
+                                {period}
+                                <button
+                                  onClick={() => setActiveSMA(prev => prev.filter(p => p !== period))}
+                                  className="ml-0.5 opacity-60 hover:opacity-100 leading-none"
+                                >×</button>
+                              </span>
+                            ))}
+                            <div className="w-px h-3 bg-zinc-800 mx-0.5" />
+                            {/* EMA dropdown */}
+                            <div className="relative">
+                              <button
+                                onClick={() => setOpenDropdown(d => d === 'ema' ? null : 'ema')}
+                                title="Exponential Moving Average"
+                                className={clsx(
+                                  'flex items-center gap-0.5 px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                                  activeEMA.length > 0
+                                    ? 'border-violet-500/50 text-violet-300 bg-violet-950/50'
+                                    : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
+                                )}
+                              >
+                                EMA <ChevronDown size={8} />
+                              </button>
+                              {openDropdown === 'ema' && (
+                                <div className="absolute right-0 top-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-1 z-50 shadow-xl">
+                                  {EMA_PERIODS.map(period => (
+                                    <button
+                                      key={period}
+                                      onClick={() => setActiveEMA(prev =>
+                                        prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
+                                      )}
+                                      title={`${period}-day Exponential Moving Average`}
+                                      className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
+                                    >
+                                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: EMA_COLORS[period] }} />
+                                      <span className={activeEMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
+                                        {period}
+                                      </span>
+                                      {activeEMA.includes(period) && (
+                                        <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
+                                      )}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            {/* Active EMA chips */}
+                            {[...activeEMA].sort((a, b) => a - b).map(period => (
+                              <span
+                                key={`chip-ema-${period}`}
+                                className="flex items-center px-1.5 py-0.5 text-[9px] rounded border"
+                                style={{ borderColor: `${EMA_COLORS[period]}60`, color: EMA_COLORS[period] }}
+                              >
+                                {period}
+                                <button
+                                  onClick={() => setActiveEMA(prev => prev.filter(p => p !== period))}
+                                  className="ml-0.5 opacity-60 hover:opacity-100 leading-none"
+                                >×</button>
+                              </span>
+                            ))}
+                            <div className="w-px h-3 bg-zinc-800 mx-0.5" />
+                            {/* BB toggle */}
+                            <button
+                              title="Bollinger Bands (20-day, ±2σ)"
+                              onClick={() => setOverlayBB(prev => !prev)}
+                              className={clsx(
+                                'px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                                overlayBB
+                                  ? 'border-blue-500 text-blue-300 bg-blue-950'
+                                  : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
+                              )}
+                            >
+                              BB
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="w-px h-4 bg-zinc-800" />
+
                         <div className="flex items-center rounded-md border border-zinc-700 overflow-hidden">
                           <button
                             onClick={() => setChartType('candle')}
@@ -575,12 +769,72 @@ export default function App() {
                       </div>
                     </div>
                     <div className="h-64">
-                      {chartType === 'candle'
-                        ? <CandlestickChart data={chartData} days={days} />
-                        : <PriceChart data={chartData} days={days} />
-                      }
+                      {(() => {
+                        const overlayConfig: OverlayConfig = { activeSMA, activeEMA, bb: overlayBB }
+                        return chartType === 'candle'
+                          ? <CandlestickChart data={enrichedChartData} days={days} overlays={overlayConfig} />
+                          : <PriceChart data={enrichedChartData} days={days} overlays={overlayConfig} />
+                      })()}
                     </div>
                   </div>
+
+                  {/* Oscillator toggle row — separate block below the price chart */}
+                  {days > 0 && indicators && (
+                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5 flex items-center justify-between">
+                      <p className="text-[10px] text-zinc-500 tracking-widest font-medium">OSCILLATORS</p>
+                      <div className="flex items-center gap-1">
+                        {(['rsi', 'macd'] as const).map(key => (
+                          <button
+                            key={key}
+                            title={SUBCHART_TITLES[key]}
+                            onClick={() => setSubCharts(prev => ({ ...prev, [key]: !prev[key] }))}
+                            className={clsx(
+                              'px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                              subCharts[key]
+                                ? 'border-violet-500 text-violet-300 bg-violet-950'
+                                : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
+                            )}
+                          >
+                            {key}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {subCharts.rsi && indicators?.rsi && (
+                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
+                          RSI ({indicators.rsi.period})
+                        </p>
+                        <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
+                          <span><span className="text-red-400/60">—</span> 70 overbought</span>
+                          <span><span className="text-emerald-400/60">—</span> 30 oversold</span>
+                        </div>
+                      </div>
+                      <div className="h-32">
+                        <RSIChart data={indicators.rsi.values} days={days} />
+                      </div>
+                    </div>
+                  )}
+
+                  {subCharts.macd && indicators?.macd && (
+                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
+                          MACD ({indicators.macd.fast}, {indicators.macd.slow}, {indicators.macd.signal_period})
+                        </p>
+                        <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
+                          <span><span className="text-blue-400">—</span> MACD</span>
+                          <span><span className="text-orange-400">—</span> Signal</span>
+                        </div>
+                      </div>
+                      <div className="h-32">
+                        <MACDChart data={indicators.macd.values} days={days} />
+                      </div>
+                    </div>
+                  )}
 
                   <EarningsHistoryPanel
                     key={ticker}
@@ -615,6 +869,9 @@ export default function App() {
           </>}
         </div>
       )}
+
+      <Footer />
+
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">

@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, StockMap, StockCreateResponse, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, IndicatorsResponse } from '../types'
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -204,6 +204,15 @@ export async function deletePortfolioHolding(ticker: string): Promise<void> {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to remove ${ticker}`)
   }
+}
+
+export async function fetchIndicators(ticker: string, days: number): Promise<IndicatorsResponse> {
+  const res = await fetch(`/indicators/${ticker}?days=${days}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load indicators for ${ticker}`)
+  }
+  return res.json()
 }
 
 export async function fetchMarketStatus(): Promise<boolean | null> {
