@@ -52,3 +52,4 @@ class TTLCache:
 fx_cache = TTLCache(ttl_seconds=60 * 60)        # FX rates: 1 hour
 news_cache = TTLCache(ttl_seconds=15 * 60)      # News: 15 minutes
 quote_cache = TTLCache(ttl_seconds=60)          # Live quotes: 60 seconds
+version_cache = TTLCache(ttl_seconds=60 * 60)   # Latest GitHub release tag: 1 hour

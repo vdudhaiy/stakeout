@@ -19,6 +19,17 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 
 
+export async function fetchVersion(): Promise<string | null> {
+  try {
+    const res = await apiFetch('/version')
+    if (!res.ok) return null
+    const data = await res.json()
+    return (data.version as string) ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
   try {

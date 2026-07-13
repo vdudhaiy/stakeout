@@ -16,9 +16,9 @@ def _txn(id=1, sale=False, ticker="AAPL", date="2024-01-01",
 
 
 def _holding(ticker="AAPL", company_name="Apple Inc.",
-             shares=100, sold_shares=0, average_cost=10.0):
+             shares=100, sold_shares=0, average_cost=10.0, market=None):
     return SimpleNamespace(
-        ticker=ticker, company_name=company_name,
+        ticker=ticker, company_name=company_name, market=market,
         shares=shares, sold_shares=sold_shares, average_cost=average_cost,
     )
 

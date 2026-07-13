@@ -54,10 +54,20 @@ async def test_health_returns_ok(client):
     assert resp.json() == {"status": "ok"}
 
 
-async def test_version_endpoint(client):
-    resp = await client.get("/version")
+async def test_version_endpoint_returns_latest_release_tag(client):
+    with patch("market_lens_dashboard.main.get_latest_release_tag",
+               new_callable=AsyncMock, return_value="v1.2.3"):
+        resp = await client.get("/version")
     assert resp.status_code == 200
-    assert "version" in resp.json()
+    assert resp.json() == {"version": "v1.2.3"}
+
+
+async def test_version_endpoint_falls_back_when_github_unavailable(client):
+    with patch("market_lens_dashboard.main.get_latest_release_tag",
+               new_callable=AsyncMock, return_value=None):
+        resp = await client.get("/version")
+    assert resp.status_code == 200
+    assert resp.json() == {"version": "0.1.0"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

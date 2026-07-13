@@ -2,18 +2,23 @@
 
 Two modes, selected by environment:
 
-1. **Cloud mode** — `SUPABASE_JWT_SECRET` is set. Every request to a
+1. **Cloud mode** — `SUPABASE_JWKS_URL` is set. Every request to a
    user-scoped endpoint must carry `Authorization: Bearer <supabase JWT>`.
-   The token is verified locally (HS256, audience "authenticated") with no
-   network round-trip to Supabase, and the `sub` claim becomes the user id.
+   The token is verified against Supabase's published signing keys
+   (asymmetric — ES256/RS256, audience "authenticated"), and the `sub`
+   claim becomes the user id.
 
-2. **Local mode** — `SUPABASE_JWT_SECRET` is unset. All requests map to the
+2. **Local mode** — `SUPABASE_JWKS_URL` is unset. All requests map to the
    single pseudo-user "local". This keeps the desktop / self-hosted
    single-user experience working with zero configuration.
 
-Supabase issues JWTs signed with the project's *JWT secret* (Project
-Settings → API → JWT Secret). The anon/service keys are NOT the secret —
-don't put those here.
+Newer Supabase projects sign JWTs with per-project asymmetric keys rather
+than a single shared secret, published at
+Project Settings → API → JWT Keys → JWKS URL
+(``https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json``).
+`PyJWKClient` fetches and caches those public keys, so verification never
+needs the actual signing key — only Supabase can mint tokens, but anyone can
+check them.
 """
 
 from __future__ import annotations
@@ -28,26 +33,40 @@ LOCAL_USER_ID = "local"
 
 _bearer = HTTPBearer(auto_error=False)
 
+_jwks_client: jwt.PyJWKClient | None = None
+_jwks_client_url: str | None = None
 
-def _jwt_secret() -> str | None:
-    return os.getenv("SUPABASE_JWT_SECRET") or None
+
+def _jwks_url() -> str | None:
+    return os.getenv("SUPABASE_JWKS_URL") or None
 
 
 def auth_enabled() -> bool:
-    return _jwt_secret() is not None
+    return _jwks_url() is not None
+
+
+def _get_jwks_client() -> jwt.PyJWKClient:
+    global _jwks_client, _jwks_client_url
+    url = _jwks_url()
+    assert url is not None
+    if _jwks_client is None or _jwks_client_url != url:
+        _jwks_client = jwt.PyJWKClient(url, cache_keys=True)
+        _jwks_client_url = url
+    return _jwks_client
 
 
 def _decode(token: str) -> str:
-    secret = _jwt_secret()
-    assert secret is not None
     try:
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
-            secret,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["ES256", "RS256"],
             audience="authenticated",
             options={"require": ["sub", "exp"]},
         )
+    except jwt.PyJWKClientError:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Session expired — please sign in again")
     except jwt.InvalidTokenError:

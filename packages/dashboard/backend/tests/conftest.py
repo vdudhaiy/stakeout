@@ -11,9 +11,22 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from market_lens_dashboard import markets
 from market_lens_dashboard.database import Base, get_session
 from market_lens_dashboard.models import portfolio as _  # noqa: F401 — registers models with Base
 from market_lens_dashboard.main import app
+
+
+@pytest.fixture(autouse=True)
+def _clear_calendar_cache():
+    """markets.get_calendar() memoizes resolved calendars in a module-level dict.
+
+    Without clearing it, a mocked calendar cached by one test leaks into every
+    later test that requests the same market, regardless of what it patches.
+    """
+    markets._calendar_cache.clear()
+    yield
+    markets._calendar_cache.clear()
 
 
 @pytest_asyncio.fixture

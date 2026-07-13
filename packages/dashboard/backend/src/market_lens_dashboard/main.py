@@ -13,6 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from .database import init_db
 from .routers import fx, health, indicators, news, portfolio, stocks, watchlist
 from .services.portfolio_service import repair_all_fifo
+from .services.version_service import get_latest_release_tag
+
+# Fallback shown when no GitHub release exists yet (e.g. local dev) or the
+# GitHub API is unreachable.
+_FALLBACK_VERSION = "0.1.0"
 
 
 @asynccontextmanager
@@ -53,7 +58,8 @@ app.include_router(fx.router)
 
 @app.get("/version", include_in_schema=False)
 async def get_version():
-    return {"version": "0.1.0"}
+    tag = await get_latest_release_tag()
+    return {"version": tag or _FALLBACK_VERSION}
 
 
 def _frontend_dist() -> Path | None:

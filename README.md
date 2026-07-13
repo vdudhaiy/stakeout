@@ -57,7 +57,7 @@ You're also encouraged to fork this project and build your own version. The code
 
 No Python or Node required — just download and run.
 
-**1. Go to the [Releases page](https://github.com/vdudhaiy/market-lens/releases/latest) and download the binary for your OS:**
+**1. Go to the [Releases page](https://github.com/vdudhaiy/stakeout/releases/latest) and download the binary for your OS:**
 
 | OS | File |
 |----|------|
@@ -110,8 +110,8 @@ Stock data is stored in a data folder next to the executable — portable and fu
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/vdudhaiy/market-lens.git
-cd market-lens
+git clone https://github.com/vdudhaiy/stakeout.git
+cd stakeout
 
 # 2. Install Python dependencies
 make install           # equivalent to: uv sync
@@ -149,7 +149,7 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
    ```
    postgresql+asyncpg://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
    ```
-3. **JWT secret:** Project Settings → API → *JWT Secret*. The backend uses this to verify user tokens.
+3. **JWKS URL:** Project Settings → API → *JWT Keys* → *JWKS URL*. The backend uses this to verify user tokens against Supabase's published signing keys.
 4. **Auth providers:** Authentication → Providers → enable **Email** (magic links work out of the box) and **Google** (follow Supabase's guide to create Google OAuth credentials). Under Authentication → URL Configuration, set the *Site URL* to your Vercel URL and add it to *Redirect URLs*.
 
 ### 2. Render — the API
@@ -161,7 +161,7 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
    | Variable | Value |
    |----------|-------|
    | `DATABASE_URL` | the asyncpg pooler URL from step 1.2 |
-   | `SUPABASE_JWT_SECRET` | the JWT secret from step 1.3 |
+   | `SUPABASE_JWKS_URL` | the JWKS URL from step 1.3 |
    | `CORS_ORIGINS` | your Vercel URL, e.g. `https://stakeout.vercel.app` |
 
 4. Deploy. The pre-deploy hook runs `alembic upgrade head` to create tables. Health check: `https://<your-service>.onrender.com/health`.
@@ -182,7 +182,7 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
 
 3. Deploy. `vercel.json` already handles SPA routing.
 
-Leave `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` empty (and `SUPABASE_JWT_SECRET` unset on the backend) to run the hosted app in accountless single-user mode instead.
+Leave `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` empty (and `SUPABASE_JWKS_URL` unset on the backend) to run the hosted app in accountless single-user mode instead.
 
 ---
 
@@ -199,7 +199,7 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `MARKET_LENS_DATA_DIR` | _(empty)_ | Root data directory; set automatically by the packaged executable |
 | `MODEL_DIR` | `model-store/` | Reserved for future ML model artifacts |
 | `DATABASE_URL` | _(empty → SQLite)_ | Postgres connection string for hosted mode |
-| `SUPABASE_JWT_SECRET` | _(empty → local mode)_ | Enables multi-user auth when set |
+| `SUPABASE_JWKS_URL` | _(empty → local mode)_ | Enables multi-user auth when set |
 | `CORS_ORIGINS` | _(empty)_ | Comma-separated allowed browser origins |
 
 ---

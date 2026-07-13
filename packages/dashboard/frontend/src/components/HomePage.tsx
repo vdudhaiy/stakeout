@@ -162,7 +162,7 @@ export function HomePage() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="https://github.com/vdudhaiy/market-lens"
+              href="https://github.com/vdudhaiy/stakeout"
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 text-white text-xs font-medium transition-colors"
@@ -171,7 +171,7 @@ export function HomePage() {
               Star on GitHub
             </a>
             <a
-              href="https://github.com/vdudhaiy/market-lens/issues/new"
+              href="https://github.com/vdudhaiy/stakeout/issues/new"
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 text-xs font-medium transition-colors"
