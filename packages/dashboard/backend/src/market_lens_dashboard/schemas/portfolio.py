@@ -18,6 +18,8 @@ class StockPurchaseHistory(BaseModel):
 
 class StockHolding(BaseModel):
     ticker: str
+    market: str = "US"                   # "US" | "IN" — exchange the asset trades on
+    currency: str = "USD"                # native currency of all monetary fields below
     company_name: str = ""               # display name; empty string if lookup failed
     shares: int                          # shares currently held
     sold_shares: int                     # total shares ever sold
@@ -32,6 +34,8 @@ class StockHolding(BaseModel):
 
 
 class PortfolioResponse(BaseModel):
+    market: str | None = None   # market filter applied ("US"/"IN"), or None for all
+    currency: str = "USD"       # native currency of the aggregate figures below
     portfolio_value: float      # current total value of all holdings (sum of stock_value across all holdings)
     realized_gains: float     # proceeds from all sell transactions (sum of sold_shares * sold_at across all sell transactions)
     total_shares: int           # number of shares across all holdings

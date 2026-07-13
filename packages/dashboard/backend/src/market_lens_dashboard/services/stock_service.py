@@ -9,9 +9,19 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 from ..config import ARCHIVE_DATA_DIR
+from ..markets import MARKET_META, market_of, normalize_market
+from .. import markets as _markets
 from ..schemas.stocks import *
 import pandas_market_calendars as mcal
 from datetime import datetime, time, timezone, timedelta
+
+
+def _session_bounds(ticker: str) -> tuple[time, time]:
+    '''Regular-session open/close times in the exchange's local timezone.'''
+    sessions = MARKET_META[market_of(ticker)]["sessions"]["regular"]
+    h1, m1 = map(int, sessions[0].split(":"))
+    h2, m2 = map(int, sessions[1].split(":"))
+    return time(h1, m1), time(h2, m2)
 
 # Tracks the last _last_completed_trading_day we already attempted to fetch for each ticker.
 # Prevents hammering yfinance when Yahoo Finance hasn't published the day's data yet;
@@ -49,47 +59,21 @@ class _SnapshotCache:
 
 _snapshot_cache = _SnapshotCache(ttl_seconds=6 * 3600)  # 6-hour TTL
 
-async def _last_completed_trading_day() -> pd.Timestamp | None:
+async def _last_completed_trading_day(market: str = "US") -> pd.Timestamp | None:
     '''
-    Return the most recent NYSE trading day whose market session has fully closed,
-    using UTC-aware timestamps throughout so server timezone is irrelevant.
+    Return the most recent trading day (for the given market) whose session has
+    fully closed, using UTC-aware timestamps so server timezone is irrelevant.
     '''
-    nyse = mcal.get_calendar('NYSE')
-    now_utc = datetime.now(timezone.utc)
-    schedule = nyse.schedule(
-        start_date=(now_utc - timedelta(days=10)).date(),
-        end_date=now_utc.date(),
-    )
-    if schedule.empty:
-        return None
-    closed = schedule[schedule['market_close'] <= pd.Timestamp(now_utc)]
-    if closed.empty:
-        return None
-    return pd.Timestamp(closed.index[-1].date())
+    return await asyncio.to_thread(_markets.last_completed_trading_day, market)
 
 
-async def get_market_status():
+async def get_market_status(market: str = "US"):
     '''
-    Check if the stock market is currently open or closed.
+    Check if the given stock market ("US" or "IN") is currently open.
     Returns:
         bool: True if the market is open, False if it is closed.
     '''
-    nyse = mcal.get_calendar('NYSE')
-
-    now = datetime.now(timezone.utc)
-
-    schedule = nyse.schedule(
-        start_date=now.date(),
-        end_date=now.date(),
-    )
-
-    if schedule.empty:
-        return False
-
-    market_open = schedule.iloc[0]["market_open"]
-    market_close = schedule.iloc[0]["market_close"]
-
-    return market_open <= now <= market_close
+    return await asyncio.to_thread(_markets.is_market_open, normalize_market(market))
 
 
 async def get_all_stocks():
@@ -166,8 +150,9 @@ async def fetch_intraday(stock: yf.Ticker):
         df_current = stock.history(interval="15m", period="5d", prepost=True)
         df = df_current.copy()
         df.index = pd.to_datetime(df.index)
-        # Keep only regular trading hours (9:30–16:00)
-        mask = (df.index.time >= time(9, 30)) & (df.index.time <= time(16, 0))
+        # Keep only regular trading hours (exchange-local: 9:30-16:00 US, 9:15-15:30 IN)
+        _open_t, _close_t = _session_bounds(stock.ticker)
+        mask = (df.index.time >= _open_t) & (df.index.time <= _close_t)
         df = df[mask]
         if df.empty:
             raise ValueError(f"No intraday data available for {stock.ticker}")
@@ -215,7 +200,7 @@ async def fetch(ticker: str, days: int = 30):
         raise ValueError(f"No confirmed OHLCV data found for ticker: {ticker}")
     last_date = pd.to_datetime(records[-1]['date'])
 
-    last_completed = await _last_completed_trading_day()
+    last_completed = await _last_completed_trading_day(market_of(ticker))
     already_attempted = _update_attempted.get(ticker)
     need_update = (
         last_completed is not None
@@ -249,7 +234,8 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
     try:
         ticker = stock.ticker
         if is_market_open is None:
-            is_market_open = await get_market_status()
+            is_market_open = await get_market_status(market_of(ticker))
+        _open_t, _close_t = _session_bounds(ticker)
 
         if is_market_open:
             df_current = await asyncio.to_thread(
@@ -258,7 +244,7 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
             # Convert index and filter to Regular Trading Hours only
             df = df_current.copy()
             df.index = pd.to_datetime(df.index)
-            df = df.between_time("09:30", "16:00")
+            df = df.between_time(_open_t, _close_t)
 
             if df.empty:
                 raise ValueError(f"No intraday data available for {ticker}")
@@ -297,7 +283,7 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
             # Convert index and filter to outside Regular Trading Hours only
             df = df_current.copy()
             df.index = pd.to_datetime(df.index)
-            mask = ((df.index.time >= time(9, 30)) & (df.index.time <= time(16, 0)))
+            mask = ((df.index.time >= _open_t) & (df.index.time <= _close_t))
             df = df[~mask]
             if df.empty:
                 return last_data  # Return last known data if no after-hours data is available

@@ -55,4 +55,4 @@ coverage:
 release:
 	cd packages/dashboard/frontend && npm run build
 	uv pip install --quiet pyinstaller
-	uv run pyinstaller market-lens.spec --noconfirm
+	uv run pyinstaller stakeout.spec --noconfirm

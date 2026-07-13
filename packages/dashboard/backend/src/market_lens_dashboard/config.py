@@ -9,7 +9,9 @@ from pathlib import Path
 def _base_dir() -> Path:
     override = os.getenv("MARKET_LENS_DATA_DIR")
     if override:
-        return Path(override)
+        path = Path(override)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     if hasattr(sys, "_MEIPASS"):
         # Running as a packaged executable — store user data in the platform-
         # appropriate location rather than next to the binary (which may not be
@@ -29,5 +31,6 @@ _BASE = _base_dir()
 BASE_DIR = _BASE
 
 ARCHIVE_DATA_DIR = _BASE / os.getenv("ARCHIVE_DATA_DIR", "data/archive_stock_data/")
+ARCHIVE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_DIR = _BASE / os.getenv("MODEL_DIR", "model-store/")

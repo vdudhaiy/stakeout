@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { InfoTip } from './InfoTip'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts'
 import clsx from 'clsx'
 import type { EPSHistoryRow, RevenueHistoryRow } from '../types'
@@ -76,7 +77,7 @@ function EPSChart({ rows }: { rows: EPSHistoryRow[] }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">EPS</p>
+        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">EPS <InfoTip k="earnings_surprise" /></p>
         <Toggle
           options={[
             { label: 'Growth', value: 'growth' },
@@ -129,7 +130,7 @@ function RevenueChart({ rows }: { rows: RevenueHistoryRow[] }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">REVENUE</p>
+        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">REVENUE <InfoTip k="revenue_estimate" /></p>
         <Toggle
           options={[
             { label: 'Growth', value: 'growth' },

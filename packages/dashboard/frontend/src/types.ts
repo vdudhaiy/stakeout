@@ -121,6 +121,8 @@ export interface StockPurchaseHistory {
 
 export interface StockHolding {
   ticker: string
+  market: Market
+  currency: 'USD' | 'INR'
   company_name: string
   shares: number
   sold_shares: number
@@ -135,6 +137,8 @@ export interface StockHolding {
 }
 
 export interface PortfolioResponse {
+  market?: Market | null
+  currency: 'USD' | 'INR'
   portfolio_value: number
   realized_gains: number
   total_shares: number
@@ -146,6 +150,43 @@ export interface PortfolioResponse {
 }
 
 export type StockMap = Record<string, string>
+
+export type Market = 'US' | 'IN'
+export type MarketFilter = 'ALL' | 'US' | 'IN'
+
+/** Per-user watchlist: ticker → display name + market it trades on */
+export type WatchlistMap = Record<string, { name: string; market: Market }>
+
+export interface NewsArticle {
+  title: string
+  url: string
+  source: string
+  published_at?: string | null
+  image?: string | null
+  provider: 'gdelt' | 'yahoo'
+  region?: 'us' | 'in' | 'global'
+  layer?: 'company' | 'industry' | 'market'
+}
+
+export interface NewsResponse {
+  region: string
+  articles: NewsArticle[]
+}
+
+export interface StockNewsResponse {
+  ticker: string
+  company_name?: string | null
+  industry?: string | null
+  market: Market
+  articles: NewsArticle[]
+}
+
+export interface FxRate {
+  base: string
+  quote: string
+  rate: number
+  source: string
+}
 
 export type GroupedStocks = Record<string, string[]>
 

@@ -1,4 +1,4 @@
-import { TrendingUp, Github, ExternalLink, Bug } from 'lucide-react'
+import { Github, ExternalLink, Bug } from 'lucide-react'
 
 const REPO_URL   = 'https://github.com/vdudhaiy/market-lens'
 const ISSUES_URL = 'https://github.com/vdudhaiy/market-lens/issues'
@@ -12,18 +12,18 @@ export function Footer() {
         {/* Brand + tagline */}
         <div className="flex flex-col gap-0.5 shrink-0">
           <div className="flex items-center gap-1.5">
-            <TrendingUp size={12} className="text-indigo-400" />
-            <span className="font-semibold text-zinc-300">Market Lens</span>
+            <svg width="12" height="12" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 24l7-10 5 5 8-13" stroke="#E4B95B" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+            <span className="font-display font-semibold text-zinc-300">Stakeout</span>
             <span className="font-mono text-[10px] leading-none text-zinc-600 border border-zinc-800 rounded px-1.5 py-px">
               v0.1.0
             </span>
           </div>
-          <span className="text-zinc-600 pl-[19px]">Open Markets. Open Insights.</span>
+          <span className="text-zinc-600 pl-[19px]">Open markets, open source.</span>
         </div>
 
         {/* Disclaimer */}
         <p className="text-zinc-600 text-center leading-relaxed">
-          Data from Yahoo Finance via{' '}
+          Market data from Yahoo Finance via{' '}
           <a
             href={YFINANCE_URL}
             target="_blank"
@@ -32,8 +32,8 @@ export function Footer() {
           >
             yfinance
           </a>
-          . For informational purposes only — not financial advice.
-          Market data may be delayed up to 15 minutes.
+          ; headlines via GDELT; FX via Frankfurter (ECB). For informational purposes
+          only — not financial advice. Data may be delayed up to 15 minutes.
         </p>
 
         {/* Repo + issues + stack */}

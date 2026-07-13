@@ -5,9 +5,10 @@ import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..markets import MARKET_META, currency_of, market_of, normalize_market
 from ..models.portfolio import Holding, Transaction
 from ..schemas.portfolio import PortfolioResponse, StockHolding, StockPurchaseHistory
-from .stock_service import fetch_current, get_market_status, add_stock, get_all_stocks, delete_stock
+from .stock_service import fetch_current, get_market_status, add_stock, get_all_stocks
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -54,8 +55,10 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> flo
         return 0.0
 
 
-async def _fetch_holding(session: AsyncSession, ticker: str) -> Holding | None:
-    result = await session.execute(select(Holding).where(Holding.ticker == ticker))
+async def _fetch_holding(session: AsyncSession, user_id: str, ticker: str) -> Holding | None:
+    result = await session.execute(
+        select(Holding).where(Holding.user_id == user_id, Holding.ticker == ticker)
+    )
     return result.scalar_one_or_none()
 
 
@@ -147,6 +150,8 @@ def _build_stock_holding(holding: Holding, transactions: list[Transaction], pric
 
     return StockHolding(
         ticker=holding.ticker,
+        market=holding.market or market_of(holding.ticker),
+        currency=currency_of(holding.ticker),
         company_name=holding.company_name,
         shares=holding.shares,
         sold_shares=holding.sold_shares,
@@ -163,8 +168,8 @@ def _build_stock_holding(holding: Holding, transactions: list[Transaction], pric
 
 # ── Service functions ─────────────────────────────────────────────────────────
 
-async def get_stock_holding(session: AsyncSession, ticker: str, price: float | None = None) -> StockHolding:
-    holding = await _fetch_holding(session, ticker)
+async def get_stock_holding(session: AsyncSession, user_id: str, ticker: str, price: float | None = None) -> StockHolding:
+    holding = await _fetch_holding(session, user_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     transactions = await _fetch_transactions(session, holding.id)
@@ -185,15 +190,18 @@ def _resolve_date(date: str | None) -> str:
 
 
 async def add_stock_purchase(
-    session: AsyncSession, ticker: str, shares: int, bought_at: float,
+    session: AsyncSession, user_id: str, ticker: str, shares: int, bought_at: float,
     date: str | None = None,
 ) -> StockHolding:
     txn_date = _resolve_date(date)
-    holding = await _fetch_holding(session, ticker)
+    holding = await _fetch_holding(session, user_id, ticker)
     is_new = holding is None
     if is_new:
         company_name = await _validate_and_fetch_name(ticker)
-        holding = Holding(ticker=ticker, company_name=company_name, shares=0, sold_shares=0, average_cost=0.0)
+        holding = Holding(
+            user_id=user_id, ticker=ticker, market=market_of(ticker),
+            company_name=company_name, shares=0, sold_shares=0, average_cost=0.0,
+        )
         session.add(holding)
         await session.flush()
 
@@ -219,15 +227,15 @@ async def add_stock_purchase(
     if is_new:
         asyncio.create_task(_ensure_in_dashboard(ticker))
 
-    return await get_stock_holding(session, ticker)
+    return await get_stock_holding(session, user_id, ticker)
 
 
 async def sell_stock_shares(
-    session: AsyncSession, ticker: str, shares: int, sold_at: float,
+    session: AsyncSession, user_id: str, ticker: str, shares: int, sold_at: float,
     date: str | None = None,
 ) -> StockHolding:
     txn_date = _resolve_date(date)
-    holding = await _fetch_holding(session, ticker)
+    holding = await _fetch_holding(session, user_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -262,11 +270,11 @@ async def sell_stock_shares(
     session.add(new_txn)
     await session.commit()
     await session.refresh(holding)
-    return await get_stock_holding(session, ticker)
+    return await get_stock_holding(session, user_id, ticker)
 
 
-async def delete_transaction(session: AsyncSession, ticker: str, transaction_id: int) -> StockHolding:
-    holding = await _fetch_holding(session, ticker)
+async def delete_transaction(session: AsyncSession, user_id: str, ticker: str, transaction_id: int) -> StockHolding:
+    holding = await _fetch_holding(session, user_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -288,28 +296,22 @@ async def delete_transaction(session: AsyncSession, ticker: str, transaction_id:
     if not remaining:
         await session.delete(holding)
         await session.commit()
-        try:
-            await delete_stock(ticker)
-        except Exception:
-            pass  # not in dashboard archive — nothing to remove
+        # Note: the on-disk price archive is a shared cache in multi-user mode,
+        # so deleting a holding never removes archive data.
         return None
 
     _replay_fifo(holding, remaining)
     await session.commit()
     await session.refresh(holding)
-    return await get_stock_holding(session, ticker)
+    return await get_stock_holding(session, user_id, ticker)
 
 
-async def delete_stock_holding(session: AsyncSession, ticker: str):
-    holding = await _fetch_holding(session, ticker)
+async def delete_stock_holding(session: AsyncSession, user_id: str, ticker: str):
+    holding = await _fetch_holding(session, user_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     await session.delete(holding)  # cascade="all, delete-orphan" removes transactions too
     await session.commit()
-    try:
-        await delete_stock(ticker)
-    except Exception:
-        pass  # not in dashboard archive — nothing to remove
     return {"message": f"Holding for {ticker} deleted successfully."}
 
 
@@ -333,15 +335,24 @@ async def repair_all_fifo() -> None:
         await session.commit()
 
 
-async def get_portfolio(session: AsyncSession, prices: dict[str, float] | None = None) -> PortfolioResponse:
-    result = await session.execute(select(Holding))
+async def get_portfolio(
+    session: AsyncSession, user_id: str, market: str | None = None,
+    prices: dict[str, float] | None = None,
+) -> PortfolioResponse:
+    query = select(Holding).where(Holding.user_id == user_id)
+    if market is not None:
+        query = query.where(Holding.market == normalize_market(market))
+    result = await session.execute(query)
     holdings = result.scalars().all()
 
     if not prices:
-        # One market-status call shared across all tickers; all price fetches run in parallel
-        is_market_open = await get_market_status()
+        # One market-status call per exchange; all price fetches run in parallel
+        open_by_market = {
+            m: await get_market_status(m)
+            for m in {h.market or market_of(h.ticker) for h in holdings}
+        }
         fetched = await asyncio.gather(
-            *[_current_price(h.ticker, is_market_open) for h in holdings]
+            *[_current_price(h.ticker, open_by_market.get(h.market or market_of(h.ticker))) for h in holdings]
         )
         prices = {h.ticker: p for h, p in zip(holdings, fetched)}
 
@@ -366,6 +377,8 @@ async def get_portfolio(session: AsyncSession, prices: dict[str, float] | None =
     net_profit_loss = total_return + realized_gains
 
     return PortfolioResponse(
+        market=normalize_market(market) if market is not None else None,
+        currency=MARKET_META[normalize_market(market)]["currency"] if market is not None else "USD",
         portfolio_value=portfolio_value,
         realized_gains=realized_gains,
         total_shares=total_shares,

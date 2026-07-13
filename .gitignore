@@ -2,6 +2,17 @@
 venv/
 .env
 __pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
 
 # Ignore logs, data, model artifacts, and database files
 logs/
@@ -22,6 +33,12 @@ build/
 .coverage
 .coverage.*
 htmlcov/
+coverage.xml
+
+# Other Python tool caches
+.ruff_cache/
+.mypy_cache/
+.tox/
 
 # Frontend
 node_modules/
@@ -30,3 +47,7 @@ dist-ssr/
 *.local
 .env.local
 .env.*.local
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*

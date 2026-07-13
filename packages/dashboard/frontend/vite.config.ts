@@ -9,6 +9,9 @@ export default defineConfig({
       '/health': 'http://localhost:8000',
       '/portfolio': 'http://localhost:8000',
       '/indicators': 'http://localhost:8000',
+      '/watchlist': 'http://localhost:8000',
+      '/news': 'http://localhost:8000',
+      '/fx': 'http://localhost:8000',
     },
   },
 })

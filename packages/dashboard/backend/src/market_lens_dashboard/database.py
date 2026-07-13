@@ -59,6 +59,19 @@ async def init_db() -> None:
             await conn.execute(
                 text("ALTER TABLE holdings ADD COLUMN company_name TEXT NOT NULL DEFAULT ''")
             )
+        if "user_id" not in holdings_cols:
+            await conn.execute(
+                text("ALTER TABLE holdings ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'")
+            )
+        if "market" not in holdings_cols:
+            await conn.execute(
+                text("ALTER TABLE holdings ADD COLUMN market TEXT NOT NULL DEFAULT 'US'")
+            )
+            # Backfill: classify existing holdings by ticker suffix
+            await conn.execute(text(
+                """UPDATE holdings SET market = 'IN'
+                    WHERE ticker LIKE '%.NS' OR ticker LIKE '%.BO'"""
+            ))
 
         result = await conn.execute(text("PRAGMA table_info(transactions)"))
         txn_cols = {row[1] for row in result.fetchall()}

@@ -1,17 +1,24 @@
 import { useState, useEffect, useRef } from 'react'
 import clsx from 'clsx'
 import { Search, ChevronDown, ChevronRight, BarChart2, PlusCircle, Check, X } from 'lucide-react'
-import { fetchAllStocks, fetchIndustryMap, fetchSectorMap, addStock } from '../api'
-import type { GroupedStocks, StockMap, ComparisonGroup } from '../types'
+import { fetchIndustryMap, fetchSectorMap, addStock } from '../api'
+import { usePrefs, type MarketFilter } from '../contexts/PrefsContext'
+import type { GroupedStocks, WatchlistMap, ComparisonGroup } from '../types'
 
 type SidebarTab = 'general' | 'industry' | 'sector'
 
+const MARKET_TABS: Array<{ value: MarketFilter; label: string }> = [
+  { value: 'ALL', label: 'All' },
+  { value: 'US', label: 'US' },
+  { value: 'IN', label: 'India' },
+]
+
 interface Props {
   selected: string
-  tickers: StockMap
+  tickers: WatchlistMap
   onSelect: (ticker: string) => void
   onCompare: (group: ComparisonGroup) => void
-  onTickersUpdated: (tickers: StockMap) => void
+  onTickersUpdated: (tickers: WatchlistMap) => void
   onAdded?: (ticker: string) => void
 }
 
@@ -30,7 +37,7 @@ function GroupSection({
   selected: string
   onSelect: (t: string) => void
   onCompare: (g: ComparisonGroup) => void
-  tickerNames?: StockMap
+  tickerNames?: WatchlistMap
 }) {
   const [open, setOpen] = useState(true)
 
@@ -62,7 +69,7 @@ function GroupSection({
         <button
           key={ticker}
           onClick={() => onSelect(ticker)}
-          title={tickerNames?.[ticker]}
+          title={tickerNames?.[ticker]?.name}
           className={clsx(
             'w-full flex items-center pl-8 pr-3 py-2 text-left transition-colors',
             selected === ticker
@@ -78,6 +85,7 @@ function GroupSection({
 }
 
 export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTickersUpdated, onAdded }: Props) {
+  const { market, setMarket } = usePrefs()
   const [tab, setTab] = useState<SidebarTab>('general')
   const [search, setSearch] = useState('')
   const [industryMap, setIndustryMap] = useState<GroupedStocks | null>(null)
@@ -120,14 +128,13 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
     setAddError(null)
     try {
       const result = await addStock(ticker)
+      onTickersUpdated(result.stocks)
       if (result.exist) {
         cancelAdd()
         onSelect(ticker)
         setExistNotice(true)
         setTimeout(() => setExistNotice(false), 3500)
       } else {
-        const updated = await fetchAllStocks()
-        onTickersUpdated(updated)
         cancelAdd()
         onSelect(ticker)
         onAdded?.(ticker)
@@ -140,16 +147,18 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
   }
 
   const q = search.toUpperCase()
-  const tickerSymbols = Object.keys(tickers)
+  const inMarket = (t: string) => market === 'ALL' || tickers[t]?.market === market
+  const tickerSymbols = Object.keys(tickers).filter(inMarket)
   const filteredTickers = tickerSymbols.filter(t => t.includes(q))
 
   function filteredGroups(map: GroupedStocks): [string, string[]][] {
     return Object.entries(map)
-      .map(([name, tickers]) => {
-        const matching = q ? tickers.filter(t => t.includes(q)) : tickers
+      .map(([name, groupTickers]) => {
+        const visible = groupTickers.filter(t => t in tickers && inMarket(t))
+        const matching = q ? visible.filter(t => t.includes(q)) : visible
         return [name, matching] as [string, string[]]
       })
-      .filter(([, tickers]) => tickers.length > 0)
+      .filter(([, groupTickers]) => groupTickers.length > 0)
   }
 
   const activeMap = tab === 'industry' ? industryMap : tab === 'sector' ? sectorMap : null
@@ -161,6 +170,24 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
           Already tracked — navigated to stock.
         </div>
       )}
+      {/* Market filter — mirrors the portfolio market switch */}
+      <div className="flex items-center gap-1 p-2 border-b border-zinc-800 shrink-0">
+        {MARKET_TABS.map(({ value, label }) => (
+          <button
+            key={value}
+            onClick={() => setMarket(value)}
+            className={clsx(
+              'flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors',
+              market === value
+                ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 border border-transparent',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* Tab switcher */}
       <div className="flex border-b border-zinc-800 shrink-0">
         {(['general', 'industry', 'sector'] as SidebarTab[]).map(t => (
@@ -212,7 +239,7 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
               <input
                 ref={addInputRef}
                 type="text"
-                placeholder="Ticker (e.g. AAPL)"
+                placeholder="e.g. AAPL or TCS.NS"
                 value={addValue}
                 onChange={e => { setAddValue(e.target.value.toUpperCase()); setAddError(null) }}
                 onKeyDown={e => {
@@ -261,7 +288,7 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
                   <button
                     key={ticker}
                     onClick={() => onSelect(ticker)}
-                    title={tickers[ticker]}
+                    title={tickers[ticker]?.name}
                     className={clsx(
                       'w-full flex items-center px-4 py-2.5 text-left transition-colors',
                       selected === ticker
@@ -270,6 +297,9 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
                     )}
                   >
                     <span className="font-mono text-sm font-medium">{ticker}</span>
+                    <span className="ml-auto text-[9px] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
+                      {tickers[ticker]?.market ?? 'US'}
+                    </span>
                   </button>
                 ))}
               </>

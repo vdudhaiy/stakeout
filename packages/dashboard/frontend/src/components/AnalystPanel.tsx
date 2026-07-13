@@ -1,5 +1,9 @@
 import clsx from 'clsx'
+import { InfoTip } from './InfoTip'
+import type { GlossaryKey } from '../utils/glossary'
 import type { RecommendationPeriod, EarningsEstimateRow, RevenueEstimateRow } from '../types'
+
+type MoneyFmt = (v: number | null | undefined, opts?: { sign?: boolean }) => string
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -23,8 +27,13 @@ function fmtPct(n: number | null | undefined) {
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-[10px] text-zinc-500 tracking-widest font-medium">{children}</p>
+function SectionLabel({ children, tip }: { children: React.ReactNode; tip?: GlossaryKey }) {
+  return (
+    <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
+      {children}
+      {tip && <InfoTip k={tip} />}
+    </p>
+  )
 }
 
 function Unavailable() {
@@ -96,9 +105,11 @@ function EstimatesTable({ rows, fmtValue, valueLabel }: EstimatesTableProps) {
 interface PriceTargetsProps {
   targets: Record<string, number | null> | null | undefined
   currentPrice?: number
+  format?: MoneyFmt
 }
 
-function PriceTargetsCard({ targets, currentPrice }: PriceTargetsProps) {
+function PriceTargetsCard({ targets, currentPrice, format }: PriceTargetsProps) {
+  const money = format ?? fmtPrice
   const low = targets?.low ?? null
   const high = targets?.high ?? null
   const mean = targets?.mean ?? null
@@ -116,7 +127,7 @@ function PriceTargetsCard({ targets, currentPrice }: PriceTargetsProps) {
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-      <SectionLabel>ANALYST PRICE TARGETS</SectionLabel>
+      <SectionLabel tip="price_target">ANALYST PRICE TARGETS</SectionLabel>
 
       {!hasRange ? (
         <Unavailable />
@@ -134,21 +145,21 @@ function PriceTargetsCard({ targets, currentPrice }: PriceTargetsProps) {
                 <div
                   className="absolute w-px h-3.5 bg-zinc-300 rounded-full -top-1"
                   style={{ left: `${toPct(current)}%` }}
-                  title={`Current: ${fmtPrice(current)}`}
+                  title={`Current: ${money(current)}`}
                 />
               )}
               {mean != null && (
                 <div
                   className="absolute w-2.5 h-2.5 bg-indigo-500 rounded-full border-2 border-zinc-900 top-1/2 -translate-y-1/2 -translate-x-1/2"
                   style={{ left: `${toPct(mean)}%` }}
-                  title={`Mean: ${fmtPrice(mean)}`}
+                  title={`Mean: ${money(mean)}`}
                 />
               )}
               {median != null && (
                 <div
                   className="absolute w-2 h-2 bg-violet-400 rounded-full border-2 border-zinc-900 top-1/2 -translate-y-1/2 -translate-x-1/2"
                   style={{ left: `${toPct(median)}%` }}
-                  title={`Median: ${fmtPrice(median)}`}
+                  title={`Median: ${money(median)}`}
                 />
               )}
             </div>
@@ -160,9 +171,9 @@ function PriceTargetsCard({ targets, currentPrice }: PriceTargetsProps) {
 
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: 'Current', value: fmtPrice(current) },
-              { label: 'Mean Target', value: fmtPrice(mean) },
-              { label: 'Median Target', value: fmtPrice(median) },
+              { label: 'Current', value: money(current) },
+              { label: 'Mean Target', value: money(mean) },
+              { label: 'Median Target', value: money(median) },
               {
                 label: 'Upside (mean)',
                 value: upside != null ? `${Number(upside) >= 0 ? '+' : ''}${upside}%` : '—',
@@ -225,7 +236,7 @@ function RecommendationsCard({ recommendations }: RecommendationsProps) {
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-      <SectionLabel>ANALYST RECOMMENDATIONS</SectionLabel>
+      <SectionLabel tip="recommendations">ANALYST RECOMMENDATIONS</SectionLabel>
 
       {rows.length === 0 ? (
         <Unavailable />
@@ -285,7 +296,7 @@ function EarningsEstimatesCard({ estimates }: EarningsEstimatesProps) {
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-      <SectionLabel>EARNINGS ESTIMATES (EPS)</SectionLabel>
+      <SectionLabel tip="eps_estimate">EARNINGS ESTIMATES (EPS)</SectionLabel>
 
       {rows.length === 0 ? (
         <Unavailable />
@@ -311,7 +322,7 @@ function RevenueEstimatesCard({ estimates }: RevenueEstimatesProps) {
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-      <SectionLabel>REVENUE ESTIMATES</SectionLabel>
+      <SectionLabel tip="revenue_estimate">REVENUE ESTIMATES</SectionLabel>
 
       {rows.length === 0 ? (
         <Unavailable />
@@ -334,6 +345,7 @@ interface Props {
   earningsEstimates: EarningsEstimateRow[] | null | undefined
   revenueEstimates: RevenueEstimateRow[] | null | undefined
   currentPrice?: number
+  format?: MoneyFmt
 }
 
 export function AnalystPanel({
@@ -342,12 +354,13 @@ export function AnalystPanel({
   earningsEstimates,
   revenueEstimates,
   currentPrice,
+  format,
 }: Props) {
   return (
     <div className="shrink-0 grid grid-cols-1 md:grid-cols-2 gap-4">
       <EarningsEstimatesCard estimates={earningsEstimates} />
       <RevenueEstimatesCard estimates={revenueEstimates} />
-      <PriceTargetsCard targets={targets} currentPrice={currentPrice} />
+      <PriceTargetsCard targets={targets} currentPrice={currentPrice} format={format} />
       <RecommendationsCard recommendations={recommendations} />
     </div>
   )

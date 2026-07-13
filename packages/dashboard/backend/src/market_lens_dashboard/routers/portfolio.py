@@ -3,6 +3,7 @@ import datetime
 from fastapi import Depends, HTTPException, APIRouter, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth import get_current_user
 from ..database import get_session
 from ..schemas.portfolio import PortfolioResponse, StockHolding
 from ..services import portfolio_service
@@ -12,9 +13,13 @@ router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 
 
 @router.get("/", response_model=PortfolioResponse)
-async def get_portfolio(session: AsyncSession = Depends(get_session)):
+async def get_portfolio(
+    market: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
     try:
-        data = await portfolio_service.get_portfolio(session)
+        data = await portfolio_service.get_portfolio(session, user_id, market)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return data
@@ -22,9 +27,13 @@ async def get_portfolio(session: AsyncSession = Depends(get_session)):
 
 # /download must be declared before /{ticker} so FastAPI doesn't swallow it as a ticker name
 @router.get("/download")
-async def download_portfolio(session: AsyncSession = Depends(get_session)):
+async def download_portfolio(
+    market: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
     try:
-        portfolio = await portfolio_service.get_portfolio(session)
+        portfolio = await portfolio_service.get_portfolio(session, user_id, market)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     xlsx_bytes = build_portfolio_xlsx(portfolio)
@@ -37,9 +46,13 @@ async def download_portfolio(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/{ticker}", response_model=StockHolding)
-async def get_stock_holding(ticker: str, session: AsyncSession = Depends(get_session)):
+async def get_stock_holding(
+    ticker: str,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
     try:
-        data = await portfolio_service.get_stock_holding(session, ticker)
+        data = await portfolio_service.get_stock_holding(session, user_id, ticker)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return data
@@ -50,9 +63,10 @@ async def add_stock_purchase(
     ticker: str, shares: int, bought_at: float,
     date: str | None = None,
     session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
 ):
     try:
-        data = await portfolio_service.add_stock_purchase(session, ticker, shares, bought_at, date)
+        data = await portfolio_service.add_stock_purchase(session, user_id, ticker, shares, bought_at, date)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return data
@@ -63,27 +77,36 @@ async def sell_stock_shares(
     ticker: str, shares: int, sold_at: float,
     date: str | None = None,
     session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
 ):
     try:
-        data = await portfolio_service.sell_stock_shares(session, ticker, shares, sold_at, date)
+        data = await portfolio_service.sell_stock_shares(session, user_id, ticker, shares, sold_at, date)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return data
 
 
 @router.delete("/{ticker}/transactions/{transaction_id}")
-async def delete_transaction(ticker: str, transaction_id: int, session: AsyncSession = Depends(get_session)):
+async def delete_transaction(
+    ticker: str, transaction_id: int,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
     try:
-        data = await portfolio_service.delete_transaction(session, ticker, transaction_id)
+        data = await portfolio_service.delete_transaction(session, user_id, ticker, transaction_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return data or {}
 
 
 @router.delete("/{ticker}")
-async def delete_stock_holding(ticker: str, session: AsyncSession = Depends(get_session)):
+async def delete_stock_holding(
+    ticker: str,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
     try:
-        data = await portfolio_service.delete_stock_holding(session, ticker)
+        data = await portfolio_service.delete_stock_holding(session, user_id, ticker)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return data

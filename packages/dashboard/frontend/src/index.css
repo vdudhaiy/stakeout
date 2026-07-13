@@ -2,114 +2,97 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Stakeout base ──────────────────────────────────────────────────────────
+   Dark ink terminal by default; "paper ledger" light theme via [data-theme].
+   The zinc/indigo utility scales are remapped to ink/brass in tailwind.config,
+   so most theming happens there — this file covers scrollbars, the light-mode
+   override layer, the ticker tape, and motion. */
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent;
+  scrollbar-color: #2a3446 transparent;
 }
 
-*::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
+*::-webkit-scrollbar { width: 4px; height: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #2a3446; border-radius: 2px; }
 
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
+::selection { background: rgba(228, 185, 91, 0.28); }
 
-*::-webkit-scrollbar-thumb {
-  background: #3f3f46;
-  border-radius: 2px;
-}
+/* ── Light mode ("paper ledger") overrides ─────────────────────────────── */
 
-/* ── Light mode overrides ──────────────────────────────────────────────────── */
-
-[data-theme='light'] * {
-  scrollbar-color: #cbd5e1 transparent;
-}
-
-[data-theme='light'] *::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-}
+[data-theme='light'] * { scrollbar-color: #d8d1c0 transparent; }
+[data-theme='light'] *::-webkit-scrollbar-thumb { background: #d8d1c0; }
 
 /* Backgrounds */
-[data-theme='light'] .bg-zinc-950 { background-color: #f8fafc !important; }
-[data-theme='light'] .bg-zinc-900 { background-color: #f1f5f9 !important; }
-[data-theme='light'] .bg-zinc-800 { background-color: #e2e8f0 !important; }
-[data-theme='light'] .bg-zinc-700 { background-color: #cbd5e1 !important; }
-[data-theme='light'] .bg-zinc-600 { background-color: #94a3b8 !important; }
+[data-theme='light'] .bg-zinc-950 { background-color: #faf7f0 !important; }
+[data-theme='light'] .bg-zinc-900 { background-color: #f3efe4 !important; }
+[data-theme='light'] .bg-zinc-800 { background-color: #e7e1d1 !important; }
+[data-theme='light'] .bg-zinc-700 { background-color: #d8d1c0 !important; }
+[data-theme='light'] .bg-zinc-600 { background-color: #b5ad99 !important; }
 
 /* Text */
-[data-theme='light'] .text-zinc-100 { color: #0f172a !important; }
-[data-theme='light'] .text-zinc-200 { color: #1e293b !important; }
-[data-theme='light'] .text-zinc-300 { color: #334155 !important; }
-[data-theme='light'] .text-zinc-400 { color: #475569 !important; }
-[data-theme='light'] .text-zinc-500 { color: #64748b !important; }
-[data-theme='light'] .text-zinc-600 { color: #94a3b8 !important; }
-[data-theme='light'] .text-zinc-700 { color: #a8b4c4 !important; }
+[data-theme='light'] .text-zinc-100 { color: #191d14 !important; }
+[data-theme='light'] .text-zinc-200 { color: #262b20 !important; }
+[data-theme='light'] .text-zinc-300 { color: #3a4033 !important; }
+[data-theme='light'] .text-zinc-400 { color: #575e4e !important; }
+[data-theme='light'] .text-zinc-500 { color: #6f7566 !important; }
+[data-theme='light'] .text-zinc-600 { color: #99A08F !important; }
+[data-theme='light'] .text-zinc-700 { color: #aeb4a4 !important; }
 
 /* Borders */
-[data-theme='light'] .border-zinc-800 { border-color: #e2e8f0 !important; }
-[data-theme='light'] .border-zinc-700 { border-color: #cbd5e1 !important; }
-[data-theme='light'] .border-zinc-600 { border-color: #94a3b8 !important; }
+[data-theme='light'] .border-zinc-800 { border-color: #e7e1d1 !important; }
+[data-theme='light'] .border-zinc-700 { border-color: #d8d1c0 !important; }
+[data-theme='light'] .border-zinc-600 { border-color: #b5ad99 !important; }
 
 /* Hover states */
-[data-theme='light'] .hover\:bg-zinc-900:hover { background-color: #f1f5f9 !important; }
-[data-theme='light'] .hover\:bg-zinc-800:hover { background-color: #e2e8f0 !important; }
-[data-theme='light'] .hover\:bg-zinc-700:hover { background-color: #cbd5e1 !important; }
-[data-theme='light'] .hover\:text-zinc-400:hover { color: #475569 !important; }
-[data-theme='light'] .hover\:text-zinc-300:hover { color: #334155 !important; }
-[data-theme='light'] .hover\:text-zinc-200:hover { color: #1e293b !important; }
-[data-theme='light'] .hover\:text-zinc-100:hover { color: #0f172a !important; }
+[data-theme='light'] .hover\:bg-zinc-900:hover { background-color: #f3efe4 !important; }
+[data-theme='light'] .hover\:bg-zinc-800:hover { background-color: #e7e1d1 !important; }
+[data-theme='light'] .hover\:bg-zinc-700:hover { background-color: #d8d1c0 !important; }
+[data-theme='light'] .hover\:text-zinc-400:hover { color: #575e4e !important; }
+[data-theme='light'] .hover\:text-zinc-300:hover { color: #3a4033 !important; }
+[data-theme='light'] .hover\:text-zinc-200:hover { color: #262b20 !important; }
+[data-theme='light'] .hover\:text-zinc-100:hover { color: #191d14 !important; }
 
-/* Accent colors — need stronger saturation on light bg */
-[data-theme='light'] .text-indigo-400 { color: #4f46e5 !important; }
-[data-theme='light'] .text-indigo-500 { color: #4338ca !important; }
-[data-theme='light'] .text-emerald-400 { color: #059669 !important; }
-[data-theme='light'] .text-red-400    { color: #dc2626 !important; }
-[data-theme='light'] .text-amber-400  { color: #d97706 !important; }
-[data-theme='light'] .text-blue-400   { color: #2563eb !important; }
-[data-theme='light'] .text-yellow-400 { color: #ca8a04 !important; }
+/* Accent colors — deepen for contrast on paper */
+[data-theme='light'] .text-indigo-400 { color: #96690a !important; }
+[data-theme='light'] .text-indigo-300 { color: #96690a !important; }
+[data-theme='light'] .text-indigo-500 { color: #6e4d08 !important; }
+[data-theme='light'] .text-emerald-400 { color: #047857 !important; }
+[data-theme='light'] .text-red-400    { color: #c2313a !important; }
+[data-theme='light'] .text-amber-400  { color: #b45309 !important; }
+[data-theme='light'] .text-blue-400   { color: #1d4ed8 !important; }
+[data-theme='light'] .text-yellow-400 { color: #a16207 !important; }
 
 /* Modal overlay */
-[data-theme='light'] .bg-black\/60 { background-color: rgba(0, 0, 0, 0.35) !important; }
+[data-theme='light'] .bg-black\/60 { background-color: rgba(30, 25, 10, 0.35) !important; }
 
-/* ── Theme toggle button ───────────────────────────────────────────────────── */
+/* ── Theme toggle button ───────────────────────────────────────────────── */
 
 .theme-toggle-btn {
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  border: 1px solid rgba(228, 185, 91, 0.3);
   transition: border-color 0.2s, box-shadow 0.2s, color 0.2s;
 }
 
 .theme-toggle-btn:hover {
-  border-color: rgba(99, 102, 241, 0.7);
-  box-shadow: 0 0 10px rgba(99, 102, 241, 0.3), inset 0 0 8px rgba(99, 102, 241, 0.1);
-  color: #a5b4fc;
+  border-color: rgba(228, 185, 91, 0.7);
+  box-shadow: 0 0 10px rgba(228, 185, 91, 0.3), inset 0 0 8px rgba(228, 185, 91, 0.1);
+  color: #edcb80;
 }
 
-[data-theme='light'] .theme-toggle-btn {
-  border-color: rgba(79, 70, 229, 0.3);
-}
-
+[data-theme='light'] .theme-toggle-btn { border-color: rgba(150, 105, 10, 0.35); }
 [data-theme='light'] .theme-toggle-btn:hover {
-  border-color: rgba(79, 70, 229, 0.7);
-  box-shadow: 0 0 10px rgba(79, 70, 229, 0.2), inset 0 0 8px rgba(79, 70, 229, 0.08);
-  color: #4f46e5;
+  border-color: rgba(150, 105, 10, 0.75);
+  box-shadow: 0 0 10px rgba(150, 105, 10, 0.2), inset 0 0 8px rgba(150, 105, 10, 0.08);
+  color: #96690a;
 }
 
-/* ── Cyberpunk ripple transition effect ───────────────────────────────────── */
+/* ── Opening-bell ripple (theme transition) ────────────────────────────── */
 
-@keyframes cyberpunk-ripple {
-  0% {
-    transform: translate(-50%, -50%) scale(0);
-    opacity: 1;
-  }
-  60% {
-    opacity: 0.75;
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(350);
-    opacity: 0;
-  }
+@keyframes bell-ripple {
+  0%   { transform: translate(-50%, -50%) scale(0); opacity: 1; }
+  60%  { opacity: 0.75; }
+  100% { transform: translate(-50%, -50%) scale(350); opacity: 0; }
 }
 
 .cyberpunk-ripple {
@@ -119,29 +102,51 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  animation: cyberpunk-ripple 0.75s cubic-bezier(0.2, 0, 0.35, 1) forwards;
+  animation: bell-ripple 0.75s cubic-bezier(0.2, 0, 0.35, 1) forwards;
 }
 
 .cyberpunk-ripple.to-light {
-  background: radial-gradient(
-    circle,
-    rgba(255, 255, 255, 1) 0%,
-    rgba(224, 231, 255, 0.92) 18%,
-    rgba(165, 180, 252, 0.75) 40%,
-    rgba(99, 102, 241, 0.45) 65%,
-    rgba(139, 92, 246, 0.15) 85%,
-    transparent 100%
-  );
+  background: radial-gradient(circle,
+    rgba(250, 247, 240, 1) 0%,
+    rgba(246, 235, 203, 0.92) 18%,
+    rgba(237, 203, 128, 0.75) 40%,
+    rgba(217, 169, 63, 0.45) 65%,
+    rgba(184, 134, 11, 0.15) 85%,
+    transparent 100%);
 }
 
 .cyberpunk-ripple.to-dark {
-  background: radial-gradient(
-    circle,
-    rgba(8, 4, 28, 1) 0%,
-    rgba(55, 15, 130, 0.92) 18%,
-    rgba(88, 50, 185, 0.75) 40%,
-    rgba(139, 92, 246, 0.45) 65%,
-    rgba(196, 80, 255, 0.15) 85%,
-    transparent 100%
-  );
+  background: radial-gradient(circle,
+    rgba(10, 14, 22, 1) 0%,
+    rgba(28, 36, 50, 0.92) 18%,
+    rgba(110, 77, 8, 0.75) 40%,
+    rgba(217, 169, 63, 0.45) 65%,
+    rgba(237, 203, 128, 0.15) 85%,
+    transparent 100%);
+}
+
+/* ── Ticker tape (the Stakeout signature) ──────────────────────────────── */
+
+.ticker-tape { overflow: hidden; white-space: nowrap; }
+.ticker-tape-track {
+  display: inline-flex;
+  animation: marquee 45s linear infinite;
+  will-change: transform;
+}
+.ticker-tape:hover .ticker-tape-track { animation-play-state: paused; }
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* ── Motion discipline ─────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker-tape-track { animation: none; }
+  .cyberpunk-ripple { animation-duration: 0.01ms; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

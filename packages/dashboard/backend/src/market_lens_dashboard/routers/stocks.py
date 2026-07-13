@@ -22,11 +22,13 @@ async def stock_root():
 
 
 @router.get("/market", response_model=MarketResponse)
-async def get_market_status():
+async def get_market_status(market: str = "US"):
     '''
-    Get the current status of the stock market (open/closed).
+    Get the current status of a stock market (open/closed).
+    Args:
+        market: "US" (NYSE/NASDAQ) or "IN" (NSE/BSE). Defaults to "US".
     '''
-    status = await stock_service.get_market_status()
+    status = await stock_service.get_market_status(market)
     return MarketResponse(status=status)
 
 

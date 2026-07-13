@@ -5,19 +5,23 @@ import {
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
   BarChart2, AlertTriangle, FileDown,
 } from 'lucide-react'
-import type { PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
+import { PieChart, Pie, Cell, Tooltip as ChartTooltip, ResponsiveContainer } from 'recharts'
+import type { Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
 import { fetchPortfolio, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio } from '../api'
+import { usePrefs } from '../contexts/PrefsContext'
+import { formatMoney, type Currency } from '../utils/currency'
+import { marketOf } from '../utils/market'
+import { InfoTip } from './InfoTip'
+import type { GlossaryKey } from '../utils/glossary'
+
+type MoneyFmt = (v: number | null | undefined, opts?: { sign?: boolean; compact?: boolean }) => string
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 const fmt = (n: number) =>
   n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-const fmtCcy = (n: number) => `$${fmt(Math.abs(n))}`
-
-
 const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
-const sign   = (n: number) => n >= 0 ? '+' : '−'
 
 const gainText   = (n: number) => n >= 0 ? 'text-emerald-400' : 'text-red-400'
 const gainBorder = (n: number) => n >= 0 ? 'border-l-emerald-500/50' : 'border-l-red-500/50'
@@ -25,7 +29,7 @@ const gainBorder = (n: number) => n >= 0 ? 'border-l-emerald-500/50' : 'border-l
 // ── Stat card ─────────────────────────────────────────────────────────────────
 
 function StatCard({
-  label, value, sub, valueColor, subColor, accent,
+  label, value, sub, valueColor, subColor, accent, tip,
 }: {
   label: string
   value: string
@@ -33,13 +37,14 @@ function StatCard({
   valueColor?: string
   subColor?: string
   accent?: boolean
+  tip?: GlossaryKey
 }) {
   return (
     <div className={clsx(
       'flex flex-col gap-1.5 rounded-xl border px-4 py-3.5 bg-zinc-900',
       accent ? 'border-indigo-500/25' : 'border-zinc-800',
     )}>
-      <span className="text-[10px] font-semibold tracking-widest text-zinc-500">{label}</span>
+      <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500">{label}{tip && <InfoTip k={tip} />}</span>
       <span className={clsx('text-lg font-bold font-mono leading-none', valueColor ?? 'text-zinc-100')}>{value}</span>
       {sub && <span className={clsx('text-xs font-mono', subColor ?? 'text-zinc-500')}>{sub}</span>}
     </div>
@@ -84,6 +89,55 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
         <Plus size={14} />
         Add First Position
       </button>
+    </div>
+  )
+}
+
+// ── Allocation donut ──────────────────────────────────────────────────────────
+
+const DONUT_COLORS = ['#E4B95B', '#2FBF71', '#5B9BE4', '#B45BE4', '#E45B7B', '#5BE4C4', '#E48A5B', '#8AE45B']
+
+function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: MoneyFmt }) {
+  const withValue = holdings.filter(h => h.stock_value > 0)
+  if (withValue.length < 2) return null
+  const total = withValue.reduce((sum, h) => sum + h.stock_value, 0)
+  const sorted = [...withValue].sort((a, b) => b.stock_value - a.stock_value)
+  const top = sorted.slice(0, 8)
+  const rest = sorted.slice(8)
+  const data = [
+    ...top.map(h => ({ name: h.ticker, value: h.stock_value })),
+    ...(rest.length ? [{ name: 'Other', value: rest.reduce((s, h) => s + h.stock_value, 0) }] : []),
+  ]
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+      <p className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500 mb-2">
+        ALLOCATION <InfoTip k="allocation" />
+      </p>
+      <div className="flex items-center gap-6 flex-wrap">
+        <div className="w-40 h-40 shrink-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={70} paddingAngle={2} stroke="none">
+                {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
+              </Pie>
+              <ChartTooltip
+                formatter={(v: number, name: string) => [`${money(v)} · ${((v / total) * 100).toFixed(1)}%`, name]}
+                contentStyle={{ background: '#0A0E16', border: '1px solid #2A3446', borderRadius: 8, fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex-1 min-w-[180px] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+          {data.map((d, i) => (
+            <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
+              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+              <span className="text-zinc-300">{d.name}</span>
+              <span className="ml-auto text-zinc-500">{((d.value / total) * 100).toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -240,7 +294,7 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, maxShares, 
                 Total {mode === 'buy' ? 'cost' : 'proceeds'}
               </span>
               <span className="text-sm font-mono font-semibold text-zinc-200">
-                ${fmt(total)}
+                {marketOf(ticker) === 'IN' ? '₹' : '$'}{fmt(total)}
               </span>
             </div>
           )}
@@ -273,7 +327,7 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, maxShares, 
 
 // ── Holding row ───────────────────────────────────────────────────────────────
 
-function TxRow({ txn, onDeleteRequest }: { txn: StockPurchaseHistory; onDeleteRequest: () => void }) {
+function TxRow({ txn, money, onDeleteRequest }: { txn: StockPurchaseHistory; money: MoneyFmt; onDeleteRequest: () => void }) {
   const rowPl = txn.sale ? (txn.sold_at - txn.bought_at) * txn.shares : null
 
   return (
@@ -291,14 +345,14 @@ function TxRow({ txn, onDeleteRequest }: { txn: StockPurchaseHistory; onDeleteRe
       <td className="px-5 py-2.5 font-mono text-xs text-zinc-400">
         {txn.sale ? <span className="text-zinc-700">—</span> : txn.shares_remaining}
       </td>
-      <td className="px-5 py-2.5 font-mono text-xs text-zinc-400">${fmt(txn.bought_at)}</td>
+      <td className="px-5 py-2.5 font-mono text-xs text-zinc-400">{money(txn.bought_at)}</td>
       <td className="px-5 py-2.5 font-mono text-xs text-zinc-400">
-        {txn.sale ? `$${fmt(txn.sold_at)}` : <span className="text-zinc-700">—</span>}
+        {txn.sale ? money(txn.sold_at) : <span className="text-zinc-700">—</span>}
       </td>
       <td className="px-5 py-2.5 font-mono text-xs">
         {rowPl != null ? (
           <span className={gainText(rowPl)}>
-            {sign(rowPl)}{fmtCcy(rowPl)}
+            {money(rowPl, { sign: true })}
           </span>
         ) : <span className="text-zinc-700">—</span>}
       </td>
@@ -316,9 +370,10 @@ function TxRow({ txn, onDeleteRequest }: { txn: StockPurchaseHistory; onDeleteRe
 }
 
 function HoldingRow({
-  holding, expanded, onToggle, onBuy, onSell, onDelete, onViewTicker, onDeleteTxn,
+  holding, money, expanded, onToggle, onBuy, onSell, onDelete, onViewTicker, onDeleteTxn,
 }: {
   holding: StockHolding
+  money: MoneyFmt
   expanded: boolean
   onToggle: () => void
   onBuy: () => void
@@ -366,18 +421,18 @@ function HoldingRow({
         <span className="text-sm font-mono text-zinc-300 text-right">{holding.shares}</span>
 
         {/* Avg cost */}
-        <span className="text-sm font-mono text-zinc-400 text-right">${fmt(holding.average_cost)}</span>
+        <span className="text-sm font-mono text-zinc-400 text-right">{money(holding.average_cost)}</span>
 
         {/* Current */}
-        <span className="text-sm font-mono text-zinc-300 text-right">${fmt(holding.current_price)}</span>
+        <span className="text-sm font-mono text-zinc-300 text-right">{money(holding.current_price)}</span>
 
         {/* Market value */}
-        <span className="text-sm font-mono text-zinc-300 text-right">${fmt(holding.stock_value)}</span>
+        <span className="text-sm font-mono text-zinc-300 text-right">{money(holding.stock_value)}</span>
 
         {/* Unrealized P&L */}
         <div className="text-right">
           <div className={clsx('text-sm font-mono font-medium leading-none', gainText(pl))}>
-            {sign(pl)}{fmtCcy(pl)}
+            {money(pl, { sign: true })}
           </div>
           <div className={clsx('text-[10px] font-mono mt-0.5', gainText(pl))}>
             {fmtPct(plPct)}
@@ -389,7 +444,7 @@ function HoldingRow({
           'text-sm font-mono text-right',
           holding.total_earned > 0 ? 'text-emerald-400' : 'text-zinc-500',
         )}>
-          ${fmt(holding.total_earned)}
+          {money(holding.total_earned)}
         </span>
 
         {/* Dashboard link */}
@@ -435,7 +490,7 @@ function HoldingRow({
             <div className="flex items-center gap-4 ml-3 text-xs text-zinc-600">
               <span>
                 Cost basis{' '}
-                <span className="font-mono text-zinc-400">${fmt(holding.total_invested)}</span>
+                <span className="font-mono text-zinc-400">{money(holding.total_invested)}</span>
               </span>
             </div>
 
@@ -471,6 +526,7 @@ function HoldingRow({
                     <TxRow
                       key={txn.id}
                       txn={txn}
+                      money={money}
                       onDeleteRequest={() => onDeleteTxn(txn.id, holding.trade_history.length === 1)}
                     />
                   ))}
@@ -493,6 +549,8 @@ export function PortfolioPage({
   onViewTicker: (ticker: string) => void
   onTickerRemoved?: (ticker: string) => void
 }) {
+  const { market: prefsMarket, setMarket: setPrefsMarket, currency, usdInr } = usePrefs()
+  const [tab, setTab] = useState<Market>(prefsMarket === 'IN' ? 'IN' : 'US')
   const [portfolio, setPortfolio]     = useState<PortfolioResponse | null>(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState<string | null>(null)
@@ -511,14 +569,27 @@ export function PortfolioPage({
     setLoading(true)
     setError(null)
     try {
-      setPortfolio(await fetchPortfolio())
+      setPortfolio(await fetchPortfolio(tab))
       setLastUpdated(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load portfolio')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [tab])
+
+  // The tab's native currency: every aggregate below is stored in it.
+  const nativeCcy: Currency = tab === 'IN' ? 'INR' : 'USD'
+  const money: MoneyFmt = useCallback(
+    (v, opts) => formatMoney(v, nativeCcy, currency, usdInr, opts),
+    [nativeCcy, currency, usdInr],
+  )
+
+  function switchTab(m: Market) {
+    setTab(m)
+    if (prefsMarket !== 'ALL') setPrefsMarket(m)
+    setExpanded(null)
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -588,11 +659,33 @@ export function PortfolioPage({
 
         {/* ── Page header ──────────────────────────────────────────────── */}
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight text-zinc-100">My Portfolio</h1>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Track positions, log transactions, monitor performance
-            </p>
+          <div className="flex items-center gap-5">
+            <div>
+              <h1 className="font-display text-lg font-bold tracking-tight text-zinc-100">My Portfolios</h1>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Track positions, log transactions, monitor performance
+              </p>
+            </div>
+            {/* Market switch: separate portfolios for US and Indian stocks */}
+            <div className="flex rounded-lg overflow-hidden border border-zinc-800">
+              {([
+                { value: 'US' as Market, label: 'US · NYSE/NASDAQ' },
+                { value: 'IN' as Market, label: 'India · NSE/BSE' },
+              ]).map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => switchTab(value)}
+                  className={clsx(
+                    'px-3.5 py-2 text-xs font-medium transition-colors',
+                    tab === value
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex flex-col items-center gap-0.5">
@@ -613,7 +706,7 @@ export function PortfolioPage({
             <button
               onClick={async () => {
                 setDownloading(true)
-                try { await downloadPortfolio() } catch {}
+                try { await downloadPortfolio(tab) } catch {}
                 setDownloading(false)
               }}
               disabled={downloading || !portfolio || portfolio.holdings.length === 0}
@@ -652,31 +745,39 @@ export function PortfolioPage({
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               <StatCard
                 label="PORTFOLIO VALUE"
-                value={fmtCcy(portfolio.portfolio_value)}
+                tip="portfolio_value"
+                value={money(portfolio.portfolio_value)}
                 accent
               />
               <StatCard
                 label="COST BASIS"
-                value={fmtCcy(portfolio.total_invested)}
+                tip="total_invested"
+                value={money(portfolio.total_invested)}
               />
               <StatCard
                 label="UNREALIZED RETURN"
-                value={`${sign(totalRet)}${fmtCcy(Math.abs(totalRet))}`}
+                tip="total_return"
+                value={money(totalRet, { sign: true })}
                 valueColor={gainText(totalRet)}
                 sub={fmtPct(portfolio.return_percentage)}
                 subColor={gainText(totalRet)}
               />
               <StatCard
                 label="REALIZED GAINS"
-                value={fmtCcy(portfolio.realized_gains)}
+                tip="realized_gains"
+                value={money(portfolio.realized_gains)}
                 valueColor={portfolio.realized_gains > 0 ? gainText(1) : undefined}
               />
               <StatCard
                 label="NET P&L"
-                value={`${sign(netPl)}${fmtCcy(Math.abs(netPl))}`}
+                tip="net_pl"
+                value={money(netPl, { sign: true })}
                 valueColor={gainText(netPl)}
               />
             </div>
+
+            {/* ── Allocation ─────────────────────────────────────────── */}
+            <AllocationCard holdings={holdings} money={money} />
 
             {/* ── Holdings ───────────────────────────────────────────── */}
             {holdings.length === 0 ? (
@@ -687,11 +788,11 @@ export function PortfolioPage({
                 <div className="grid grid-cols-[minmax(140px,2fr)_1fr_1fr_1fr_1fr_1.4fr_1fr_32px_32px] gap-3 px-5 py-2.5 border-b border-zinc-800 text-[10px] font-semibold tracking-widest text-zinc-500">
                   <span>POSITION</span>
                   <span className="text-right">SHARES</span>
-                  <span className="text-right">AVG COST</span>
+                  <span className="flex items-center justify-end gap-1">AVG COST <InfoTip k="avg_cost" align="right" /></span>
                   <span className="text-right">CURRENT</span>
                   <span className="text-right">VALUE</span>
-                  <span className="text-right">UNREALIZED P&L</span>
-                  <span className="text-right">REALIZED</span>
+                  <span className="flex items-center justify-end gap-1">UNREALIZED P&L <InfoTip k="total_return" align="right" /></span>
+                  <span className="flex items-center justify-end gap-1">REALIZED <InfoTip k="realized_gains" align="right" /></span>
                   <span />
                   <span />
                 </div>
@@ -700,6 +801,7 @@ export function PortfolioPage({
                 <div className="divide-y divide-zinc-800">
                   {holdings.map(h => (
                     <HoldingRow
+                      money={(v, opts) => formatMoney(v, h.currency ?? nativeCcy, currency, usdInr, opts)}
                       key={h.ticker}
                       holding={h}
                       expanded={expanded === h.ticker}
@@ -719,7 +821,7 @@ export function PortfolioPage({
                     {holdings.length} position{holdings.length !== 1 ? 's' : ''} · {portfolio.total_shares} shares held
                   </span>
                   <span className={clsx('text-xs font-mono font-semibold', gainText(netPl))}>
-                    Net {sign(netPl)}{fmtCcy(Math.abs(netPl))}
+                    Net {money(netPl, { sign: true })}
                   </span>
                 </div>
               </div>

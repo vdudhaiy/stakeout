@@ -6,11 +6,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import init_db
-from .routers import health, indicators, portfolio, stocks
+from .routers import fx, health, indicators, news, portfolio, stocks, watchlist
 from .services.portfolio_service import repair_all_fifo
 
 
@@ -22,16 +23,32 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title=os.getenv("APP_NAME", "Dashboard Backend API"),
+    title=os.getenv("APP_NAME", "Stakeout API"),
     openapi_url="/openapi",
     docs_url="/docs",
     lifespan=lifespan,
 )
 
+# CORS: the frontend is served from a different origin in cloud deployments
+# (Vercel) than the API (Render). Comma-separated list, e.g.
+#   CORS_ORIGINS=https://stakeout.vercel.app,http://localhost:5173
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 app.include_router(stocks.router)
 app.include_router(health.router)
 app.include_router(portfolio.router)
 app.include_router(indicators.router)
+app.include_router(watchlist.router)
+app.include_router(news.router)
+app.include_router(fx.router)
 
 
 @app.get("/version", include_in_schema=False)

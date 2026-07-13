@@ -1,5 +1,5 @@
 {
-  "name": "market-lens-dashboard",
+  "name": "stakeout-dashboard",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -14,7 +14,9 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.0",
-    "recharts": "^2.12.7"
+    "recharts": "^2.12.7",
+    "@supabase/supabase-js": "^2.47.0",
+    "framer-motion": "^11.11.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.5",

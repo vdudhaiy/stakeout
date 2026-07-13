@@ -15,7 +15,7 @@ interface RippleState {
 }
 
 function getInitialTheme(): boolean {
-  const saved = localStorage.getItem('market-lens-theme')
+  const saved = localStorage.getItem('stakeout-theme') ?? localStorage.getItem('market-lens-theme')
   if (saved === 'light') return false
   if (saved === 'dark') return true
   return true // default dark
@@ -34,7 +34,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Keep <html> data-theme and localStorage in sync
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
-    localStorage.setItem('market-lens-theme', isDark ? 'dark' : 'light')
+    localStorage.setItem('stakeout-theme', isDark ? 'dark' : 'light')
   }, [isDark])
 
   const toggleTheme = useCallback((x: number, y: number) => {

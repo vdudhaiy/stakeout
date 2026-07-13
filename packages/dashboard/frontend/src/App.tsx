@@ -19,7 +19,13 @@ import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
 import { Footer } from './components/Footer'
 import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock, fetchIndicators } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
-import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV } from './types'
+import { NewsPanel } from './components/NewsPanel'
+import { TickerTape } from './components/TickerTape'
+import { InfoTip } from './components/InfoTip'
+import { usePrefs } from './contexts/PrefsContext'
+import { formatMoney } from './utils/currency'
+import { marketOf } from './utils/market'
+import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV } from './types'
 import { SMA_PERIODS, EMA_PERIODS, SMA_COLORS, EMA_COLORS } from './utils/indicators'
 import type { OverlayConfig } from './utils/indicators'
 
@@ -52,9 +58,10 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const view: View = PATH_TO_VIEW[location.pathname] ?? 'home'
+  const { currency, usdInr } = usePrefs()
 
   const [ticker, setTicker] = useState('')
-  const [allTickers, setAllTickers] = useState<StockMap | null>(null)
+  const [allTickers, setAllTickers] = useState<WatchlistMap | null>(null)
   const [days, setDays] = useState(30)
   const [data, setData] = useState<OHLCV[]>([])
   const [loading, setLoading] = useState(false)
@@ -65,6 +72,7 @@ export default function App() {
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
   const [latencyHistory, setLatencyHistory] = useState<LatencyRecord[]>([])
   const [marketOpen, setMarketOpen] = useState<boolean | null>(null)
+  const [marketOpenIN, setMarketOpenIN] = useState<boolean | null>(null)
   const [currentData, setCurrentData] = useState<OHLCV | null>(null)
   const [currentFetchedAt, setCurrentFetchedAt] = useState<Date | null>(null)
   const [currentLoading, setCurrentLoading] = useState(false)
@@ -105,7 +113,10 @@ export default function App() {
     return () => clearInterval(id)
   }, [checkHealth])
 
-  const checkMarket = useCallback(() => fetchMarketStatus().then(setMarketOpen), [])
+  const checkMarket = useCallback(() => Promise.all([
+    fetchMarketStatus('US').then(setMarketOpen),
+    fetchMarketStatus('IN').then(setMarketOpenIN),
+  ]).then(() => {}), [])
 
   useEffect(() => {
     checkMarket()
@@ -116,6 +127,13 @@ export default function App() {
   useEffect(() => {
     fetchAllStocks().then(setAllTickers).catch(() => setAllTickers({}))
   }, [])
+
+  // Which exchange does the selected ticker trade on? Drives live-vs-archive logic.
+  const tickerMarket = marketOf(ticker)
+  const tickerMarketOpen = tickerMarket === 'IN' ? marketOpenIN : marketOpen
+  const nativeCurrency = tickerMarket === 'IN' ? 'INR' as const : 'USD' as const
+  const fmt = (v: number | null | undefined, opts?: { sign?: boolean }) =>
+    formatMoney(v, nativeCurrency, currency, usdInr, opts)
 
   const loadCurrent = useCallback(() => {
     if (!ticker) return Promise.resolve()
@@ -135,13 +153,13 @@ export default function App() {
 
     loadCurrent()
 
-    if (!marketOpen) return
+    if (!tickerMarketOpen) return
     const id = setInterval(loadCurrent, 2 * 60_000)
     return () => clearInterval(id)
-  }, [ticker, marketOpen, loadCurrent])
+  }, [ticker, tickerMarketOpen, loadCurrent])
 
   // Pre-market: date string contains 'T' (e.g. "2026-06-09T07:30") vs plain "2026-06-09"
-  const isPreMarket = !marketOpen && (currentData?.date?.includes('T') ?? false)
+  const isPreMarket = !tickerMarketOpen && (currentData?.date?.includes('T') ?? false)
 
   useEffect(() => {
     if (!isPreMarket) return
@@ -277,7 +295,7 @@ export default function App() {
 
   const today = new Date().toISOString().slice(0, 10)
   // Strip today's entry unless market is confirmed closed — partial candles skew the chart
-  const displayData = marketOpen !== false ? data.filter(d => d.date !== today) : data
+  const displayData = tickerMarketOpen !== false ? data.filter(d => d.date !== today) : data
 
   // For charts: use intraday data in 1D mode, otherwise the regular daily series
   const chartData = days === 0 ? (intradayData ?? []) : displayData
@@ -313,7 +331,7 @@ export default function App() {
   const archiveChangePct = archiveChange != null && prev?.close ? (archiveChange / prev.close) * 100 : null
 
   // Live intraday price — only valid while market is open
-  const liveClose = marketOpen ? (currentData?.close ?? null) : null
+  const liveClose = tickerMarketOpen ? (currentData?.close ?? null) : null
   const liveChange = liveClose != null && archiveClose != null ? liveClose - archiveClose : null
   const liveChangePct = liveChange != null && archiveClose ? (liveChange / archiveClose) * 100 : null
 
@@ -340,8 +358,13 @@ export default function App() {
   const headerChangePct = liveClose != null ? liveChangePct : archiveChangePct
 
   // OHLCV stats block source and its baseline for change calculation
-  const mainOHLCV = marketOpen ? currentData : latest
-  const mainOHLCVPrevClose = marketOpen ? archiveClose : (prev?.close ?? null)
+  const mainOHLCV = tickerMarketOpen ? currentData : latest
+  const mainOHLCVPrevClose = tickerMarketOpen ? archiveClose : (prev?.close ?? null)
+
+  const tickerNames: StockMap = useMemo(
+    () => Object.fromEntries(Object.entries(allTickers ?? {}).map(([t, v]) => [t, v.name])),
+    [allTickers],
+  )
 
   const displayName = details?.info?.displayName as string | undefined
   const shortName = details?.info?.shortName as string | undefined
@@ -356,8 +379,11 @@ export default function App() {
         latencyHistory={latencyHistory}
         onRefreshHealth={checkHealth}
         marketOpen={marketOpen}
+        marketOpenIN={marketOpenIN}
         onRefreshMarket={checkMarket}
       />
+
+      {view !== 'home' && <TickerTape tickers={allTickers} />}
 
       {view === 'home' ? (
         <HomePage />
@@ -405,7 +431,7 @@ export default function App() {
           />
 
           {comparisonGroup ? (
-            <ComparisonView group={comparisonGroup} onBack={() => setComparisonGroup(null)} marketOpen={marketOpen} tickerNames={allTickers ?? {}} />
+            <ComparisonView group={comparisonGroup} onBack={() => setComparisonGroup(null)} marketOpen={tickerMarketOpen} tickerNames={tickerNames} />
           ) : preparingTicker ? (
             <div className="flex flex-1 items-center justify-center">
               <div className="flex items-center gap-2 text-zinc-500 text-sm">
@@ -430,7 +456,7 @@ export default function App() {
                     {/* Primary price: archive close (or live when market open) */}
                     {headerPrice != null && (
                       <span className="font-mono text-xl font-semibold text-zinc-100">
-                        ${headerPrice.toFixed(2)}
+                        {fmt(headerPrice)}
                       </span>
                     )}
                     {headerChange !== null && (
@@ -439,7 +465,7 @@ export default function App() {
                         headerChange >= 0 ? 'text-emerald-400' : 'text-red-400',
                       )}>
                         {headerChange >= 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
-                        {headerChange >= 0 ? '+' : ''}{headerChange.toFixed(2)} ({headerChange >= 0 ? '+' : ''}{headerChangePct!.toFixed(2)}%)
+                        {fmt(headerChange, { sign: true })} ({headerChange >= 0 ? '+' : ''}{headerChangePct!.toFixed(2)}%)
                       </span>
                     )}
 
@@ -448,7 +474,7 @@ export default function App() {
                   {(latest ?? currentData) && (
                     <div className="flex items-center gap-1.5 mt-1">
                       <p className="text-zinc-500 text-xs">
-                        {marketOpen && currentFetchedAt
+                        {tickerMarketOpen && currentFetchedAt
                           ? `Live · ${currentFetchedAt.toLocaleTimeString()}`
                           : `Last updated ${latest?.date ?? ''}`}
                       </p>
@@ -491,7 +517,7 @@ export default function App() {
                   </button>
                   <button
                     onClick={() => setDeleteConfirm(true)}
-                    title={`Delete ${ticker}`}
+                    title={`Remove ${ticker} from watchlist`}
                     className="p-2 text-red-600 hover:text-red-400 hover:bg-zinc-900 rounded-lg transition-colors"
                   >
                     <Trash2 size={13} />
@@ -506,7 +532,7 @@ export default function App() {
                     {offHoursLabel}
                   </span>
                   <span className="font-mono text-sm font-semibold text-zinc-100">
-                    ${preMarketClose.toFixed(2)}
+                    {fmt(preMarketClose)}
                   </span>
                   {preMarketChange != null && (
                     <span className={clsx(
@@ -514,7 +540,7 @@ export default function App() {
                       preMarketChange >= 0 ? 'text-emerald-400' : 'text-red-400',
                     )}>
                       {preMarketChange >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                      {preMarketChange >= 0 ? '+' : ''}{preMarketChange.toFixed(2)} ({preMarketChange >= 0 ? '+' : ''}{preMarketChangePct!.toFixed(2)}%)
+                      {fmt(preMarketChange, { sign: true })} ({preMarketChange >= 0 ? '+' : ''}{preMarketChangePct!.toFixed(2)}%)
                     </span>
                   )}
 
@@ -573,6 +599,7 @@ export default function App() {
                   close={mainOHLCV.close}
                   volume={mainOHLCV.volume}
                   prevClose={mainOHLCVPrevClose ?? undefined}
+                  format={fmt}
                 />
               )}
 
@@ -781,7 +808,7 @@ export default function App() {
                   {/* Oscillator toggle row — separate block below the price chart */}
                   {days > 0 && indicators && (
                     <div className="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5 flex items-center justify-between">
-                      <p className="text-[10px] text-zinc-500 tracking-widest font-medium">OSCILLATORS</p>
+                      <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">OSCILLATORS <InfoTip k="rsi" /></p>
                       <div className="flex items-center gap-1">
                         {(['rsi', 'macd'] as const).map(key => (
                           <button
@@ -805,8 +832,8 @@ export default function App() {
                   {subCharts.rsi && indicators?.rsi && (
                     <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
-                          RSI ({indicators.rsi.period})
+                        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
+                          RSI ({indicators.rsi.period}) <InfoTip k="rsi" />
                         </p>
                         <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
                           <span><span className="text-red-400/60">—</span> 70 overbought</span>
@@ -822,8 +849,8 @@ export default function App() {
                   {subCharts.macd && indicators?.macd && (
                     <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
-                          MACD ({indicators.macd.fast}, {indicators.macd.slow}, {indicators.macd.signal_period})
+                        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
+                          MACD ({indicators.macd.fast}, {indicators.macd.slow}, {indicators.macd.signal_period}) <InfoTip k="macd" />
                         </p>
                         <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
                           <span><span className="text-blue-400">—</span> MACD</span>
@@ -859,8 +886,12 @@ export default function App() {
                       earningsEstimates={details.earnings_estimate}
                       revenueEstimates={details.revenue_estimate}
                       currentPrice={latest?.close}
+                      format={fmt}
                     />
                   )}
+
+                  {/* Layered headlines: company → industry → market */}
+                  <NewsPanel key={`news-${ticker}`} mode={{ kind: 'stock', ticker }} limit={10} />
                 </>
               ) : null}
             </div>
@@ -875,9 +906,9 @@ export default function App() {
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">
-            <h2 className="text-sm font-semibold text-zinc-100 mb-1">Delete {ticker}?</h2>
+            <h2 className="text-sm font-semibold text-zinc-100 mb-1">Remove {ticker}?</h2>
             <p className="text-xs text-zinc-400 mb-5">
-              All archived data for {ticker} will be removed. This cannot be undone.
+              {ticker} will be removed from your watchlist. You can add it back at any time.
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -893,7 +924,7 @@ export default function App() {
                 className="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40 flex items-center gap-1.5"
               >
                 {deleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
-                Delete
+                Remove
               </button>
             </div>
           </div>
