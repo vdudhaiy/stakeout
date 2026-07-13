@@ -28,8 +28,20 @@ jobs:
       - name: Run tests
         run: uv run --group dev pytest -v --tb=short
 
-  build:
+  create-release:
     needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Created once, up front, so the three build matrix legs below never
+      # race each other to create a release for the same tag (they'd each
+      # try, and only one can win — the others fail with "already_exists").
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+
+  build:
+    needs: create-release
     strategy:
       fail-fast: false   # let other platforms finish even if one fails
       matrix:
