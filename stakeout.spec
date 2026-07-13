@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for market-lens.
+# PyInstaller spec for Stakeout.
 #
 # Before running PyInstaller, build the frontend first:
 #   cd packages/dashboard/frontend && npm run build
 #
 # Then from the repo root:
-#   pyinstaller market-lens.spec
+#   pyinstaller stakeout.spec
 #
-# Output: dist/market-lens  (or dist/market-lens.exe on Windows)
+# Output: dist/stakeout  (or dist/stakeout.exe on Windows)
 
 import os
 import sys
@@ -20,7 +20,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 FRONTEND_DIST = "packages/dashboard/frontend/dist"
 if not os.path.isdir(FRONTEND_DIST):
     raise SystemExit(
-        f"\n[market-lens.spec] Frontend dist not found at '{FRONTEND_DIST}'.\n"
+        f"\n[stakeout.spec] Frontend dist not found at '{FRONTEND_DIST}'.\n"
         "Run the following first:\n"
         "  cd packages/dashboard/frontend && npm run build\n"
     )

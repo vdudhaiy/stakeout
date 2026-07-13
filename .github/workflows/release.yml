@@ -35,14 +35,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: market-lens-windows.exe
-            exe_path: dist/market-lens.exe
+            artifact_name: stakeout-windows.exe
+            exe_path: dist/stakeout.exe
           - os: macos-latest
-            artifact_name: market-lens-macos
-            exe_path: dist/market-lens
+            artifact_name: stakeout-macos
+            exe_path: dist/stakeout
           - os: ubuntu-latest
-            artifact_name: market-lens-linux
-            exe_path: dist/market-lens
+            artifact_name: stakeout-linux
+            exe_path: dist/stakeout
 
     runs-on: ${{ matrix.os }}
 
@@ -78,15 +78,15 @@ jobs:
         run: uv pip install pyinstaller
 
       - name: Build executable
-        run: uv run pyinstaller market-lens.spec
+        run: uv run pyinstaller stakeout.spec
 
       - name: Rename executable
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            mv dist/market-lens.exe "dist/${{ matrix.artifact_name }}"
+            mv dist/stakeout.exe "dist/${{ matrix.artifact_name }}"
           else
-            mv dist/market-lens "dist/${{ matrix.artifact_name }}"
+            mv dist/stakeout "dist/${{ matrix.artifact_name }}"
           fi
 
       - name: Upload to GitHub Release
