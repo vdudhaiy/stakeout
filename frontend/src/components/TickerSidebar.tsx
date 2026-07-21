@@ -1,0 +1,275 @@
+import { useState, useEffect } from 'react'
+import clsx from 'clsx'
+import { Search, ChevronDown, ChevronRight, BarChart2, PlusCircle } from 'lucide-react'
+import { fetchIndustryMap, fetchSectorMap, addStock } from '../api'
+import { usePrefs, type MarketFilter } from '../contexts/PrefsContext'
+import { AddTickerModal } from './AddTickerModal'
+import type { Exchange } from '../utils/market'
+import { applyExchange } from '../utils/market'
+import type { GroupedStocks, WatchlistMap, ComparisonGroup } from '../types'
+
+type SidebarTab = 'general' | 'industry' | 'sector'
+
+const MARKET_TABS: Array<{ value: MarketFilter; label: string }> = [
+  { value: 'ALL', label: 'All' },
+  { value: 'US', label: 'US' },
+  { value: 'IN', label: 'India' },
+]
+
+interface Props {
+  selected: string
+  tickers: WatchlistMap
+  onSelect: (ticker: string) => void
+  onCompare: (group: ComparisonGroup) => void
+  onTickersUpdated: (tickers: WatchlistMap) => void
+  onAdded?: (ticker: string) => void
+}
+
+function GroupSection({
+  name,
+  tickers,
+  type,
+  selected,
+  onSelect,
+  onCompare,
+  tickerNames,
+}: {
+  name: string
+  tickers: string[]
+  type: 'industry' | 'sector'
+  selected: string
+  onSelect: (t: string) => void
+  onCompare: (g: ComparisonGroup) => void
+  tickerNames?: WatchlistMap
+}) {
+  const [open, setOpen] = useState(true)
+
+  return (
+    <div>
+      <div className="group flex items-center px-3 py-2 hover:bg-zinc-900/50 transition-colors">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1 flex-1 min-w-0 text-left"
+        >
+          {open
+            ? <ChevronDown size={11} className="shrink-0 text-zinc-500" />
+            : <ChevronRight size={11} className="shrink-0 text-zinc-500" />
+          }
+          <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider truncate ml-0.5">
+            {name}
+          </span>
+          <span className="ml-1.5 text-[10px] text-zinc-600 shrink-0">{tickers.length}</span>
+        </button>
+        <button
+          onClick={e => { e.stopPropagation(); onCompare({ name, tickers, type }) }}
+          title={`Compare ${type}`}
+          className="opacity-0 group-hover:opacity-100 p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all shrink-0"
+        >
+          <BarChart2 size={12} />
+        </button>
+      </div>
+      {open && tickers.map(ticker => (
+        <button
+          key={ticker}
+          onClick={() => onSelect(ticker)}
+          title={tickerNames?.[ticker]?.name}
+          className={clsx(
+            'w-full flex items-center pl-8 pr-3 py-2 text-left transition-colors',
+            selected === ticker
+              ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
+              : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+          )}
+        >
+          <span className="font-mono text-sm font-medium">{ticker}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTickersUpdated, onAdded }: Props) {
+  const { market, setMarket } = usePrefs()
+  const [tab, setTab] = useState<SidebarTab>('general')
+  const [search, setSearch] = useState('')
+  const [industryMap, setIndustryMap] = useState<GroupedStocks | null>(null)
+  const [sectorMap, setSectorMap] = useState<GroupedStocks | null>(null)
+  const [groupLoading, setGroupLoading] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [existNotice, setExistNotice] = useState(false)
+
+  useEffect(() => {
+    if (tab === 'industry' && industryMap === null) {
+      setGroupLoading(true)
+      fetchIndustryMap().then(setIndustryMap).catch(() => {}).finally(() => setGroupLoading(false))
+    } else if (tab === 'sector' && sectorMap === null) {
+      setGroupLoading(true)
+      fetchSectorMap().then(setSectorMap).catch(() => {}).finally(() => setGroupLoading(false))
+    }
+  }, [tab, industryMap, sectorMap])
+
+  async function submitAdd(rawTicker: string, exchange: Exchange) {
+    const ticker = applyExchange(rawTicker, exchange)
+    const result = await addStock(rawTicker, exchange)
+    onTickersUpdated(result.stocks)
+    onSelect(ticker)
+    if (result.exist) {
+      setExistNotice(true)
+      setTimeout(() => setExistNotice(false), 3500)
+    } else {
+      onAdded?.(ticker)
+    }
+  }
+
+  const q = search.toUpperCase()
+  const inMarket = (t: string) => market === 'ALL' || tickers[t]?.market === market
+  const tickerSymbols = Object.keys(tickers).filter(inMarket)
+  const filteredTickers = tickerSymbols.filter(t => t.includes(q))
+
+  function filteredGroups(map: GroupedStocks): [string, string[]][] {
+    return Object.entries(map)
+      .map(([name, groupTickers]) => {
+        const visible = groupTickers.filter(t => t in tickers && inMarket(t))
+        const matching = q ? visible.filter(t => t.includes(q)) : visible
+        return [name, matching] as [string, string[]]
+      })
+      .filter(([, groupTickers]) => groupTickers.length > 0)
+  }
+
+  const activeMap = tab === 'industry' ? industryMap : tab === 'sector' ? sectorMap : null
+
+  return (
+    <aside className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col">
+      {existNotice && (
+        <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-mono">
+          Already tracked — navigated to stock.
+        </div>
+      )}
+      {/* Market filter — mirrors the portfolio market switch */}
+      <div className="flex items-center gap-1 p-2 border-b border-zinc-800 shrink-0">
+        {MARKET_TABS.map(({ value, label }) => (
+          <button
+            key={value}
+            onClick={() => setMarket(value)}
+            className={clsx(
+              'flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors',
+              market === value
+                ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 border border-transparent',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab switcher */}
+      <div className="flex border-b border-zinc-800 shrink-0">
+        {(['general', 'industry', 'sector'] as SidebarTab[]).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={clsx(
+              'flex-1 py-2.5 text-[11px] font-medium transition-colors capitalize',
+              tab === t
+                ? 'text-indigo-400 border-b-2 border-indigo-500 bg-indigo-500/5'
+                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/50',
+            )}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {/* Search + Add */}
+      <div className="p-3 border-b border-zinc-800 shrink-0 flex items-center gap-1.5">
+        <div className="relative flex-1">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600" />
+          <input
+            type="text"
+            placeholder="Search..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full bg-zinc-900 text-zinc-200 text-xs rounded pl-7 pr-3 py-2 outline-none border border-zinc-800 focus:border-indigo-500 transition-colors placeholder-zinc-600 font-mono"
+          />
+        </div>
+        <button
+          onClick={() => setAddOpen(true)}
+          title="Add ticker"
+          className="p-1.5 rounded transition-colors shrink-0 text-zinc-500 hover:text-indigo-400 hover:bg-zinc-900"
+        >
+          <PlusCircle size={14} />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto py-1">
+        {tab === 'general' && (
+          filteredTickers.length === 0
+            ? <p className="text-zinc-600 text-xs text-center py-4">No results</p>
+            : <>
+                <div className="group flex items-center px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
+                  <span className="flex-1 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                    All Stocks
+                  </span>
+                  <span className="text-[10px] text-zinc-600 mr-1.5">{filteredTickers.length}</span>
+                  <button
+                    onClick={() => onCompare({ name: 'All Stocks', tickers: filteredTickers, type: 'all' })}
+                    title="Compare all stocks"
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all shrink-0"
+                  >
+                    <BarChart2 size={12} />
+                  </button>
+                </div>
+                {filteredTickers.map(ticker => (
+                  <button
+                    key={ticker}
+                    onClick={() => onSelect(ticker)}
+                    title={tickers[ticker]?.name}
+                    className={clsx(
+                      'w-full flex items-center px-4 py-2.5 text-left transition-colors',
+                      selected === ticker
+                        ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
+                        : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+                    )}
+                  >
+                    <span className="font-mono text-sm font-medium">{ticker}</span>
+                    <span className="ml-auto text-[9px] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
+                      {tickers[ticker]?.market ?? 'US'}
+                    </span>
+                  </button>
+                ))}
+              </>
+        )}
+
+        {(tab === 'industry' || tab === 'sector') && (
+          groupLoading
+            ? <p className="text-zinc-600 text-xs text-center py-4">Loading...</p>
+            : activeMap === null
+              ? <p className="text-zinc-600 text-xs text-center py-4">No data</p>
+              : filteredGroups(activeMap).length === 0
+                ? <p className="text-zinc-600 text-xs text-center py-4">No results</p>
+                : filteredGroups(activeMap).map(([name, groupTickers]) => (
+                  <GroupSection
+                    key={name}
+                    name={name}
+                    tickers={groupTickers}
+                    type={tab === 'industry' ? 'industry' : 'sector'}
+                    selected={selected}
+                    onSelect={onSelect}
+                    onCompare={onCompare}
+                    tickerNames={tickers}
+                  />
+                ))
+        )}
+      </div>
+
+      {addOpen && (
+        <AddTickerModal
+          initialExchange={market === 'IN' ? 'NSE' : 'US'}
+          onClose={() => setAddOpen(false)}
+          onSubmit={submitAdd}
+        />
+      )}
+    </aside>
+  )
+}

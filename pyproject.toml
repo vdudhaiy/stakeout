@@ -4,23 +4,20 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "market-lens-utils",
-    "market-lens-pipeline",
-    # "market-lens-models",  # TODO: uncomment once packages/models/ is committed
+    # "market-lens-models",  # TODO: uncomment once models/ is committed
     "market-lens-dashboard",
 ]
 
 [tool.uv.sources]
 market-lens-utils = { workspace = true }
-market-lens-pipeline = { workspace = true }
-# market-lens-models = { workspace = true }  # TODO: uncomment once packages/models/ is committed
+# market-lens-models = { workspace = true }  # TODO: uncomment once models/ is committed
 market-lens-dashboard = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "utils",
-    "packages/pipeline",
-    # "packages/models",  # TODO: uncomment once packages/models/ is committed
-    "packages/dashboard/backend",
+    # "models",  # TODO: uncomment once models/ is committed
+    "backend",
 ]
 
 [dependency-groups]
@@ -33,4 +30,4 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["packages/dashboard/backend/tests"]
+testpaths = ["backend/tests"]

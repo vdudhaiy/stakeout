@@ -25,9 +25,6 @@ model-store/
 *.egg-info
 .venv/
 
-# PyInstaller build output (executables go to dist/, already ignored above)
-build/
-
 # Pytest cache and coverage reports
 .pytest_cache/
 .coverage

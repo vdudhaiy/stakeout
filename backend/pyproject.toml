@@ -1,0 +1,29 @@
+[project]
+name = "market-lens-dashboard"  # internal package name kept for import stability; app brand is Stakeout
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings",
+    "sqlalchemy",
+    "aiosqlite",
+    "pandas",
+    "market-lens-utils",
+    "yfinance>=1.4.1",
+    "lxml",
+    "pandas_market_calendars",
+    "xlsxwriter",
+    "asyncpg",
+    "alembic",
+    "httpx",
+    "pyjwt",
+    "bcrypt",
+    "email-validator",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+market-lens-utils = { workspace = true }

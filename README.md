@@ -2,27 +2,24 @@
 
 **Open markets, open source.**
 
-A free, open-source stock tracker for US and Indian markets — run it locally as a desktop app, or deploy it to the cloud with multi-user accounts.
+A free, open-source stock tracker for US and Indian markets, deployed to the cloud with multi-user accounts.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3b82f6)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-20%2B-84cc16)](https://nodejs.org/)
-[![Platforms](https://img.shields.io/badge/platforms-Web%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-8b5cf6)]()
+[![Platforms](https://img.shields.io/badge/platforms-Web-8b5cf6)]()
 
 ---
 
 ## What Is Stakeout?
 
-Stakeout (formerly *Market Lens*) is a free, open-source app built for everyday people who want to keep watch on their stakes in the market — without paying for a Bloomberg terminal or a SaaS subscription.
+Stakeout is a free, open-source app built for everyday people who want to keep watch on their stakes in the market — without paying for a Bloomberg terminal or a SaaS subscription.
 
 You get a clean dashboard with price charts, technical indicators, analyst insights, earnings history, layered news headlines, peer comparison, and a two-market portfolio tracker (US and India) with FIFO cost basis — all powered by publicly available data.
 
-It runs two ways:
+Deploy the codebase to Vercel + Render + Supabase and get Google / email sign-in with per-user watchlists and portfolios. Don't want an account? Guest Mode lets anyone try the full app with nothing saved beyond their browser session.
 
-- **Local mode** — a single-user desktop app. No account, no cloud, all data on your machine.
-- **Hosted mode** — deploy the same codebase to Vercel + Render + Supabase and get Google / email sign-in with per-user watchlists and portfolios.
-
-You're also encouraged to fork this project and build your own version. The codebase is intentionally approachable — a Python backend, a React frontend, and a single-command build that packages everything into one executable.
+You're also encouraged to fork this project and build your own version. The codebase is intentionally approachable — a Python backend and a React frontend.
 
 > [!WARNING]
 > **Not financial advice.** Stakeout is for informational and educational purposes only. Nothing displayed in this application constitutes financial, investment, or trading advice. Always do your own research and consult a qualified financial professional before making any investment decisions.
@@ -47,54 +44,9 @@ You're also encouraged to fork this project and build your own version. The code
 - **Peer comparison** — normalized % change chart to compare stocks in the same industry or sector.
 - **Portfolio tracker** — FIFO cost basis, unrealized/realized P&L per holding, allocation donut, and one-click Excel export — per market.
 - **Watchlist with market filter** — organize by industry/sector tabs, filter All / US / India; a ticker-tape marquee streams your watchlist's latest prices under the navbar.
-- **Multi-user accounts (hosted mode)** — Google OAuth or email magic-link sign-in via Supabase; each user gets their own watchlist and portfolios. Leave auth unconfigured and the app runs in single-user local mode.
+- **Multi-user accounts** — Google OAuth or email magic-link sign-in via Supabase; each user gets their own watchlist and portfolios. **Guest Mode** lets anyone try the app without signing in — watchlist and portfolio data stay in the browser for that session and are never written to the database.
 - **Dual market status pill** — NYSE and NSE open/closed at a glance, with session times in ET/IST and your local timezone.
 - **Backend health monitor, dark/light themes, caching** — API latency pill with history; a paper-ledger light theme and terminal-dark theme; TTL caches for quotes (60 s), news (15 min), and FX (1 h) to stay well within free-tier data source limits.
-
----
-
-## Using the Latest Release (Desktop / Local Mode)
-
-No Python or Node required — just download and run.
-
-**1. Go to the [Releases page](https://github.com/vdudhaiy/stakeout/releases/latest) and download the binary for your OS:**
-
-| OS | File |
-|----|------|
-| Windows | `stakeout-windows.exe` |
-| macOS | `stakeout-macos` |
-| Linux | `stakeout-linux` |
-
-**2. Run it:**
-
-### Windows
-
-Because Stakeout is not code-signed (certificates cost money and this is a free project), Windows SmartScreen will show a warning the first time you run it:
-
-1. Double-click `stakeout-windows.exe`
-2. If you see **"Windows protected your PC"**, click **More info**
-3. Click **Run anyway**
-
-The source code is fully open — you can audit every line before running it.
-
-### macOS
-
-```bash
-xattr -d com.apple.quarantine stakeout-macos
-chmod +x stakeout-macos
-./stakeout-macos
-```
-
-### Linux
-
-```bash
-chmod +x stakeout-linux
-./stakeout-linux
-```
-
-**3. The app starts a local server and automatically opens your browser at `http://127.0.0.1:8000`.**
-
-Stock data is stored in a data folder next to the executable — portable and fully local. In local mode there are no accounts; everything belongs to a single implicit user.
 
 ---
 
@@ -117,24 +69,26 @@ cd stakeout
 make install           # equivalent to: uv sync
 
 # 3. Install frontend dependencies
-cd packages/dashboard/frontend
+cd frontend
 npm install
-cd ../../..
+cd ..
 
 # 4. Set up environment variables
 cp .env.example .env   # then edit .env as needed
 
-# 5. Fetch initial stock data (downloads from Yahoo Finance)
-make pipeline
-
-# 6. Start the backend server (Terminal 1)
+# 5. Start the backend server (Terminal 1)
 make backend           # FastAPI at http://127.0.0.1:8000
 
-# 7. Start the frontend dev server (Terminal 2)
+# 6. Start the frontend dev server (Terminal 2)
 make frontend          # React at http://localhost:5173
 ```
 
-Open **http://localhost:5173** in your browser. Try adding an Indian ticker like `TCS.NS` alongside US ones.
+Open **http://localhost:5173** in your browser. Add a ticker (e.g. `AAPL`, or an Indian ticker like `TCS.NS`) — stock data downloads from Yahoo Finance on demand the first time a ticker is added.
+
+> [!NOTE]
+> The Dashboard and Portfolio views require signing in. Without a Supabase project configured (see [Deploying to the Cloud](#deploying-to-the-cloud-vercel--render--supabase) below), the sign-in screen automatically falls back to **local accounts** — a real email/password account stored in your own local SQLite database, no cloud setup needed. Prefer not to make an account at all? Click **Continue as Guest** instead to try the full app with data kept only in your browser for that session.
+>
+> If you *do* configure `SUPABASE_JWKS_URL` to test real Supabase sign-in locally instead, `DATABASE_URL` stays independent of it — leave it unset and your account's portfolio/watchlist/price data lands in a local SQLite file, never touching production.
 
 ---
 
@@ -167,11 +121,11 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
 4. Deploy. The pre-deploy hook runs `alembic upgrade head` to create tables. Health check: `https://<your-service>.onrender.com/health`.
 
 > [!NOTE]
-> Render's free tier has an **ephemeral disk** — the CSV price archive is rebuilt after each deploy/restart. That's fine: the archive is a cache, and the database (holdings, watchlists, users) lives safely in Supabase. Free-tier services also sleep after inactivity; the first request after a sleep takes ~30 s.
+> Render's free tier has an **ephemeral disk**, but that no longer matters for price data — the market_data table lives in Supabase alongside holdings, watchlists, and users, so it survives every deploy/restart. Free-tier services also sleep after inactivity; the first request after a sleep takes ~30 s.
 
 ### 3. Vercel — the frontend
 
-1. Import the repo in Vercel and set the **Root Directory** to `packages/dashboard/frontend`.
+1. Import the repo in Vercel and set the **Root Directory** to `frontend`.
 2. Add environment variables:
 
    | Variable | Value |
@@ -182,7 +136,7 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
 
 3. Deploy. `vercel.json` already handles SPA routing.
 
-Leave `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` empty (and `SUPABASE_JWKS_URL` unset on the backend) to run the hosted app in accountless single-user mode instead.
+Visitors who'd rather not create an account can still use the whole app via **Continue as Guest** on the sign-in screen — their watchlist and portfolio just stay in the browser instead of syncing to an account.
 
 ---
 
@@ -194,12 +148,11 @@ Copy `.env.example` to `.env` and adjust as needed:
 |----------|---------|-------------|
 | `LOG_DIR` | `logs/` | Directory where log files are written |
 | `LOG_LEVEL` | `DEBUG` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `ARCHIVE_DATA_DIR` | `data/archive_stock_data/` | Where historical CSV files are stored |
 | `ARCHIVE_START_DATE` | `2023-01-01` | Earliest date to archive stock data from |
-| `MARKET_LENS_DATA_DIR` | _(empty)_ | Root data directory; set automatically by the packaged executable |
+| `MARKET_LENS_DATA_DIR` | _(empty → repo root)_ | Root data directory override |
 | `MODEL_DIR` | `model-store/` | Reserved for future ML model artifacts |
 | `DATABASE_URL` | _(empty → SQLite)_ | Postgres connection string for hosted mode |
-| `SUPABASE_JWKS_URL` | _(empty → local mode)_ | Enables multi-user auth when set |
+| `SUPABASE_JWKS_URL` | **required** | Verifies user sessions against Supabase's published signing keys |
 | `CORS_ORIGINS` | _(empty)_ | Comma-separated allowed browser origins |
 
 ---
@@ -208,8 +161,6 @@ Copy `.env.example` to `.env` and adjust as needed:
 
 ```
 stakeout/
-├── launcher.py                    # Entry point for the packaged executable
-├── stakeout.spec                  # PyInstaller build specification
 ├── render.yaml                    # Render blueprint (hosted backend)
 ├── Makefile                       # Common developer commands
 ├── pyproject.toml                 # uv workspace and dependency config
@@ -217,44 +168,20 @@ stakeout/
 │
 ├── utils/                         # Shared Python utilities (logging, helpers)
 │
-├── packages/
-│   ├── pipeline/                  # Data pipeline — fetches and archives stock CSVs via Yahoo Finance
-│   └── dashboard/
-│       ├── backend/               # FastAPI REST API (auth, markets, news, FX, portfolio, watchlist)
-│       └── frontend/              # React + TypeScript SPA (Vite, Tailwind, Recharts, Framer Motion)
+├── backend/                       # FastAPI REST API (auth, markets, news, FX, portfolio, watchlist); fetches stock prices from Yahoo Finance into the market_data table
+├── frontend/                      # React + TypeScript SPA (Vite, Tailwind, Recharts, Framer Motion)
 │
 └── .github/
-    └── workflows/release.yml      # CI: cross-builds Windows / macOS / Linux executables on tag push
+    └── workflows/ci.yml           # CI: runs the backend test suite on push/PR
 ```
 
-> **Why do the Python packages still say `market_lens`?** The internal package names (`market_lens_pipeline`, `market_lens_dashboard`) were deliberately kept when the app was rebranded — renaming them would break every import, the uv workspace config, and existing data directories, for zero user-facing benefit. Only the branding you see is Stakeout.
-
----
-
-## Building from Source
-
-```bash
-make release
-```
-
-This runs three steps in sequence:
-
-1. `npm run build` — compiles the React frontend into `packages/dashboard/backend/frontend-dist/`
-2. `pip install pyinstaller` — installs the bundler
-3. `pyinstaller stakeout.spec` — outputs a single executable to `dist/`
-
-To trigger a multi-platform release via GitHub Actions, push a version tag:
-
-```bash
-git tag v2.0.0
-git push --tags
-```
+> **Why do the Python packages still say `market_lens`?** The internal package name (`market_lens_dashboard`) was deliberately kept when the app was rebranded — renaming it would break every import, the uv workspace config, and existing data directories, for zero user-facing benefit. Only the branding you see is Stakeout.
 
 ---
 
 ## API Reference
 
-The backend exposes a REST API (Swagger docs at **`/openapi`**). In hosted mode, endpoints marked 🔒 require a `Authorization: Bearer <supabase-jwt>` header; in local mode they work without one.
+The backend exposes a REST API (Swagger docs at **`/openapi`**). Endpoints marked 🔒 require an `Authorization: Bearer <supabase-jwt>` header — unauthenticated requests get a 401. Guest-mode sessions never call these directly; they're handled entirely client-side (see Features above).
 
 **Stocks & market data**
 
@@ -296,7 +223,7 @@ The backend exposes a REST API (Swagger docs at **`/openapi`**). In hosted mode,
 
 ### Maintainer note — yfinance dependency
 
-Market data is fetched via [yfinance](https://github.com/ranaroussi/yfinance), which works by scraping Yahoo Finance's internal endpoints. Yahoo does not publish an official public API, so **these endpoints can change without notice**, silently breaking data fetching. If users report missing or stale data and `/health` is fine, check whether a newer `yfinance` release patches the breakage, update it in [`packages/pipeline/pyproject.toml`](packages/pipeline/pyproject.toml), and cut a new release. The same caution applies to GDELT (rate limits, occasional slow responses) — the news service degrades gracefully to Yahoo's per-ticker news feed.
+Market data is fetched via [yfinance](https://github.com/ranaroussi/yfinance), which works by scraping Yahoo Finance's internal endpoints. Yahoo does not publish an official public API, so **these endpoints can change without notice**, silently breaking data fetching. If users report missing or stale data and `/health` is fine, check whether a newer `yfinance` release patches the breakage, update it in [`backend/pyproject.toml`](backend/pyproject.toml), and redeploy. The same caution applies to GDELT (rate limits, occasional slow responses) — the news service degrades gracefully to Yahoo's per-ticker news feed.
 
 ---
 
@@ -305,10 +232,10 @@ Market data is fetched via [yfinance](https://github.com/ranaroussi/yfinance), w
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python 3.12, FastAPI, Uvicorn, SQLAlchemy (async), Alembic |
-| Auth & DB (hosted) | Supabase (Postgres, Google OAuth, magic links), PyJWT |
+| Auth & DB | Supabase (Postgres, Google OAuth, magic links), PyJWT |
 | Data | yfinance, pandas, pandas-market-calendars, GDELT, Frankfurter |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts, Framer Motion, React Router |
-| Packaging & deploy | PyInstaller, uv, Render, Vercel |
+| Deploy | uv, Render, Vercel |
 | CI/CD | GitHub Actions |
 
 ---

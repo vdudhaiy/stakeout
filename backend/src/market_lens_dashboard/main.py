@@ -1,0 +1,65 @@
+'''Main file for the dashboard backend. Sets up the FastAPI application and includes the necessary routers.'''
+
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .auth import local_auth_enabled
+from .database import init_db
+from .routers import fx, health, indicators, news, portfolio, stocks, watchlist
+from .services.portfolio_service import repair_all_fifo
+from .services.version_service import get_latest_release_tag
+
+# Fallback shown when no GitHub release exists yet (e.g. local dev) or the
+# GitHub API is unreachable.
+_FALLBACK_VERSION = "0.1.0"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    await repair_all_fifo()
+    yield
+
+
+app = FastAPI(
+    title=os.getenv("APP_NAME", "Stakeout API"),
+    openapi_url="/openapi",
+    docs_url="/docs",
+    lifespan=lifespan,
+)
+
+# CORS: the frontend is served from a different origin in cloud deployments
+# (Vercel) than the API (Render). Comma-separated list, e.g.
+#   CORS_ORIGINS=https://stakeout.vercel.app,http://localhost:5173
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.include_router(stocks.router)
+app.include_router(health.router)
+app.include_router(portfolio.router)
+app.include_router(indicators.router)
+app.include_router(watchlist.router)
+app.include_router(news.router)
+app.include_router(fx.router)
+
+# Local email/password auth only exists when there's no Supabase project to
+# verify tokens against — a real deployment never sees these routes at all.
+if local_auth_enabled():
+    from .routers import local_auth
+    app.include_router(local_auth.router)
+
+
+@app.get("/version", include_in_schema=False)
+async def get_version():
+    tag = await get_latest_release_tag()
+    return {"version": tag or _FALLBACK_VERSION}
