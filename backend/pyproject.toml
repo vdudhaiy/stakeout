@@ -17,7 +17,7 @@ dependencies = [
     "asyncpg",
     "alembic",
     "httpx",
-    "pyjwt",
+    "pyjwt[crypto]",
     "bcrypt",
     "email-validator",
 ]
