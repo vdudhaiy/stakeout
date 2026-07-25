@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import {
   Plus, ChevronDown, ChevronUp,
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
   BarChart2, AlertTriangle, FileDown,
 } from 'lucide-react'
+import { motion, AnimatePresence } from 'motion/react'
 import { PieChart, Pie, Cell, Tooltip as ChartTooltip, Legend, ResponsiveContainer } from 'recharts'
 import type { ClassificationMap, Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
 import { fetchPortfolio, fetchClassification, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio } from '../api'
@@ -15,6 +16,7 @@ import { ExchangeSelect } from './ExchangeSelect'
 import { InfoTip } from './InfoTip'
 import type { GlossaryKey } from '../utils/glossary'
 import { PORTFOLIO_REFRESH_MS } from '../utils/env'
+import { overlayFade, scaleIn, collapse, layoutSpring } from '../lib/motion'
 
 type MoneyFmt = (v: number | null | undefined, opts?: { sign?: boolean; compact?: boolean }) => string
 
@@ -28,7 +30,16 @@ const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
 const gainText   = (n: number) => n >= 0 ? 'text-emerald-400' : 'text-red-400'
 const gainBorder = (n: number) => n >= 0 ? 'border-l-emerald-500/50' : 'border-l-red-500/50'
 
+const parseNum = (s: string) => parseFloat(s.replace(/[^0-9.+-]/g, ''))
+const UP_FLASH   = 'rgba(16,185,129,0.35)'
+const DOWN_FLASH = 'rgba(239,68,68,0.35)'
+const FLAT_FLASH = 'rgba(161,161,170,0.25)'
+
 // ── Stat card ─────────────────────────────────────────────────────────────────
+//
+// Values refresh on a poll (PORTFOLIO_REFRESH_MS) and otherwise overwrite the
+// DOM silently — a brief background flash on change is the difference between
+// "did anything move?" and having to re-read every card after each refresh.
 
 function StatCard({
   label, value, sub, valueColor, subColor, accent, tip,
@@ -41,13 +52,37 @@ function StatCard({
   accent?: boolean
   tip?: GlossaryKey
 }) {
+  const prevRef = useRef(value)
+  const [flash, setFlash] = useState<'up' | 'down' | 'flat' | null>(null)
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    if (prevRef.current !== value) {
+      const oldNum = parseNum(prevRef.current)
+      const newNum = parseNum(value)
+      setFlash(newNum > oldNum ? 'up' : newNum < oldNum ? 'down' : 'flat')
+      setTick(t => t + 1)
+      prevRef.current = value
+    }
+  }, [value])
+
+  const flashColor = flash === 'up' ? UP_FLASH : flash === 'down' ? DOWN_FLASH : FLAT_FLASH
+
   return (
     <div className={clsx(
       'flex flex-col gap-1.5 rounded-xl border px-4 py-3.5 bg-zinc-900',
       accent ? 'border-indigo-500/25' : 'border-zinc-800',
     )}>
       <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500">{label}{tip && <InfoTip k={tip} />}</span>
-      <span className={clsx('text-lg font-bold font-mono leading-none', valueColor ?? 'text-zinc-100')}>{value}</span>
+      <motion.span
+        key={tick}
+        initial={flash ? { backgroundColor: flashColor } : false}
+        animate={{ backgroundColor: 'rgba(0,0,0,0)' }}
+        transition={{ duration: 0.6, ease: 'easeOut' }}
+        className={clsx('text-lg font-bold font-mono leading-none rounded px-0.5 -mx-0.5 w-fit', valueColor ?? 'text-zinc-100')}
+      >
+        {value}
+      </motion.span>
       {sub && <span className={clsx('text-xs font-mono', subColor ?? 'text-zinc-500')}>{sub}</span>}
     </div>
   )
@@ -138,34 +173,38 @@ function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: 
           {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
       </div>
-      {open && (
-        <div className="flex items-center gap-6 flex-wrap">
-          <div className="w-40 h-40 shrink-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={70} paddingAngle={2} stroke="none">
-                  {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
-                </Pie>
-                <ChartTooltip
-                  formatter={(v: number, name: string) => [`${money(v)} · ${((v / total) * 100).toFixed(1)}%`, name]}
-                  contentStyle={{ background: '#0A0E16', border: '1px solid #2A3446', borderRadius: 8, fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
-                  itemStyle={{ color: '#E4E4E7' }}
-                  labelStyle={{ color: '#E4E4E7' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex-1 min-w-[180px] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-            {data.map((d, i) => (
-              <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
-                <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                <span className="text-zinc-300">{d.name}</span>
-                <span className="ml-auto text-zinc-500">{((d.value / total) * 100).toFixed(1)}%</span>
+      <AnimatePresence>
+        {open && (
+          <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+            <div className="flex items-center gap-6 flex-wrap">
+              <div className="w-40 h-40 shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={70} paddingAngle={2} stroke="none">
+                      {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
+                    </Pie>
+                    <ChartTooltip
+                      formatter={(v: number, name: string) => [`${money(v)} · ${((v / total) * 100).toFixed(1)}%`, name]}
+                      contentStyle={{ background: '#0A0E16', border: '1px solid #2A3446', borderRadius: 8, fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+                      itemStyle={{ color: '#E4E4E7' }}
+                      labelStyle={{ color: '#E4E4E7' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+              <div className="flex-1 min-w-[180px] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+                {data.map((d, i) => (
+                  <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
+                    <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                    <span className="text-zinc-300">{d.name}</span>
+                    <span className="ml-auto text-zinc-500">{((d.value / total) * 100).toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -327,12 +366,17 @@ function BreakdownCard({
                 key={value}
                 onClick={() => setMetric(value)}
                 className={clsx(
-                  'px-2.5 py-1 text-[10px] font-medium transition-colors',
-                  metric === value
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-zinc-400 hover:bg-zinc-950 hover:text-zinc-200',
+                  'relative px-2.5 py-1 text-[10px] font-medium transition-colors',
+                  metric === value ? 'text-white' : 'text-zinc-400 hover:bg-zinc-950 hover:text-zinc-200',
                 )}
               >
+                {metric === value && (
+                  <motion.span
+                    layoutId="breakdown-metric-pill"
+                    transition={layoutSpring}
+                    className="absolute inset-0 bg-indigo-600 -z-10"
+                  />
+                )}
                 {label}
               </button>
             ))}
@@ -347,25 +391,29 @@ function BreakdownCard({
         </button>
       </div>
 
-      {open && (classification === null ? (
-        <div className="flex gap-6">
-          <div className="flex-1 h-56 rounded-lg bg-zinc-800/50 animate-pulse" />
-          <div className="flex-1 h-56 rounded-lg bg-zinc-800/50 animate-pulse" />
-        </div>
-      ) : (
-        <div className="flex gap-6 flex-wrap">
-          <BreakdownPie title="BY SECTOR" data={sectorData} metric={metric} money={money} />
-          <BreakdownPie title="BY INDUSTRY" data={industryData} metric={metric} money={money} />
-        </div>
-      ))}
+      <AnimatePresence>
+        {open && (
+          <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+            {classification === null ? (
+              <div className="flex gap-6">
+                <div className="flex-1 h-56 rounded-lg bg-zinc-800/50 animate-pulse" />
+                <div className="flex-1 h-56 rounded-lg bg-zinc-800/50 animate-pulse" />
+              </div>
+            ) : (
+              <div className="flex gap-6 flex-wrap">
+                <BreakdownPie title="BY SECTOR" data={sectorData} metric={metric} money={money} />
+                <BreakdownPie title="BY INDUSTRY" data={industryData} metric={metric} money={money} />
+              </div>
+            )}
 
-      {open && (
-        <p className="mt-2 text-[10px] text-zinc-600">
-          {metric === 'invested'
-            ? 'Slices are each group\u2019s share of your invested amount (cost basis of currently held shares).'
-            : 'Slices are how many of your positions fall in each group.'}
-        </p>
-      )}
+            <p className="mt-2 text-[10px] text-zinc-600">
+              {metric === 'invested'
+                ? 'Slices are each group\u2019s share of your invested amount (cost basis of currently held shares).'
+                : 'Slices are how many of your positions fall in each group.'}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -423,11 +471,18 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
   }
 
   return (
-    <div
+    <motion.div
+      variants={overlayFade}
+      initial="hidden"
+      animate="show"
+      exit="exit"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <motion.div
+        variants={scaleIn}
+        className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+      >
         {/* Header */}
         <div className="flex items-start justify-between mb-1">
           <div>
@@ -562,8 +617,8 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
             {mode === 'buy' ? 'Record Purchase' : 'Record Sale'}
           </button>
         </form>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }
 
@@ -632,7 +687,14 @@ function HoldingRow({
   const hasPrice = holding.current_price != null
 
   return (
-    <div className={clsx('border-l-2 transition-colors', hasPrice ? gainBorder(pl!) : 'border-l-zinc-700')}>
+    <motion.div
+      layout
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, height: 0 }}
+      transition={layoutSpring}
+      className={clsx('border-l-2 transition-colors overflow-hidden', hasPrice ? gainBorder(pl!) : 'border-l-zinc-700')}
+    >
       {/* Main summary row — click anywhere to expand */}
       <div
         onClick={onToggle}
@@ -724,8 +786,9 @@ function HoldingRow({
       </div>
 
       {/* Expanded panel */}
+      <AnimatePresence>
       {expanded && (
-        <div className="border-t border-zinc-800/60 bg-zinc-950/60">
+        <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }} className="border-t border-zinc-800/60 bg-zinc-950/60">
           {/* Actions bar */}
           <div className="flex flex-wrap items-center gap-2 px-5 py-3 border-b border-zinc-800/40">
             <button
@@ -791,9 +854,10 @@ function HoldingRow({
               </table>
             </div>
           )}
-        </div>
+        </motion.div>
       )}
-    </div>
+      </AnimatePresence>
+    </motion.div>
   )
 }
 
@@ -941,12 +1005,17 @@ export function PortfolioPage({
                   key={value}
                   onClick={() => switchTab(value)}
                   className={clsx(
-                    'px-3.5 py-2 text-xs font-medium transition-colors',
-                    tab === value
-                      ? 'bg-indigo-600 text-white'
-                      : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+                    'relative px-3.5 py-2 text-xs font-medium transition-colors',
+                    tab === value ? 'text-white' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
                   )}
                 >
+                  {tab === value && (
+                    <motion.span
+                      layoutId="portfolio-market-tab-pill"
+                      transition={layoutSpring}
+                      className="absolute inset-0 bg-indigo-600 -z-10"
+                    />
+                  )}
                   {label}
                 </button>
               ))}
@@ -1067,20 +1136,22 @@ export function PortfolioPage({
 
                 {/* Rows */}
                 <div className="divide-y divide-zinc-800">
-                  {holdings.map(h => (
-                    <HoldingRow
-                      money={(v, opts) => formatMoney(v, h.currency ?? nativeCcy, opts)}
-                      key={h.ticker}
-                      holding={h}
-                      expanded={expanded === h.ticker}
-                      onToggle={() => setExpanded(p => p === h.ticker ? null : h.ticker)}
-                      onBuy={()         => setModal({ mode: 'buy',  ticker: h.ticker })}
-                      onSell={()        => setModal({ mode: 'sell', ticker: h.ticker })}
-                      onDelete={()      => setDeleteTarget(h.ticker)}
-                      onViewTicker={()           => onViewTicker(h.ticker)}
-                      onDeleteTxn={(id, isLast)  => openTxnDelete(h.ticker, id, isLast)}
-                    />
-                  ))}
+                  <AnimatePresence initial={false}>
+                    {holdings.map(h => (
+                      <HoldingRow
+                        money={(v, opts) => formatMoney(v, h.currency ?? nativeCcy, opts)}
+                        key={h.ticker}
+                        holding={h}
+                        expanded={expanded === h.ticker}
+                        onToggle={() => setExpanded(p => p === h.ticker ? null : h.ticker)}
+                        onBuy={()         => setModal({ mode: 'buy',  ticker: h.ticker })}
+                        onSell={()        => setModal({ mode: 'sell', ticker: h.ticker })}
+                        onDelete={()      => setDeleteTarget(h.ticker)}
+                        onViewTicker={()           => onViewTicker(h.ticker)}
+                        onDeleteTxn={(id, isLast)  => openTxnDelete(h.ticker, id, isLast)}
+                      />
+                    ))}
+                  </AnimatePresence>
                 </div>
 
                 {/* Table footer */}
@@ -1100,118 +1171,138 @@ export function PortfolioPage({
 
       {/* ── Modals ───────────────────────────────────────────────────────── */}
 
-      {addOpen && (
-        <TxModal
-          mode="buy"
-          ticker=""
-          tickerEditable
-          initialExchange={tab === 'IN' ? 'NSE' : 'US'}
-          onClose={() => setAddOpen(false)}
-          onSubmit={submitBuy}
-        />
-      )}
+      <AnimatePresence>
+        {addOpen && (
+          <TxModal
+            key="add"
+            mode="buy"
+            ticker=""
+            tickerEditable
+            initialExchange={tab === 'IN' ? 'NSE' : 'US'}
+            onClose={() => setAddOpen(false)}
+            onSubmit={submitBuy}
+          />
+        )}
+      </AnimatePresence>
 
-      {modal && (
-        <TxModal
-          mode={modal.mode}
-          ticker={modal.ticker}
-          maxShares={modal.mode === 'sell'
-            ? (holdings.find(h => h.ticker === modal.ticker)?.shares ?? 0)
-            : undefined}
-          onClose={() => setModal(null)}
-          onSubmit={modal.mode === 'buy' ? submitBuy : submitSell}
-        />
-      )}
+      <AnimatePresence>
+        {modal && (
+          <TxModal
+            key="txn"
+            mode={modal.mode}
+            ticker={modal.ticker}
+            maxShares={modal.mode === 'sell'
+              ? (holdings.find(h => h.ticker === modal.ticker)?.shares ?? 0)
+              : undefined}
+            onClose={() => setModal(null)}
+            onSubmit={modal.mode === 'buy' ? submitBuy : submitSell}
+          />
+        )}
+      </AnimatePresence>
 
-      {txnDeleteTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onClick={e => { if (e.target === e.currentTarget && !txnDeleteLoading) setTxnDeleteTarget(null) }}
-        >
-          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-96 shadow-2xl">
-            <h2 className="text-sm font-semibold text-zinc-100 mb-3">Delete transaction?</h2>
+      <AnimatePresence>
+        {txnDeleteTarget && (
+          <motion.div
+            key="txn-delete"
+            variants={overlayFade}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+            onClick={e => { if (e.target === e.currentTarget && !txnDeleteLoading) setTxnDeleteTarget(null) }}
+          >
+            <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-96 shadow-2xl">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-3">Delete transaction?</h2>
 
-            {txnDeleteTarget.isLast ? (
-              <div className="flex items-start gap-3 bg-amber-500/8 border border-amber-500/25 rounded-xl px-4 py-3 mb-4">
-                <AlertTriangle size={15} className="text-amber-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold text-amber-400">This is the only transaction</p>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
-                    Deleting it will permanently remove{' '}
-                    <span className="font-mono text-zinc-200">{txnDeleteTarget.ticker}</span>{' '}
-                    from your portfolio, including all history.
-                  </p>
+              {txnDeleteTarget.isLast ? (
+                <div className="flex items-start gap-3 bg-amber-500/8 border border-amber-500/25 rounded-xl px-4 py-3 mb-4">
+                  <AlertTriangle size={15} className="text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-amber-400">This is the only transaction</p>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Deleting it will permanently remove{' '}
+                      <span className="font-mono text-zinc-200">{txnDeleteTarget.ticker}</span>{' '}
+                      from your portfolio, including all history.
+                    </p>
+                  </div>
                 </div>
+              ) : (
+                <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+                  This transaction will be removed and your position recalculated using FIFO. This cannot be undone.
+                </p>
+              )}
+
+              {txnDeleteError && (
+                <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5 mb-4">
+                  <X size={13} className="text-red-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-400 leading-relaxed">{txnDeleteError}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => { setTxnDeleteTarget(null); setTxnDeleteError(null) }}
+                  disabled={txnDeleteLoading}
+                  className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDeleteTxn}
+                  disabled={txnDeleteLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40"
+                >
+                  {txnDeleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                  {txnDeleteTarget.isLast ? 'Remove Position' : 'Delete Transaction'}
+                </button>
               </div>
-            ) : (
-              <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-                This transaction will be removed and your position recalculated using FIFO. This cannot be undone.
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {deleteTarget && (
+          <motion.div
+            key="holding-delete"
+            variants={overlayFade}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+            onClick={e => { if (e.target === e.currentTarget) setDeleteTarget(null) }}
+          >
+            <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-80 shadow-2xl">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-1">
+                Remove {deleteTarget}?
+              </h2>
+              <p className="text-xs text-zinc-400 leading-relaxed mb-5">
+                This permanently deletes the holding and all its transaction history.
+                This cannot be undone.
               </p>
-            )}
-
-            {txnDeleteError && (
-              <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5 mb-4">
-                <X size={13} className="text-red-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-red-400 leading-relaxed">{txnDeleteError}</p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={deleteLoading}
+                  className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={deleteLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40"
+                >
+                  {deleteLoading
+                    ? <RefreshCw size={11} className="animate-spin" />
+                    : <Trash2 size={11} />}
+                  Remove
+                </button>
               </div>
-            )}
-
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => { setTxnDeleteTarget(null); setTxnDeleteError(null) }}
-                disabled={txnDeleteLoading}
-                className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDeleteTxn}
-                disabled={txnDeleteLoading}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40"
-              >
-                {txnDeleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
-                {txnDeleteTarget.isLast ? 'Remove Position' : 'Delete Transaction'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {deleteTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onClick={e => { if (e.target === e.currentTarget) setDeleteTarget(null) }}
-        >
-          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-80 shadow-2xl">
-            <h2 className="text-sm font-semibold text-zinc-100 mb-1">
-              Remove {deleteTarget}?
-            </h2>
-            <p className="text-xs text-zinc-400 leading-relaxed mb-5">
-              This permanently deletes the holding and all its transaction history.
-              This cannot be undone.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setDeleteTarget(null)}
-                disabled={deleteLoading}
-                className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleteLoading}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40"
-              >
-                {deleteLoading
-                  ? <RefreshCw size={11} className="animate-spin" />
-                  : <Trash2 size={11} />}
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

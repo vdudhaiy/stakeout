@@ -31,6 +31,7 @@ generated one.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import jwt
 from fastapi import Depends, HTTPException
@@ -55,6 +56,21 @@ def local_auth_enabled() -> bool:
     """True when no Supabase project is configured, so the app falls back
     to its own local email/password accounts."""
     return _jwks_url() is None
+
+
+def supabase_project_url() -> str | None:
+    """The Supabase project's base REST URL, derived from SUPABASE_JWKS_URL
+
+    e.g. ``https://<ref>.supabase.co`` from
+    ``https://<ref>.supabase.co/auth/v1/.well-known/jwks.json``. Used to
+    build Admin API calls (see services/account_service.py) without a
+    second, redundant env var for the same project.
+    """
+    url = _jwks_url()
+    if url is None:
+        return None
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _get_jwks_client() -> jwt.PyJWKClient:

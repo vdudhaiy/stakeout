@@ -1,7 +1,9 @@
 import clsx from 'clsx'
+import { motion } from 'motion/react'
 import { InfoTip } from './InfoTip'
 import type { GlossaryKey } from '../utils/glossary'
 import type { RecommendationPeriod, EarningsEstimateRow, RevenueEstimateRow } from '../types'
+import { layoutSpring } from '../lib/motion'
 
 type MoneyFmt = (v: number | null | undefined, opts?: { sign?: boolean }) => string
 
@@ -141,27 +143,35 @@ function PriceTargetsCard({ targets, currentPrice, format, currencySymbol }: Pri
           <div className="space-y-3">
             <div className="relative h-1.5 bg-zinc-800 rounded-full">
               {mean != null && (
-                <div
+                <motion.div
+                  layout
+                  transition={layoutSpring}
                   className="absolute h-full bg-indigo-500/25 rounded-full"
                   style={{ left: 0, width: `${toPct(mean)}%` }}
                 />
               )}
               {current != null && (
-                <div
+                <motion.div
+                  layout
+                  transition={layoutSpring}
                   className="absolute w-px h-3.5 bg-zinc-300 rounded-full -top-1"
                   style={{ left: `${toPct(current)}%` }}
                   title={`Current: ${money(current)}`}
                 />
               )}
               {mean != null && (
-                <div
+                <motion.div
+                  layout
+                  transition={layoutSpring}
                   className="absolute w-2.5 h-2.5 bg-indigo-500 rounded-full border-2 border-zinc-900 top-1/2 -translate-y-1/2 -translate-x-1/2"
                   style={{ left: `${toPct(mean)}%` }}
                   title={`Mean: ${money(mean)}`}
                 />
               )}
               {median != null && (
-                <div
+                <motion.div
+                  layout
+                  transition={layoutSpring}
                   className="absolute w-2 h-2 bg-violet-400 rounded-full border-2 border-zinc-900 top-1/2 -translate-y-1/2 -translate-x-1/2"
                   style={{ left: `${toPct(median)}%` }}
                   title={`Median: ${money(median)}`}

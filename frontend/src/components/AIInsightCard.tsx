@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { ChevronDown, ChevronUp, RefreshCw, Sparkles } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { fetchStockExplanation } from '../api'
 import type { StockExplanationResponse } from '../types'
+import { collapse } from '../lib/motion'
 
 interface Props {
   ticker: string
@@ -142,23 +144,27 @@ export function AIInsightCard({ ticker }: Props) {
             {factsOpen ? 'Hide the numbers' : 'View the numbers'}
           </button>
 
-          {factsOpen && facts && (
-            <div className="mt-2 divide-y divide-zinc-800/70 border-t border-zinc-800/70">
-              <FactRow label="Close" value={`${facts.close.toFixed(2)}${facts.change_pct != null ? ` (${facts.change_pct >= 0 ? '+' : ''}${facts.change_pct.toFixed(2)}%)` : ''}`} />
-              <FactRow label="RSI (14)" value={facts.rsi != null ? `${facts.rsi.toFixed(1)}${facts.rsi_zone ? ` · ${RSI_ZONE_LABEL[facts.rsi_zone] ?? facts.rsi_zone}` : ''}` : null} />
-              <FactRow label="Bollinger" value={facts.bollinger_position ? BOLLINGER_LABEL[facts.bollinger_position] ?? facts.bollinger_position : null} />
-              <FactRow label="MACD" value={facts.macd_signal ? MACD_LABEL[facts.macd_signal] ?? facts.macd_signal : null} />
-              <FactRow label="Trend" value={facts.sma_trend ? SMA_TREND_LABEL[facts.sma_trend] ?? facts.sma_trend : null} />
-              <FactRow label="Volume vs. 20d avg" value={facts.volume_vs_avg_pct != null ? `${facts.volume_vs_avg_pct >= 0 ? '+' : ''}${facts.volume_vs_avg_pct.toFixed(1)}%` : null} />
-              {facts.rsi_recovery && (
-                <FactRow
-                  label={`RSI recovery (${facts.rsi_recovery.horizon_days}d)`}
-                  value={`${facts.rsi_recovery.recovered_pct.toFixed(0)}% of ${facts.rsi_recovery.occurrences} past occurrences`}
-                />
-              )}
-              <FactRow label="History" value={`${facts.history_days} trading days`} />
-            </div>
-          )}
+          <AnimatePresence>
+            {factsOpen && facts && (
+              <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+                <div className="mt-2 divide-y divide-zinc-800/70 border-t border-zinc-800/70">
+                  <FactRow label="Close" value={`${facts.close.toFixed(2)}${facts.change_pct != null ? ` (${facts.change_pct >= 0 ? '+' : ''}${facts.change_pct.toFixed(2)}%)` : ''}`} />
+                  <FactRow label="RSI (14)" value={facts.rsi != null ? `${facts.rsi.toFixed(1)}${facts.rsi_zone ? ` · ${RSI_ZONE_LABEL[facts.rsi_zone] ?? facts.rsi_zone}` : ''}` : null} />
+                  <FactRow label="Bollinger" value={facts.bollinger_position ? BOLLINGER_LABEL[facts.bollinger_position] ?? facts.bollinger_position : null} />
+                  <FactRow label="MACD" value={facts.macd_signal ? MACD_LABEL[facts.macd_signal] ?? facts.macd_signal : null} />
+                  <FactRow label="Trend" value={facts.sma_trend ? SMA_TREND_LABEL[facts.sma_trend] ?? facts.sma_trend : null} />
+                  <FactRow label="Volume vs. 20d avg" value={facts.volume_vs_avg_pct != null ? `${facts.volume_vs_avg_pct >= 0 ? '+' : ''}${facts.volume_vs_avg_pct.toFixed(1)}%` : null} />
+                  {facts.rsi_recovery && (
+                    <FactRow
+                      label={`RSI recovery (${facts.rsi_recovery.horizon_days}d)`}
+                      value={`${facts.rsi_recovery.recovered_pct.toFixed(0)}% of ${facts.rsi_recovery.occurrences} past occurrences`}
+                    />
+                  )}
+                  <FactRow label="History" value={`${facts.history_days} trading days`} />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <p className="mt-3 pt-3 border-t border-zinc-800 text-[10px] text-zinc-600">
             Generated {timeAgo(explanation.generated_at)} · {explanation.model} · AI-generated from computed indicators, not financial advice.

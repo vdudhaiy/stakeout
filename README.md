@@ -50,10 +50,11 @@ You're also encouraged to fork this project and build your own version. The code
 - **Portfolio tracker** — FIFO cost basis, unrealized/realized P&L per holding, allocation donut, interactive sector & industry breakdown pies (by invested value or by holdings count, per US/India portfolio), and one-click Excel export — per market.
 - **Watchlist with market filter** — organize by industry/sector tabs, filter All / US / India; a ticker-tape marquee streams your watchlist's latest prices under the navbar.
 - **Multi-user accounts** — Google OAuth or email magic-link sign-in via Supabase; each user gets their own watchlist and portfolios. **Guest Mode** lets anyone try the app without signing in — watchlist and portfolio data stay in the browser for that session and are never written to the database.
+- **AI-powered explanations (optional)** — a per-stock "AI Insight" card that explains what the indicators and news mean in plain English, plus a floating chat aware of whatever stock or portfolio you're looking at. Both run against a local [Ollama](https://ollama.com) model, so nothing about your stocks or portfolio leaves your machine; if Ollama isn't reachable, both features degrade gracefully to an "unavailable" message.
 - **Dual market status pill** — NYSE and NSE open/closed at a glance, with session times in ET/IST and your local timezone.
 - **Major index charts** — the home page shows the S&P 500, Dow Jones, NASDAQ, NIFTY 50, SENSEX, and NIFTY Bank with 3-month sparklines and day change, no sign-in needed.
-- **Account settings** — click your avatar (top right) for an account summary popup and a settings page: theme, default market, portfolio exports, and sign-out.
-- **Backend health monitor, dark/light themes, caching** — API latency pill with history; a paper-ledger light theme and terminal-dark theme; TTL caches for quotes (60 s), news (15 min), FX (1 h), index quotes (10 min), and sector/industry classification (24 h) to stay well within free-tier data source limits.
+- **Account settings** — click your avatar (top right) for an account summary popup and a settings page: theme, default market, portfolio exports, sign-out, and permanent account deletion.
+- **Dark/light themes, smart caching** — a paper-ledger light theme and terminal-dark theme; TTL caches for quotes (60 s), news (15 min), FX (1 h), index quotes (10 min), and sector/industry classification (24 h) to stay well within free-tier data source limits.
 
 ---
 
@@ -79,7 +80,7 @@ What the stack runs:
 
 Because no Supabase project is configured, the backend automatically runs its own **local email/password accounts** (stored in your Postgres container) — or click **Continue as Guest** to use the app with nothing saved server-side. All data stays on your machine.
 
-Handy commands:
+Handy commands (run `make help` any time to list all of them):
 
 ```bash
 make docker-up      # build + start in the background
@@ -133,6 +134,13 @@ Open **http://localhost:5173** in your browser. Add a ticker (e.g. `AAPL`, or an
 >
 > If you *do* configure `SUPABASE_JWKS_URL` to test real Supabase sign-in locally instead, `DATABASE_URL` stays independent of it — leave it unset and your account's portfolio/watchlist/price data lands in a local SQLite file, never touching production.
 
+### Running Tests
+
+```bash
+make test       # backend test suite (pytest)
+make coverage    # …with coverage (terminal summary + HTML report at htmlcov/index.html)
+```
+
 ---
 
 ## Deploying to the Cloud (Vercel + Render + Supabase)
@@ -160,6 +168,7 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
    | `DATABASE_URL` | the asyncpg pooler URL from step 1.2 |
    | `SUPABASE_JWKS_URL` | the JWKS URL from step 1.3 |
    | `CORS_ORIGINS` | your Vercel URL, e.g. `https://stakeout.vercel.app` |
+   | `SUPABASE_SECRET_KEY` | Project Settings → API → API Keys → Secret keys (prefer this over the legacy `service_role` key — same access, individually revocable). Optional — only needed for "Delete account" to also remove the Supabase auth user. Full-access key: server-side only, never in the frontend. |
 
 4. Deploy. The pre-deploy hook runs `alembic upgrade head` to create tables. Health check: `https://<your-service>.onrender.com/health`.
 
@@ -194,9 +203,13 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `ARCHIVE_START_DATE` | `2023-01-01` | Earliest date to archive stock data from |
 | `STAKEOUT_DATA_DIR` | _(empty → repo root)_ | Root data directory override |
 | `MODEL_DIR` | `model-store/` | Reserved for future ML model artifacts |
+| `APP_NAME` | `Stakeout API` | Overrides the FastAPI app title shown in `/docs` |
 | `DATABASE_URL` | _(empty → SQLite)_ | Postgres connection string for hosted mode |
-| `SUPABASE_JWKS_URL` | **required** | Verifies user sessions against Supabase's published signing keys |
+| `SUPABASE_JWKS_URL` | _(empty → local accounts)_ | Verifies user sessions against Supabase's published signing keys — required for a hosted deployment; local dev falls back to local accounts or Guest Mode when unset |
+| `SUPABASE_SECRET_KEY` | _(empty)_ | Lets "Delete account" also remove the Supabase auth user via the Admin API. Server-side only, never in the frontend |
 | `CORS_ORIGINS` | _(empty)_ | Comma-separated allowed browser origins |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Where to reach [Ollama](https://ollama.com) for the optional AI Insight card / chat |
+| `OLLAMA_MODEL` | `llama3.2:3b` | Ollama model used for AI explanations |
 
 ---
 
@@ -207,14 +220,14 @@ stakeout/
 ├── docker-compose.yml             # Local/self-hosted stack: Postgres + API + frontend
 ├── docker/                        # Dockerfiles + nginx config for that stack
 ├── render.yaml                    # Render blueprint (hosted backend)
-├── Makefile                       # Common developer commands (incl. docker-up/down)
+├── Makefile                       # Common developer commands — run `make help` to list them
 ├── pyproject.toml                 # uv workspace and dependency config
 ├── .env.example                   # Environment variable template
 │
 ├── utils/                         # Shared Python utilities (logging, helpers)
 │
-├── backend/                       # FastAPI REST API (auth, markets, news, FX, portfolio, watchlist); fetches stock prices from Yahoo Finance into the market_data table
-├── frontend/                      # React + TypeScript SPA (Vite, Tailwind, Recharts, Framer Motion)
+├── backend/                       # FastAPI REST API (auth, markets, news, FX, portfolio, watchlist, AI); fetches stock prices from Yahoo Finance into the market_data table
+├── frontend/                      # React + TypeScript SPA (Vite, Tailwind, Recharts, Motion)
 │
 └── .github/
     └── workflows/ci.yml           # CI: runs the backend test suite on push/PR
@@ -239,6 +252,13 @@ The backend exposes a REST API (Swagger docs at **`/openapi`**). Endpoints marke
 | `GET` | `/stocks/indices` | Major US/India index quotes + 3-month sparkline series (cached 10 min) |
 | `GET` | `/stocks/classification?tickers=A,B` | Batch sector/industry per ticker (cached 24 h) |
 
+**AI** — optional, no auth; degrades to a 503 if [Ollama](https://ollama.com) isn't reachable
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/ai/stocks/{ticker}/explain?refresh=false` | Plain-English explanation of a stock's technicals + recent news (cached 1 h) |
+| `POST` | `/ai/chat` | One turn of the floating AI chat, optionally aware of a stock or portfolio context |
+
 **Watchlist** 🔒
 
 | Method | Endpoint | Description |
@@ -255,6 +275,12 @@ The backend exposes a REST API (Swagger docs at **`/openapi`**). Endpoints marke
 | `GET` | `/portfolio/download?market=US\|IN` | Excel (.xlsx) export |
 | `POST` | `/portfolio/{ticker}/buy` · `/sell` | Record transactions |
 | `DELETE` | `/portfolio/{ticker}` · `/transactions/{id}` | Remove a holding / a transaction |
+
+**Account** 🔒
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `DELETE` | `/account` | Permanently deletes your account and everything it owns (holdings, transactions, watchlist). Local accounts are removed directly; Supabase accounts also delete the auth user via the Admin API (needs `SUPABASE_SECRET_KEY`) |
 
 **News & FX**
 
@@ -278,8 +304,8 @@ Market data is fetched via [yfinance](https://github.com/ranaroussi/yfinance), w
 |-------|-----------|
 | Backend | Python 3.12, FastAPI, Uvicorn, SQLAlchemy (async), Alembic |
 | Auth & DB | Supabase (Postgres, Google OAuth, magic links), PyJWT |
-| Data | yfinance, pandas, pandas-market-calendars, GDELT, Frankfurter |
-| Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts, Framer Motion, React Router |
+| Data | yfinance, pandas, pandas-market-calendars, GDELT, Frankfurter, Ollama (optional AI layer) |
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts, Motion, React Router |
 | Deploy | uv, Docker Compose (self-hosted), Render, Vercel |
 | CI/CD | GitHub Actions |
 

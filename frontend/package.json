@@ -1,7 +1,7 @@
 {
   "name": "stakeout-dashboard",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,14 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.441.0",
+    "motion": "^12.42.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.0",
-    "recharts": "^2.12.7",
-    "@supabase/supabase-js": "^2.47.0",
-    "framer-motion": "^11.11.0"
+    "recharts": "^2.12.7"
   },
   "devDependencies": {
     "@types/react": "^18.3.5",

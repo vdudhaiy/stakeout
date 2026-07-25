@@ -22,7 +22,6 @@ export function formatInterval(ms: number): string {
 // Polling cadences — single source of truth, overridable per deployment via
 // .env (see .env.example). Both the pollers and any UI copy referencing
 // "every N" should import these rather than hardcoding the value.
-export const HEALTH_REFRESH_MS = envMs('VITE_HEALTH_REFRESH_MS', 30_000)
 export const MARKET_STATUS_REFRESH_MS = envMs('VITE_MARKET_STATUS_REFRESH_MS', 5 * 60_000)
 export const PRICE_REFRESH_MS = envMs('VITE_PRICE_REFRESH_MS', 2 * 60_000)
 export const PORTFOLIO_REFRESH_MS = envMs('VITE_PORTFOLIO_REFRESH_MS', 2 * 60_000)

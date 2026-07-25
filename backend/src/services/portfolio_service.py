@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import math
 from decimal import Decimal
 
 import yfinance as yf
@@ -52,8 +53,9 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
     """
     try:
         response = await fetch_current(yf.Ticker(ticker), is_market_open)
-        if response.data and response.data[0].close is not None:
-            return Decimal(str(response.data[0].close))
+        close = response.data[0].close if response.data else None
+        if close is not None and not math.isnan(close):
+            return Decimal(str(close))
     except Exception:
         pass
     # Archive may not exist (e.g. deleted from dashboard) — fetch last close directly.
@@ -62,7 +64,7 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
             hist = yf.Ticker(ticker).history(period="5d")
             return float(hist["Close"].iloc[-1]) if not hist.empty else None
         close = await asyncio.to_thread(_direct)
-        if close is not None:
+        if close is not None and not math.isnan(close):
             return Decimal(str(close))
     except Exception:
         pass

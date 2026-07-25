@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import clsx from 'clsx'
 import { Search, ChevronDown, ChevronRight, BarChart2, PlusCircle } from 'lucide-react'
+import { motion, AnimatePresence } from 'motion/react'
 import { fetchIndustryMap, fetchSectorMap, addStock } from '../api'
 import { usePrefs, type MarketFilter } from '../contexts/PrefsContext'
 import { AddTickerModal } from './AddTickerModal'
 import type { Exchange } from '../utils/market'
 import { applyExchange } from '../utils/market'
 import type { GroupedStocks, WatchlistMap, ComparisonGroup } from '../types'
+import { collapse, toastSlide, layoutSpring } from '../lib/motion'
 
 type SidebarTab = 'general' | 'industry' | 'sector'
 
@@ -68,21 +70,27 @@ function GroupSection({
           <BarChart2 size={12} />
         </button>
       </div>
-      {open && tickers.map(ticker => (
-        <button
-          key={ticker}
-          onClick={() => onSelect(ticker)}
-          title={tickerNames?.[ticker]?.name}
-          className={clsx(
-            'w-full flex items-center pl-8 pr-3 py-2 text-left transition-colors',
-            selected === ticker
-              ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
-              : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
-          )}
-        >
-          <span className="font-mono text-sm font-medium">{ticker}</span>
-        </button>
-      ))}
+      <AnimatePresence>
+        {open && (
+          <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+            {tickers.map(ticker => (
+              <button
+                key={ticker}
+                onClick={() => onSelect(ticker)}
+                title={tickerNames?.[ticker]?.name}
+                className={clsx(
+                  'w-full flex items-center pl-8 pr-3 py-2 text-left transition-colors',
+                  selected === ticker
+                    ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
+                    : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+                )}
+              >
+                <span className="font-mono text-sm font-medium">{ticker}</span>
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -139,11 +147,19 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
 
   return (
     <aside className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col">
-      {existNotice && (
-        <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-mono">
-          Already tracked — navigated to stock.
-        </div>
-      )}
+      <AnimatePresence>
+        {existNotice && (
+          <motion.div
+            variants={toastSlide}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            className="mx-3 mt-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-mono"
+          >
+            Already tracked — navigated to stock.
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Market filter — mirrors the portfolio market switch */}
       <div className="flex items-center gap-1 p-2 border-b border-zinc-800 shrink-0">
         {MARKET_TABS.map(({ value, label }) => (
@@ -151,12 +167,19 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
             key={value}
             onClick={() => setMarket(value)}
             className={clsx(
-              'flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors',
+              'relative flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors border',
               market === value
-                ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
-                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 border border-transparent',
+                ? 'text-indigo-300 border-indigo-500/30'
+                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 border-transparent',
             )}
           >
+            {market === value && (
+              <motion.span
+                layoutId="sidebar-market-pill"
+                transition={layoutSpring}
+                className="absolute inset-0 bg-indigo-500/15 rounded-md -z-10"
+              />
+            )}
             {label}
           </button>
         ))}
@@ -169,13 +192,20 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
             key={t}
             onClick={() => setTab(t)}
             className={clsx(
-              'flex-1 py-2.5 text-[11px] font-medium transition-colors capitalize',
+              'relative flex-1 py-2.5 text-[11px] font-medium transition-colors capitalize',
               tab === t
-                ? 'text-indigo-400 border-b-2 border-indigo-500 bg-indigo-500/5'
+                ? 'text-indigo-400 bg-indigo-500/5'
                 : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/50',
             )}
           >
             {t}
+            {tab === t && (
+              <motion.span
+                layoutId="sidebar-tab-underline"
+                transition={layoutSpring}
+                className="absolute inset-x-0 bottom-0 h-0.5 bg-indigo-500"
+              />
+            )}
           </button>
         ))}
       </div>
@@ -220,24 +250,31 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
                     <BarChart2 size={12} />
                   </button>
                 </div>
-                {filteredTickers.map(ticker => (
-                  <button
-                    key={ticker}
-                    onClick={() => onSelect(ticker)}
-                    title={tickers[ticker]?.name}
-                    className={clsx(
-                      'w-full flex items-center px-4 py-2.5 text-left transition-colors',
-                      selected === ticker
-                        ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
-                        : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
-                    )}
-                  >
-                    <span className="font-mono text-sm font-medium">{ticker}</span>
-                    <span className="ml-auto text-[9px] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
-                      {tickers[ticker]?.market ?? 'US'}
-                    </span>
-                  </button>
-                ))}
+                <AnimatePresence initial={false}>
+                  {filteredTickers.map(ticker => (
+                    <motion.button
+                      key={ticker}
+                      layout
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={layoutSpring}
+                      onClick={() => onSelect(ticker)}
+                      title={tickers[ticker]?.name}
+                      className={clsx(
+                        'w-full flex items-center px-4 py-2.5 text-left transition-colors overflow-hidden',
+                        selected === ticker
+                          ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
+                          : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+                      )}
+                    >
+                      <span className="font-mono text-sm font-medium">{ticker}</span>
+                      <span className="ml-auto text-[9px] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
+                        {tickers[ticker]?.market ?? 'US'}
+                      </span>
+                    </motion.button>
+                  ))}
+                </AnimatePresence>
               </>
         )}
 
@@ -263,13 +300,15 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
         )}
       </div>
 
-      {addOpen && (
-        <AddTickerModal
-          initialExchange={market === 'IN' ? 'NSE' : 'US'}
-          onClose={() => setAddOpen(false)}
-          onSubmit={submitAdd}
-        />
-      )}
+      <AnimatePresence>
+        {addOpen && (
+          <AddTickerModal
+            initialExchange={market === 'IN' ? 'NSE' : 'US'}
+            onClose={() => setAddOpen(false)}
+            onSubmit={submitAdd}
+          />
+        )}
+      </AnimatePresence>
     </aside>
   )
 }

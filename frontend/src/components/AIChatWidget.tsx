@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Bot, MessageCircle, RefreshCw, Send, Trash2, X } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { sendChatMessage } from '../api'
 import type { ChatContext, ChatMessage } from '../types'
+import { fadeUp } from '../lib/motion'
 
 interface Props {
   context: ChatContext
@@ -60,8 +62,15 @@ export function AIChatWidget({ context }: Props) {
 
   return (
     <>
+      <AnimatePresence>
       {open && (
-        <div className="fixed bottom-40 right-6 z-50 w-96 max-w-[calc(100vw-3rem)] h-[520px] max-h-[calc(100vh-12rem)] bg-zinc-950 border border-zinc-700 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9, y: 12 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.9, y: 12 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          style={{ transformOrigin: 'bottom right' }}
+          className="fixed bottom-40 right-6 z-50 w-96 max-w-[calc(100vw-3rem)] h-[520px] max-h-[calc(100vh-12rem)] bg-zinc-950 border border-zinc-700 rounded-xl shadow-2xl flex flex-col overflow-hidden">
           {/* Header */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800 shrink-0">
             <Bot size={15} className="text-indigo-400" />
@@ -95,8 +104,12 @@ export function AIChatWidget({ context }: Props) {
               {GREETING}
             </div>
             {messages.map((m, i) => (
-              <div
+              <motion.div
                 key={i}
+                variants={fadeUp}
+                initial="hidden"
+                animate="show"
+                custom={0}
                 className={clsx(
                   'max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap',
                   m.role === 'user'
@@ -105,7 +118,7 @@ export function AIChatWidget({ context }: Props) {
                 )}
               >
                 {m.content}
-              </div>
+              </motion.div>
             ))}
             {loading && (
               <div className="flex items-center gap-1.5 bg-zinc-800 text-zinc-500 rounded-lg px-3 py-2 w-fit">
@@ -143,8 +156,9 @@ export function AIChatWidget({ context }: Props) {
             </div>
             <p className="text-[10px] text-zinc-600 text-center">AI-generated · not financial advice</p>
           </div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       <button
         onClick={() => setOpen(o => !o)}

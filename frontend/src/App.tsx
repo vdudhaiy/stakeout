@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
-import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon, ChevronDown } from 'lucide-react'
+import { motion, AnimatePresence } from 'motion/react'
+import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon, ChevronDown, ChevronUp } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
 import { GetStartedPage } from './components/GetStartedPage'
@@ -21,7 +22,7 @@ import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
 import { Footer } from './components/Footer'
 import { AIInsightCard } from './components/AIInsightCard'
 import { AIChatWidget } from './components/AIChatWidget'
-import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock, fetchIndicators } from './api'
+import { fetchAllStocks, fetchCurrentStock, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock, fetchIndicators } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
 import { NewsPanel } from './components/NewsPanel'
 import { TickerTape } from './components/TickerTape'
@@ -31,10 +32,11 @@ import { useAuth } from './contexts/AuthContext'
 import { usePrefs } from './contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney } from './utils/currency'
 import { marketOf } from './utils/market'
-import { HEALTH_REFRESH_MS, MARKET_STATUS_REFRESH_MS, PRICE_REFRESH_MS } from './utils/env'
-import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV, PortfolioResponse, ChatContext } from './types'
+import { MARKET_STATUS_REFRESH_MS, PRICE_REFRESH_MS } from './utils/env'
+import type { OHLCV, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV, PortfolioResponse, ChatContext } from './types'
 import { SMA_PERIODS, EMA_PERIODS, SMA_COLORS, EMA_COLORS } from './utils/indicators'
 import type { OverlayConfig } from './utils/indicators'
+import { overlayFade, scaleIn, popIn, viewFade, layoutSpring, collapse } from './lib/motion'
 
 const DAYS_OPTIONS = [
   { label: '1D', value: 0 },
@@ -47,13 +49,6 @@ const DAYS_OPTIONS = [
   { label: '2Yr', value: 730 },
   { label: '3Yr', value: 1095 },
 ]
-
-const MAX_HISTORY = 50
-
-const SUBCHART_TITLES = {
-  rsi:  'Relative Strength Index (14-day)',
-  macd: 'Moving Average Convergence Divergence (12, 26, 9)',
-} as const
 
 const PATH_TO_VIEW: Record<string, View> = {
   '/': 'home',
@@ -79,9 +74,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [details, setDetails] = useState<StockDetails | null>(null)
   const [comparisonGroup, setComparisonGroup] = useState<ComparisonGroup | null>(null)
-  const [health, setHealth] = useState<HealthInfo>({ status: 'loading', latencyMs: null })
-  const [lastChecked, setLastChecked] = useState<Date | null>(null)
-  const [latencyHistory, setLatencyHistory] = useState<LatencyRecord[]>([])
   const [marketOpen, setMarketOpen] = useState<boolean | null>(null)
   const [marketOpenIN, setMarketOpenIN] = useState<boolean | null>(null)
   const [currentData, setCurrentData] = useState<OHLCV | null>(null)
@@ -100,30 +92,8 @@ export default function App() {
   const [activeEMA, setActiveEMA] = useState<number[]>([])
   const [overlayBB, setOverlayBB] = useState(false)
   const [openDropdown, setOpenDropdown] = useState<'sma' | 'ema' | null>(null)
-  const [subCharts, setSubCharts] = useState({ rsi: false, macd: false })
+  const [subCharts, setSubCharts] = useState({ rsi: true, macd: true })
   const [portfolioSnapshot, setPortfolioSnapshot] = useState<PortfolioResponse | null>(null)
-
-  const checkHealth = useCallback(() =>
-    fetchHealth().then(info => {
-      const now = new Date()
-      setHealth(info)
-      setLastChecked(now)
-      setLatencyHistory(prev => {
-        const record: LatencyRecord = {
-          time: now.toLocaleTimeString(),
-          latencyMs: info.latencyMs,
-          status: info.status,
-        }
-        const next = [...prev, record]
-        return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
-      })
-    }), [])
-
-  useEffect(() => {
-    checkHealth()
-    const id = setInterval(checkHealth, HEALTH_REFRESH_MS)
-    return () => clearInterval(id)
-  }, [checkHealth])
 
   const checkMarket = useCallback(() => Promise.all([
     fetchMarketStatus('US').then(setMarketOpen),
@@ -371,6 +341,19 @@ export default function App() {
   const headerChange = liveClose != null ? liveChange : archiveChange
   const headerChangePct = liveClose != null ? liveChangePct : archiveChangePct
 
+  // Flash the header price on change so a poll-driven update is noticeable,
+  // not just a silent DOM overwrite — green/red matches the move's direction.
+  const prevHeaderPrice = useRef(headerPrice)
+  const [priceFlash, setPriceFlash] = useState<'up' | 'down' | null>(null)
+  const [priceFlashTick, setPriceFlashTick] = useState(0)
+  useEffect(() => {
+    if (headerPrice != null && prevHeaderPrice.current != null && headerPrice !== prevHeaderPrice.current) {
+      setPriceFlash(headerPrice > prevHeaderPrice.current ? 'up' : 'down')
+      setPriceFlashTick(t => t + 1)
+    }
+    prevHeaderPrice.current = headerPrice
+  }, [headerPrice])
+
   // OHLCV stats block source and its baseline for change calculation
   const mainOHLCV = tickerMarketOpen ? currentData : latest
   const mainOHLCVPrevClose = tickerMarketOpen ? archiveClose : (prev?.close ?? null)
@@ -398,11 +381,6 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
       <Navbar
-        healthStatus={health.status}
-        latencyMs={health.latencyMs}
-        lastChecked={lastChecked}
-        latencyHistory={latencyHistory}
-        onRefreshHealth={checkHealth}
         marketOpen={marketOpen}
         marketOpenIN={marketOpenIN}
         onRefreshMarket={checkMarket}
@@ -410,6 +388,8 @@ export default function App() {
 
       {view !== 'home' && view !== 'get-started' && <TickerTape tickers={allTickers} />}
 
+      <AnimatePresence mode="wait">
+      <motion.div key={view} variants={viewFade} initial="hidden" animate="show" exit="exit" className="flex-1 flex flex-col overflow-hidden min-h-0">
       {view === 'home' ? (
         <HomePage />
       ) : view === 'get-started' ? (
@@ -488,9 +468,17 @@ export default function App() {
 
                     {/* Primary price: archive close (or live when market open) */}
                     {headerPrice != null && (
-                      <span className="font-mono text-xl font-semibold text-zinc-100">
+                      <motion.span
+                        key={priceFlashTick}
+                        initial={priceFlash ? {
+                          backgroundColor: priceFlash === 'up' ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
+                        } : false}
+                        animate={{ backgroundColor: 'rgba(0,0,0,0)' }}
+                        transition={{ duration: 0.6, ease: 'easeOut' }}
+                        className="font-mono text-xl font-semibold text-zinc-100 rounded px-0.5 -mx-0.5"
+                      >
                         {fmt(headerPrice)}
-                      </span>
+                      </motion.span>
                     )}
                     {headerChange !== null && (
                       <span className={clsx(
@@ -530,12 +518,17 @@ export default function App() {
                         key={value}
                         onClick={() => setDays(value)}
                         className={clsx(
-                          'px-3 py-1.5 text-xs font-medium transition-colors',
-                          days === value
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
+                          'relative px-3 py-1.5 text-xs font-medium transition-colors',
+                          days === value ? 'text-white' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
                         )}
                       >
+                        {days === value && (
+                          <motion.span
+                            layoutId="days-option-pill"
+                            transition={layoutSpring}
+                            className="absolute inset-0 bg-indigo-600 -z-10"
+                          />
+                        )}
                         {label}
                       </button>
                     ))}
@@ -594,30 +587,39 @@ export default function App() {
                       >
                         <Info size={14} />
                       </button>
-                      {showMarketHours && (
-                        <div className="absolute right-0 top-6 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl">
-                          <p className="text-[10px] font-semibold tracking-widest text-zinc-400 mb-3">
-                            NYSE MARKET HOURS
-                          </p>
-                          <div className="space-y-3">
-                            {([
-                              { label: 'Pre-market',  color: 'text-amber-400',   et: '04:00 – 09:30', local: `${scheduleLocal.pmStart} – ${scheduleLocal.mktOpen}` },
-                              { label: 'Regular',     color: 'text-emerald-400', et: '09:30 – 16:00', local: `${scheduleLocal.mktOpen} – ${scheduleLocal.mktClose}` },
-                              { label: 'After-hours', color: 'text-blue-400',    et: '16:00 – 20:00', local: `${scheduleLocal.mktClose} – ${scheduleLocal.ahEnd}` },
-                            ] as const).map(({ label, color, et, local }) => (
-                              <div key={label} className="space-y-0.5">
-                                <span className={`text-[10px] font-semibold tracking-widest ${color}`}>
-                                  {label.toUpperCase()}
-                                </span>
-                                <div className="flex items-center justify-between text-xs font-mono">
-                                  <span className="text-zinc-400">{et} ET</span>
-                                  <span className="text-zinc-300">({local} {localTz})</span>
+                      <AnimatePresence>
+                        {showMarketHours && (
+                          <motion.div
+                            variants={popIn}
+                            initial="hidden"
+                            animate="show"
+                            exit="exit"
+                            style={{ transformOrigin: 'top right' }}
+                            className="absolute right-0 top-6 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl"
+                          >
+                            <p className="text-[10px] font-semibold tracking-widest text-zinc-400 mb-3">
+                              NYSE MARKET HOURS
+                            </p>
+                            <div className="space-y-3">
+                              {([
+                                { label: 'Pre-market',  color: 'text-amber-400',   et: '04:00 – 09:30', local: `${scheduleLocal.pmStart} – ${scheduleLocal.mktOpen}` },
+                                { label: 'Regular',     color: 'text-emerald-400', et: '09:30 – 16:00', local: `${scheduleLocal.mktOpen} – ${scheduleLocal.mktClose}` },
+                                { label: 'After-hours', color: 'text-blue-400',    et: '16:00 – 20:00', local: `${scheduleLocal.mktClose} – ${scheduleLocal.ahEnd}` },
+                              ] as const).map(({ label, color, et, local }) => (
+                                <div key={label} className="space-y-0.5">
+                                  <span className={`text-[10px] font-semibold tracking-widest ${color}`}>
+                                    {label.toUpperCase()}
+                                  </span>
+                                  <div className="flex items-center justify-between text-xs font-mono">
+                                    <span className="text-zinc-400">{et} ET</span>
+                                    <span className="text-zinc-300">({local} {localTz})</span>
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   </div>
                 </div>
@@ -699,28 +701,37 @@ export default function App() {
                               >
                                 SMA <ChevronDown size={8} />
                               </button>
-                              {openDropdown === 'sma' && (
-                                <div className="absolute right-0 top-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-1 z-50 shadow-xl">
-                                  {SMA_PERIODS.map(period => (
-                                    <button
-                                      key={period}
-                                      onClick={() => setActiveSMA(prev =>
-                                        prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
-                                      )}
-                                      title={`${period}-day Simple Moving Average`}
-                                      className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
-                                    >
-                                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: SMA_COLORS[period] }} />
-                                      <span className={activeSMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
-                                        {period}
-                                      </span>
-                                      {activeSMA.includes(period) && (
-                                        <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
-                                      )}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
+                              <AnimatePresence>
+                                {openDropdown === 'sma' && (
+                                  <motion.div
+                                    variants={popIn}
+                                    initial="hidden"
+                                    animate="show"
+                                    exit="exit"
+                                    style={{ transformOrigin: 'top right' }}
+                                    className="absolute right-0 top-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-1 z-50 shadow-xl"
+                                  >
+                                    {SMA_PERIODS.map(period => (
+                                      <button
+                                        key={period}
+                                        onClick={() => setActiveSMA(prev =>
+                                          prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
+                                        )}
+                                        title={`${period}-day Simple Moving Average`}
+                                        className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
+                                      >
+                                        <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: SMA_COLORS[period] }} />
+                                        <span className={activeSMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
+                                          {period}
+                                        </span>
+                                        {activeSMA.includes(period) && (
+                                          <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
                             </div>
                             {/* Active SMA chips */}
                             {[...activeSMA].sort((a, b) => a - b).map(period => (
@@ -751,28 +762,37 @@ export default function App() {
                               >
                                 EMA <ChevronDown size={8} />
                               </button>
-                              {openDropdown === 'ema' && (
-                                <div className="absolute right-0 top-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-1 z-50 shadow-xl">
-                                  {EMA_PERIODS.map(period => (
-                                    <button
-                                      key={period}
-                                      onClick={() => setActiveEMA(prev =>
-                                        prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
-                                      )}
-                                      title={`${period}-day Exponential Moving Average`}
-                                      className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
-                                    >
-                                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: EMA_COLORS[period] }} />
-                                      <span className={activeEMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
-                                        {period}
-                                      </span>
-                                      {activeEMA.includes(period) && (
-                                        <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
-                                      )}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
+                              <AnimatePresence>
+                                {openDropdown === 'ema' && (
+                                  <motion.div
+                                    variants={popIn}
+                                    initial="hidden"
+                                    animate="show"
+                                    exit="exit"
+                                    style={{ transformOrigin: 'top right' }}
+                                    className="absolute right-0 top-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-1 z-50 shadow-xl"
+                                  >
+                                    {EMA_PERIODS.map(period => (
+                                      <button
+                                        key={period}
+                                        onClick={() => setActiveEMA(prev =>
+                                          prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
+                                        )}
+                                        title={`${period}-day Exponential Moving Average`}
+                                        className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
+                                      >
+                                        <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: EMA_COLORS[period] }} />
+                                        <span className={activeEMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
+                                          {period}
+                                        </span>
+                                        {activeEMA.includes(period) && (
+                                          <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
                             </div>
                             {/* Active EMA chips */}
                             {[...activeEMA].sort((a, b) => a - b).map(period => (
@@ -811,20 +831,26 @@ export default function App() {
                           <button
                             onClick={() => setChartType('candle')}
                             className={clsx(
-                              'flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
-                              chartType === 'candle' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'
+                              'relative flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                              chartType === 'candle' ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
                             )}
                           >
+                            {chartType === 'candle' && (
+                              <motion.span layoutId="chart-type-pill" transition={layoutSpring} className="absolute inset-0 bg-zinc-700 -z-10" />
+                            )}
                             <CandleIcon size={11} />
                             Candle
                           </button>
                           <button
                             onClick={() => setChartType('area')}
                             className={clsx(
-                              'flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
-                              chartType === 'area' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'
+                              'relative flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                              chartType === 'area' ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
                             )}
                           >
+                            {chartType === 'area' && (
+                              <motion.span layoutId="chart-type-pill" transition={layoutSpring} className="absolute inset-0 bg-zinc-700 -z-10" />
+                            )}
                             <LineChartIcon size={11} />
                             Line
                           </button>
@@ -841,61 +867,79 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Oscillator toggle row — separate block below the price chart */}
-                  {days > 0 && indicators && (
-                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5 flex items-center justify-between">
-                      <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">OSCILLATORS <InfoTip k="rsi" /></p>
-                      <div className="flex items-center gap-1">
-                        {(['rsi', 'macd'] as const).map(key => (
-                          <button
-                            key={key}
-                            title={SUBCHART_TITLES[key]}
-                            onClick={() => setSubCharts(prev => ({ ...prev, [key]: !prev[key] }))}
-                            className={clsx(
-                              'px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
-                              subCharts[key]
-                                ? 'border-violet-500 text-violet-300 bg-violet-950'
-                                : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
-                            )}
-                          >
-                            {key}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {subCharts.rsi && indicators?.rsi && (
+                  {/* RSI — its own collapsible block */}
+                  {days > 0 && indicators?.rsi && (
                     <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
-                      <div className="flex items-center justify-between mb-3">
+                      <div
+                        onClick={() => setSubCharts(prev => ({ ...prev, rsi: !prev.rsi }))}
+                        className={clsx('flex items-center justify-between cursor-pointer', subCharts.rsi && 'mb-3')}
+                      >
                         <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
                           RSI ({indicators.rsi.period}) <InfoTip k="rsi" />
                         </p>
-                        <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
-                          <span><span className="text-red-400/60">—</span> 70 overbought</span>
-                          <span><span className="text-emerald-400/60">—</span> 30 oversold</span>
+                        <div className="flex items-center gap-3">
+                          {subCharts.rsi && (
+                            <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
+                              <span><span className="text-red-400/60">—</span> 70 overbought</span>
+                              <span><span className="text-emerald-400/60">—</span> 30 oversold</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={e => { e.stopPropagation(); setSubCharts(prev => ({ ...prev, rsi: !prev.rsi })) }}
+                            title={subCharts.rsi ? 'Minimize' : 'Expand'}
+                            className="p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
+                          >
+                            {subCharts.rsi ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                          </button>
                         </div>
                       </div>
-                      <div className="h-32">
-                        <RSIChart data={indicators.rsi.values} days={days} />
-                      </div>
+                      <AnimatePresence>
+                        {subCharts.rsi && (
+                          <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+                            <div className="h-32">
+                              <RSIChart data={indicators.rsi.values} days={days} />
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   )}
 
-                  {subCharts.macd && indicators?.macd && (
+                  {/* MACD — its own collapsible block */}
+                  {days > 0 && indicators?.macd && (
                     <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
-                      <div className="flex items-center justify-between mb-3">
+                      <div
+                        onClick={() => setSubCharts(prev => ({ ...prev, macd: !prev.macd }))}
+                        className={clsx('flex items-center justify-between cursor-pointer', subCharts.macd && 'mb-3')}
+                      >
                         <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
                           MACD ({indicators.macd.fast}, {indicators.macd.slow}, {indicators.macd.signal_period}) <InfoTip k="macd" />
                         </p>
-                        <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
-                          <span><span className="text-blue-400">—</span> MACD</span>
-                          <span><span className="text-orange-400">—</span> Signal</span>
+                        <div className="flex items-center gap-3">
+                          {subCharts.macd && (
+                            <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
+                              <span><span className="text-blue-400">—</span> MACD</span>
+                              <span><span className="text-orange-400">—</span> Signal</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={e => { e.stopPropagation(); setSubCharts(prev => ({ ...prev, macd: !prev.macd })) }}
+                            title={subCharts.macd ? 'Minimize' : 'Expand'}
+                            className="p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
+                          >
+                            {subCharts.macd ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                          </button>
                         </div>
                       </div>
-                      <div className="h-32">
-                        <MACDChart data={indicators.macd.values} days={days} />
-                      </div>
+                      <AnimatePresence>
+                        {subCharts.macd && (
+                          <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+                            <div className="h-32">
+                              <MACDChart data={indicators.macd.values} days={days} />
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   )}
 
@@ -938,38 +982,48 @@ export default function App() {
           </>}
         </div>
       )}
+      </motion.div>
+      </AnimatePresence>
 
       <Footer />
 
       {aiEnabled && showAIChat && <AIChatWidget context={aiChatContext} />}
 
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">
-            <h2 className="text-sm font-semibold text-zinc-100 mb-1">Remove {ticker}?</h2>
-            <p className="text-xs text-zinc-400 mb-5">
-              {ticker} will be removed from your watchlist. You can add it back at any time.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setDeleteConfirm(false)}
-                disabled={deleteLoading}
-                className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleteLoading}
-                className="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40 flex items-center gap-1.5"
-              >
-                {deleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {deleteConfirm && (
+          <motion.div
+            variants={overlayFade}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          >
+            <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-1">Remove {ticker}?</h2>
+              <p className="text-xs text-zinc-400 mb-5">
+                {ticker} will be removed from your watchlist. You can add it back at any time.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteConfirm(false)}
+                  disabled={deleteLoading}
+                  className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={deleteLoading}
+                  className="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40 flex items-center gap-1.5"
+                >
+                  {deleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                  Remove
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

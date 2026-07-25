@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, RefreshCw } from 'lucide-react'
+import { motion } from 'motion/react'
 import { ExchangeSelect } from './ExchangeSelect'
 import type { Exchange } from '../utils/market'
+import { overlayFade, scaleIn } from '../lib/motion'
 
 interface Props {
   initialExchange?: Exchange
@@ -36,11 +38,15 @@ export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
   }
 
   return (
-    <div
+    <motion.div
+      variants={overlayFade}
+      initial="hidden"
+      animate="show"
+      exit="exit"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-sm font-semibold text-zinc-100">Add Ticker</h2>
@@ -89,7 +95,7 @@ export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
             Add Ticker
           </button>
         </form>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }

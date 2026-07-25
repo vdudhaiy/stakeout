@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
+import { motion } from 'motion/react'
+import { layoutSpring } from '../lib/motion'
 
 interface Props {
   info: Record<string, unknown>
@@ -35,12 +37,14 @@ export function StockInfoCard({ info }: Props) {
 
       {summary && (
         <div>
-          <p
+          <motion.p
+            layout
+            transition={layoutSpring}
             className="text-zinc-400 text-sm leading-relaxed"
             style={!expanded && summaryLong ? { display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } : undefined}
           >
             {summary}
-          </p>
+          </motion.p>
           {summaryLong && (
             <button
               onClick={() => setExpanded(v => !v)}

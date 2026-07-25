@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { LineChart, Briefcase, Settings, UserRound } from 'lucide-react'
+import { AnimatePresence } from 'motion/react'
 import { useAuth } from '../contexts/AuthContext'
 import { AuthModal } from './AuthModal'
 
@@ -49,7 +50,9 @@ export function SignInGate({ view }: Props) {
         </div>
       </div>
 
-      {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+      <AnimatePresence>
+        {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+      </AnimatePresence>
     </div>
   )
 }

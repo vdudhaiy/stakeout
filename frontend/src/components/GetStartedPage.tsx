@@ -1,8 +1,9 @@
 import { ArrowRight, Check, Cloud, Copy, Github, HardDrive, Lock, Terminal } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import clsx from 'clsx'
+import { fadeUp } from '../lib/motion'
 
 const REPO_URL = 'https://github.com/vdudhaiy/stakeout'
 
@@ -38,11 +39,6 @@ function Bullet({ children }: { children: React.ReactNode }) {
       <span>{children}</span>
     </li>
   )
-}
-
-const fadeUp = {
-  hidden: { opacity: 0, y: 14 },
-  show: (i: number) => ({ opacity: 1, y: 0, transition: { delay: 0.07 * i, duration: 0.4, ease: 'easeOut' as const } }),
 }
 
 /** Explains the two ways of running Stakeout: this hosted site, or a

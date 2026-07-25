@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, ExternalLink, Newspaper, RefreshCw } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import clsx from 'clsx'
 import { fetchMarketNews, fetchStockNews } from '../api'
 import type { NewsArticle } from '../types'

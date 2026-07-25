@@ -31,6 +31,7 @@ export default defineConfig({
       '/fx': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/ai': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/auth': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      '/account': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
     },
   },
 })

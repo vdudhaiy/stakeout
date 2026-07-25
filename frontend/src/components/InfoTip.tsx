@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { GLOSSARY, type GlossaryKey } from '../utils/glossary'
+import { popIn } from '../lib/motion'
 
 interface Props {
   k: GlossaryKey
@@ -46,15 +48,22 @@ export function InfoTip({ k, align = 'left' }: Props) {
       >
         ?
       </button>
-      {open && (
-        <span
-          role="tooltip"
-          className={`absolute top-5 z-50 w-60 rounded-lg border border-zinc-700 bg-zinc-950 p-3 shadow-2xl text-left normal-case tracking-normal whitespace-normal ${align === 'right' ? 'right-0' : 'left-0'}`}
-        >
-          <span className="block text-[11px] font-semibold text-zinc-100 mb-1">{entry.title}</span>
-          <span className="block text-[11px] leading-relaxed text-zinc-400 font-normal font-sans">{entry.body}</span>
-        </span>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.span
+            role="tooltip"
+            variants={popIn}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            style={{ transformOrigin: align === 'right' ? 'top right' : 'top left' }}
+            className={`absolute top-5 z-50 w-60 rounded-lg border border-zinc-700 bg-zinc-950 p-3 shadow-2xl text-left normal-case tracking-normal whitespace-normal block ${align === 'right' ? 'right-0' : 'left-0'}`}
+          >
+            <span className="block text-[11px] font-semibold text-zinc-100 mb-1">{entry.title}</span>
+            <span className="block text-[11px] leading-relaxed text-zinc-400 font-normal font-sans">{entry.body}</span>
+          </motion.span>
+        )}
+      </AnimatePresence>
     </span>
   )
 }

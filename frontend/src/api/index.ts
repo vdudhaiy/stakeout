@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse } from '../types'
+import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse } from '../types'
 import { applyExchange, type Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
@@ -27,19 +27,6 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${API_BASE}${path}`, { ...init, headers })
 }
 
-
-export async function fetchHealth(): Promise<HealthInfo> {
-  const start = Date.now()
-  try {
-    const res = await apiFetch('/health')
-    const latencyMs = Date.now() - start
-    if (!res.ok) return { status: 'error', latencyMs }
-    const data = await res.json()
-    return { status: data.status === 'ok' ? 'ok' : 'error', latencyMs }
-  } catch {
-    return { status: 'error', latencyMs: null }
-  }
-}
 
 export async function fetchAllStocks(): Promise<WatchlistMap> {
   if (isGuestMode()) return guestWatchlist.getWatchlist()
@@ -242,6 +229,14 @@ export async function deletePortfolioHolding(ticker: string): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to remove ${ticker}`)
+  }
+}
+
+export async function deleteAccount(): Promise<void> {
+  const res = await apiFetch('/account', { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to delete account')
   }
 }
 

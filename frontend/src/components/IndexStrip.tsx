@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from 'recharts'
 import { Globe2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import clsx from 'clsx'
 import { fetchIndices } from '../api'
 import type { IndexQuote } from '../types'

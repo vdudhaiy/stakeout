@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from auth import local_auth_enabled
 from database import init_db
-from routers import ai, fx, health, indicators, news, portfolio, stocks, watchlist
+from routers import account, ai, fx, health, indicators, news, portfolio, stocks, watchlist
 from services.portfolio_service import repair_all_fifo
 
 
@@ -47,6 +47,7 @@ app.include_router(watchlist.router)
 app.include_router(news.router)
 app.include_router(fx.router)
 app.include_router(ai.router)
+app.include_router(account.router)
 
 # Local email/password auth only exists when there's no Supabase project to
 # verify tokens against — a real deployment never sees these routes at all.

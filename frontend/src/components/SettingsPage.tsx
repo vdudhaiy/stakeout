@@ -1,14 +1,17 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import {
-  Database, FileDown, Globe2, LogOut, Moon, Palette, RefreshCw,
+  AlertTriangle, Database, FileDown, Globe2, LogOut, Moon, Palette, RefreshCw,
   Settings as SettingsIcon, ShieldAlert, Sparkles, Sun, Trash2, UserRound,
 } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePrefs, type MarketFilter } from '../contexts/PrefsContext'
 import { useTheme } from '../contexts/ThemeContext'
-import { downloadPortfolio } from '../api'
+import { deleteAccount, downloadPortfolio } from '../api'
 import { InfoTip } from './InfoTip'
+import { collapse, layoutSpring } from '../lib/motion'
 
 // NOTE: draft settings page — sections and copy are a first pass; the exact
 // set of settings will be specified later. Keep each setting self-contained
@@ -59,9 +62,11 @@ function Toggle({
         disabled && 'opacity-40 cursor-not-allowed',
       )}
     >
-      <span
+      <motion.span
+        layout
+        transition={layoutSpring}
         className={clsx(
-          'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+          'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white',
           checked && 'translate-x-4',
         )}
       />
@@ -85,7 +90,11 @@ export function SettingsPage() {
   const { user, isGuest, localAuthMode, signOut } = useAuth()
   const { market, setMarket, aiEnabled, setAiEnabled, aiAvailable } = usePrefs()
   const { isDark, toggleTheme } = useTheme()
+  const navigate = useNavigate()
   const [downloading, setDownloading] = useState<'US' | 'IN' | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const accountType = isGuest
     ? 'Guest session'
@@ -97,6 +106,19 @@ export function SettingsPage() {
     setDownloading(m)
     try { await downloadPortfolio(m) } catch {}
     setDownloading(null)
+  }
+
+  async function confirmDeleteAccount() {
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteAccount()
+      await signOut().catch(() => {})
+      navigate('/')
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Failed to delete account')
+      setDeleting(false)
+    }
   }
 
   return (
@@ -226,17 +248,64 @@ export function SettingsPage() {
           </div>
           <Row
             label="Delete account"
-            hint="Permanently removes your account, watchlist, and portfolios. Not available yet — coming in a future release. Until then, contact the maintainer via a GitHub issue."
+            hint={
+              isGuest
+                ? "You're browsing as a guest — there's no account to delete. Your session data just lives in this browser."
+                : 'Permanently removes your account, watchlist, and portfolios. This cannot be undone.'
+            }
           >
-            <button
-              disabled
-              title="Coming soon"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400/50 text-xs font-medium cursor-not-allowed"
-            >
-              <Trash2 size={12} />
-              Delete account
-            </button>
+            {!confirmingDelete && (
+              <button
+                disabled={isGuest}
+                onClick={() => setConfirmingDelete(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              >
+                <Trash2 size={12} />
+                Delete account
+              </button>
+            )}
           </Row>
+
+          <AnimatePresence>
+            {confirmingDelete && (
+              <motion.div
+                variants={collapse}
+                initial="hidden"
+                animate="show"
+                exit="exit"
+                style={{ overflow: 'hidden' }}
+                className="mt-4"
+              >
+                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3.5">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-red-300 leading-relaxed">
+                      This permanently deletes your account, watchlist, and portfolios — including on the
+                      auth provider. There is no undo.
+                    </p>
+                  </div>
+                  {deleteError && <p className="text-[11px] text-red-400 mt-2">{deleteError}</p>}
+                  <div className="flex items-center gap-2 mt-3">
+                    <button
+                      onClick={confirmDeleteAccount}
+                      disabled={deleting}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                    >
+                      {deleting ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                      Yes, permanently delete my account
+                    </button>
+                    <button
+                      onClick={() => { setConfirmingDelete(false); setDeleteError(null) }}
+                      disabled={deleting}
+                      className="px-3 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 text-zinc-300 text-xs font-medium transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         <p className="text-center text-[11px] text-zinc-600 pb-4">

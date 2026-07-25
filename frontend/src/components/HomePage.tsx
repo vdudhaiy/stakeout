@@ -1,8 +1,9 @@
 import { ArrowRight, BarChart2, Briefcase, Bug, Github, LineChart, Newspaper, Star, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import { NewsPanel } from './NewsPanel'
 import { IndexStrip } from './IndexStrip'
+import { fadeUp } from '../lib/motion'
 
 const FEATURES = [
   {
@@ -30,11 +31,6 @@ const FEATURES = [
       'Sign in with Google or email to sync your watchlist and portfolios across devices — or run it locally with no account at all.',
   },
 ]
-
-const fadeUp = {
-  hidden: { opacity: 0, y: 14 },
-  show: (i: number) => ({ opacity: 1, y: 0, transition: { delay: 0.08 * i, duration: 0.45, ease: 'easeOut' as const } }),
-}
 
 export function HomePage() {
   const navigate = useNavigate()

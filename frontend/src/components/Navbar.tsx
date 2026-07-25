@@ -2,20 +2,16 @@ import { useState, useRef, useEffect } from 'react'
 import clsx from 'clsx'
 import { House, LineChart, Briefcase, Sun, Moon, RefreshCw, LogOut, UserRound, Settings, Compass } from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import type { HealthStatus, LatencyRecord } from '../types'
+import { motion, AnimatePresence } from 'motion/react'
 import { useTheme } from '../contexts/ThemeContext'
 import { useAuth } from '../contexts/AuthContext'
 import { AuthModal } from './AuthModal'
 import { InfoTip } from './InfoTip'
 import { etToLocalHHMM, istToLocalHHMM, localTzAbbr } from '../utils/time'
-import { HEALTH_REFRESH_MS, MARKET_STATUS_REFRESH_MS, formatInterval } from '../utils/env'
+import { MARKET_STATUS_REFRESH_MS, formatInterval } from '../utils/env'
+import { popIn } from '../lib/motion'
 
 interface Props {
-  healthStatus: HealthStatus
-  latencyMs: number | null
-  lastChecked: Date | null
-  latencyHistory: LatencyRecord[]
-  onRefreshHealth: () => Promise<void>
   marketOpen: boolean | null      // US (NYSE/NASDAQ)
   marketOpenIN: boolean | null    // India (NSE/BSE)
   onRefreshMarket: () => Promise<void>
@@ -39,19 +35,6 @@ const IN_SESSIONS = [
   { label: 'Regular',  color: 'text-emerald-400', start: '09:15', end: '15:30' },
   { label: 'Closing',  color: 'text-blue-400',    start: '15:40', end: '16:00' },
 ] as const
-
-function latencyColor(ms: number | null): string {
-  if (ms === null) return 'text-zinc-600'
-  if (ms < 100) return 'text-emerald-400'
-  if (ms < 300) return 'text-yellow-400'
-  return 'text-red-400'
-}
-
-function latencyLabel(ms: number): string {
-  if (ms < 100) return 'Excellent'
-  if (ms < 300) return 'Good'
-  return 'Slow'
-}
 
 function StatusDot({ open }: { open: boolean | null }) {
   return (
@@ -83,27 +66,22 @@ function Wordmark() {
 }
 
 export function Navbar({
-  healthStatus, latencyMs, lastChecked, latencyHistory, onRefreshHealth,
   marketOpen, marketOpenIN, onRefreshMarket,
 }: Props) {
   const { isDark, toggleTheme } = useTheme()
   const { user, isGuest, localAuthMode, signOut } = useAuth()
   const navigate = useNavigate()
   const [showMarketPopup, setShowMarketPopup] = useState(false)
-  const [showHealthPopup, setShowHealthPopup] = useState(false)
   const [showUser, setShowUser] = useState(false)
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [refreshingMarket, setRefreshingMarket] = useState(false)
-  const [refreshingHealth, setRefreshingHealth] = useState(false)
   const marketRef = useRef<HTMLDivElement>(null)
-  const healthRef = useRef<HTMLDivElement>(null)
   const userRef = useRef<HTMLDivElement>(null)
   const tz = localTzAbbr()
 
   useEffect(() => {
     const popups: Array<[boolean, React.RefObject<HTMLDivElement>, (v: boolean) => void]> = [
       [showMarketPopup, marketRef, setShowMarketPopup],
-      [showHealthPopup, healthRef, setShowHealthPopup],
       [showUser, userRef, setShowUser],
     ]
     const active = popups.filter(([open]) => open)
@@ -115,19 +93,12 @@ export function Navbar({
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [showMarketPopup, showHealthPopup, showUser])
+  }, [showMarketPopup, showUser])
 
   async function handleMarketClick() {
     setShowMarketPopup(s => !s)
     setRefreshingMarket(true)
     try { await onRefreshMarket() } finally { setRefreshingMarket(false) }
-  }
-
-  async function handleHealthRefresh(e: React.MouseEvent) {
-    e.stopPropagation()
-    if (refreshingHealth) return
-    setRefreshingHealth(true)
-    try { await onRefreshHealth() } finally { setRefreshingHealth(false) }
   }
 
   const anyOpen = marketOpen === true || marketOpenIN === true
@@ -158,101 +129,6 @@ export function Navbar({
 
       <div className="ml-auto flex items-center gap-3">
 
-        {/* Health status */}
-        <div className="relative" ref={healthRef}>
-          <button
-            onClick={() => setShowHealthPopup(s => !s)}
-            className={clsx(
-              'flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors',
-              showHealthPopup
-                ? 'border-zinc-700 bg-zinc-900 text-zinc-300'
-                : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-300',
-            )}
-          >
-            <span
-              className={clsx('w-2 h-2 rounded-full shrink-0', {
-                'bg-emerald-500': healthStatus === 'ok',
-                'bg-red-500': healthStatus === 'error',
-                'bg-yellow-400 animate-pulse': healthStatus === 'loading',
-              })}
-            />
-            {healthStatus === 'ok' ? 'API Online' : healthStatus === 'loading' ? 'API …' : 'API Offline'}
-          </button>
-
-          {showHealthPopup && (
-            <div className="absolute right-0 top-full mt-2 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] font-semibold tracking-widest text-zinc-400">API HEALTH</p>
-                <button
-                  onClick={handleHealthRefresh}
-                  disabled={refreshingHealth}
-                  title="Refresh health status"
-                  className="text-zinc-600 hover:text-zinc-400 disabled:opacity-40 transition-colors"
-                >
-                  <RefreshCw size={11} className={refreshingHealth ? 'animate-spin' : ''} />
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 mb-4">
-                <span
-                  className={clsx('w-2 h-2 rounded-full shrink-0', {
-                    'bg-emerald-500': healthStatus === 'ok',
-                    'bg-red-500': healthStatus === 'error',
-                    'bg-yellow-400 animate-pulse': healthStatus === 'loading',
-                  })}
-                />
-                <span className="text-sm font-medium text-zinc-200">
-                  {healthStatus === 'ok' ? 'Backend Online' : healthStatus === 'loading' ? 'Connecting…' : 'Backend Offline'}
-                </span>
-                {latencyMs !== null && (
-                  <span className={clsx('ml-auto text-xs font-mono font-medium', latencyColor(latencyMs))}>
-                    {latencyMs} ms
-                  </span>
-                )}
-              </div>
-
-              <div className="space-y-3 mb-4">
-                {latencyMs !== null && (
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-semibold tracking-widest text-zinc-500">LATENCY</span>
-                    <div className="flex items-baseline gap-1.5">
-                      <span className={clsx('font-mono text-xl font-semibold', latencyColor(latencyMs))}>{latencyMs}</span>
-                      <span className="text-zinc-500 text-xs font-mono">ms</span>
-                      <span className={clsx('text-xs font-medium', latencyColor(latencyMs))}>· {latencyLabel(latencyMs)}</span>
-                    </div>
-                  </div>
-                )}
-                {lastChecked && (
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-semibold tracking-widest text-zinc-500">LAST CHECKED</span>
-                    <p className="font-mono text-zinc-300 text-xs">{lastChecked.toLocaleTimeString()}</p>
-                  </div>
-                )}
-              </div>
-
-              {latencyHistory.length > 0 && (
-                <div className="space-y-2">
-                  <span className="text-[10px] font-semibold tracking-widest text-zinc-500">RECENT CHECKS</span>
-                  <div className="space-y-1.5">
-                    {[...latencyHistory].reverse().slice(0, 5).map((r, i) => (
-                      <div key={i} className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-zinc-600">{r.time}</span>
-                        <span className={clsx('flex items-center gap-1', r.status === 'ok' ? 'text-emerald-400' : 'text-red-400')}>
-                          <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', r.status === 'ok' ? 'bg-emerald-500' : 'bg-red-500')} />
-                          {r.status === 'ok' ? 'Online' : 'Offline'}
-                        </span>
-                        <span className={latencyColor(r.latencyMs)}>{r.latencyMs !== null ? `${r.latencyMs} ms` : '—'}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <p className="mt-3 pt-3 border-t border-zinc-800 text-[10px] text-zinc-600">Auto-checks every {formatInterval(HEALTH_REFRESH_MS)}</p>
-            </div>
-          )}
-        </div>
-
         {/* Markets status (US + India) */}
         <div className="relative" ref={marketRef}>
           <button
@@ -279,8 +155,16 @@ export function Navbar({
             />
           </button>
 
+          <AnimatePresence>
           {showMarketPopup && (
-            <div className="absolute right-0 top-full mt-2 z-50 w-80 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl">
+            <motion.div
+              variants={popIn}
+              initial="hidden"
+              animate="show"
+              exit="exit"
+              style={{ transformOrigin: 'top right' }}
+              className="absolute right-0 top-full mt-2 z-50 w-80 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl"
+            >
               <div className="flex items-center justify-between mb-3">
                 <p className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-400">
                   MARKET HOURS <InfoTip k="market_status" />
@@ -320,8 +204,9 @@ export function Navbar({
               </div>
 
               <p className="mt-3 pt-3 border-t border-zinc-800 text-[10px] text-zinc-600">Auto-refreshes every {formatInterval(MARKET_STATUS_REFRESH_MS)}</p>
-            </div>
+            </motion.div>
           )}
+          </AnimatePresence>
         </div>
 
         {/* Account */}
@@ -334,8 +219,16 @@ export function Navbar({
               >
                 {(user.email ?? '?').slice(0, 1)}
               </button>
+              <AnimatePresence>
               {showUser && (
-                <div className="absolute right-0 top-full mt-2 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-2 shadow-2xl">
+                <motion.div
+                  variants={popIn}
+                  initial="hidden"
+                  animate="show"
+                  exit="exit"
+                  style={{ transformOrigin: 'top right' }}
+                  className="absolute right-0 top-full mt-2 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-2 shadow-2xl"
+                >
                   {/* Account summary */}
                   <div className="flex items-center gap-3 px-3 py-3 border-b border-zinc-800 mb-1">
                     <span className="flex items-center justify-center w-9 h-9 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-sm font-semibold uppercase shrink-0">
@@ -365,8 +258,9 @@ export function Navbar({
                   >
                     <LogOut size={12} /> Sign out
                   </button>
-                </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </div>
           ) : isGuest ? (
             <button
@@ -400,7 +294,9 @@ export function Navbar({
         </button>
       </div>
 
-      {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+      <AnimatePresence>
+        {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+      </AnimatePresence>
     </header>
   )
 }

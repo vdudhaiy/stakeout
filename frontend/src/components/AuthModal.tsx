@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import clsx from 'clsx'
 import { Mail, Lock, RefreshCw, X } from 'lucide-react'
+import { motion } from 'motion/react'
 import { useAuth } from '../contexts/AuthContext'
+import { overlayFade, scaleIn } from '../lib/motion'
 
 interface Props {
   onClose: () => void
@@ -55,8 +57,16 @@ export function AuthModal({ onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onMouseDown={onClose}>
-      <div
+    <motion.div
+      variants={overlayFade}
+      initial="hidden"
+      animate="show"
+      exit="exit"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onMouseDown={onClose}
+    >
+      <motion.div
+        variants={scaleIn}
         className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-[22rem] shadow-2xl"
         onMouseDown={e => e.stopPropagation()}
       >
@@ -183,7 +193,7 @@ export function AuthModal({ onClose }: Props) {
             </p>
           </div>
         )}
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }
