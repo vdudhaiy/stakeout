@@ -1,4 +1,4 @@
-import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, IndicatorsResponse, NewsResponse, StockNewsResponse, Market } from '../types'
+import type { OHLCVResponse, HealthInfo, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse } from '../types'
 import { applyExchange, type Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
@@ -27,17 +27,6 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${API_BASE}${path}`, { ...init, headers })
 }
 
-
-export async function fetchVersion(): Promise<string | null> {
-  try {
-    const res = await apiFetch('/version')
-    if (!res.ok) return null
-    const data = await res.json()
-    return (data.version as string) ?? null
-  } catch {
-    return null
-  }
-}
 
 export async function fetchHealth(): Promise<HealthInfo> {
   const start = Date.now()
@@ -152,7 +141,7 @@ export async function fetchStockDashboard(ticker: string, days: number): Promise
   const res = await apiFetch(`/stocks/${ticker}/dashboard?days=${days}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail ?? `Failed to load dashboard for ${ticker}`)
+    throw new Error(err.detail ?? `Failed to load tracker data for ${ticker}`)
   }
   return res.json()
 }
@@ -292,6 +281,57 @@ export async function fetchStockNews(ticker: string, limit = 10): Promise<StockN
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to load news for ${ticker}`)
+  }
+  return res.json()
+}
+
+// ── Market indices & classification ───────────────────────────────────────
+
+export async function fetchIndices(): Promise<IndicesResponse> {
+  const res = await apiFetch('/stocks/indices')
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to load market indices')
+  }
+  return res.json()
+}
+
+/** Sector/industry classification for a batch of tickers (24h-cached server-side). */
+export async function fetchClassification(tickers: string[]): Promise<ClassificationMap> {
+  if (tickers.length === 0) return {}
+  const qs = encodeURIComponent(tickers.join(','))
+  const res = await apiFetch(`/stocks/classification?tickers=${qs}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to load sector/industry data')
+  }
+  const data = await res.json()
+  return (data.classification as ClassificationMap) ?? {}
+}
+
+// ── AI Explanation Layer ──────────────────────────────────────────────────
+// Backed by a locally-run Ollama model — both calls can 503 if it isn't
+// running, which callers should render as an inline "unavailable" state
+// rather than a hard error.
+
+export async function fetchStockExplanation(ticker: string, refresh = false): Promise<StockExplanationResponse> {
+  const res = await apiFetch(`/ai/stocks/${ticker}/explain${refresh ? '?refresh=true' : ''}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load AI insight for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function sendChatMessage(message: string, context: ChatContext, history: ChatMessage[]): Promise<ChatResponse> {
+  const res = await apiFetch('/ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, context, history }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to reach the AI assistant')
   }
   return res.json()
 }

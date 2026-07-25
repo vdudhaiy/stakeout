@@ -1,17 +1,17 @@
 [project]
-name = "market-lens"
+name = "stakeout"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "market-lens-utils",
-    # "market-lens-models",  # TODO: uncomment once models/ is committed
-    "market-lens-dashboard",
+    "stakeout-utils",
+    # "stakeout-models",  # TODO: uncomment once models/ is committed
+    "stakeout-dashboard",
 ]
 
 [tool.uv.sources]
-market-lens-utils = { workspace = true }
-# market-lens-models = { workspace = true }  # TODO: uncomment once models/ is committed
-market-lens-dashboard = { workspace = true }
+stakeout-utils = { workspace = true }
+# stakeout-models = { workspace = true }  # TODO: uncomment once models/ is committed
+stakeout-dashboard = { workspace = true }
 
 [tool.uv.workspace]
 members = [

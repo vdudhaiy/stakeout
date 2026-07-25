@@ -1,18 +1,19 @@
 import { useState } from 'react'
-import { LayoutDashboard, Briefcase, UserRound } from 'lucide-react'
+import { LineChart, Briefcase, Settings, UserRound } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { AuthModal } from './AuthModal'
 
 interface Props {
-  view: 'dashboard' | 'portfolio'
+  view: 'tracker' | 'portfolio' | 'settings'
 }
 
 const COPY = {
-  dashboard: { icon: LayoutDashboard, label: 'Dashboard' },
+  tracker: { icon: LineChart, label: 'Tracker' },
   portfolio: { icon: Briefcase, label: 'Portfolio' },
+  settings: { icon: Settings, label: 'Account settings' },
 } as const
 
-/** Shown in place of the Dashboard/Portfolio view when nobody's signed in
+/** Shown in place of the Tracker/Portfolio/Settings view when nobody's signed in
  * and the visitor hasn't chosen to continue as a guest yet. */
 export function SignInGate({ view }: Props) {
   const { continueAsGuest } = useAuth()

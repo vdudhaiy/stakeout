@@ -11,7 +11,7 @@ import pandas as pd
 from datetime import date, datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from market_lens_dashboard.services.stock_service import (
+from services.stock_service import (
     _last_completed_trading_day,
     get_market_status,
     get_all_stocks,
@@ -28,7 +28,7 @@ from market_lens_dashboard.services.stock_service import (
     _snapshot_cache,
     _update_attempted,
 )
-from market_lens_dashboard.schemas.stocks import (
+from schemas.stocks import (
     OHLCV,
     OHLCVResponse,
     EPSHistoryResponse,
@@ -83,9 +83,9 @@ async def test_get_all_stocks_reads_archive_and_builds_dict():
     mock_ticker.ticker = "AAPL"
     mock_ticker.info = {"displayName": "Apple Inc."}
 
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_symbols",
+    with patch("services.stock_service.market_data_service.get_symbols",
                new_callable=AsyncMock, return_value=["AAPL"]):
-        with patch("market_lens_dashboard.services.stock_service.yf.Ticker", return_value=mock_ticker):
+        with patch("services.stock_service.yf.Ticker", return_value=mock_ticker):
             result = await get_all_stocks()
 
     assert "AAPL" in result
@@ -95,7 +95,7 @@ async def test_get_all_stocks_reads_archive_and_builds_dict():
 async def test_get_all_stocks_cache_hit_skips_query():
     _snapshot_cache.set("all_stocks", {"AAPL": "Apple"})
 
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_symbols",
+    with patch("services.stock_service.market_data_service.get_symbols",
                new_callable=AsyncMock) as mock_symbols:
         result = await get_all_stocks()
 
@@ -104,7 +104,7 @@ async def test_get_all_stocks_cache_hit_skips_query():
 
 
 async def test_get_all_stocks_no_symbols_returns_empty_dict():
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_symbols",
+    with patch("services.stock_service.market_data_service.get_symbols",
                new_callable=AsyncMock, return_value=[]):
         result = await get_all_stocks()
     assert result == {}
@@ -115,9 +115,9 @@ async def test_get_all_stocks_falls_back_to_short_name():
     mock_ticker.ticker = "AAPL"
     mock_ticker.info = {"displayName": None, "shortName": "Apple"}
 
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_symbols",
+    with patch("services.stock_service.market_data_service.get_symbols",
                new_callable=AsyncMock, return_value=["AAPL"]):
-        with patch("market_lens_dashboard.services.stock_service.yf.Ticker", return_value=mock_ticker):
+        with patch("services.stock_service.yf.Ticker", return_value=mock_ticker):
             result = await get_all_stocks()
 
     assert result["AAPL"] == "Apple"
@@ -126,7 +126,7 @@ async def test_get_all_stocks_falls_back_to_short_name():
 # ── delete_stock ──────────────────────────────────────────────────────────────
 
 async def test_delete_stock_removes_matching_rows():
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.delete_symbol",
+    with patch("services.stock_service.market_data_service.delete_symbol",
                new_callable=AsyncMock, return_value=1) as mock_delete:
         result = await delete_stock("AAPL")
 
@@ -135,7 +135,7 @@ async def test_delete_stock_removes_matching_rows():
 
 
 async def test_delete_stock_no_matching_rows_raises():
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.delete_symbol",
+    with patch("services.stock_service.market_data_service.delete_symbol",
                new_callable=AsyncMock, return_value=0):
         with pytest.raises(ValueError, match="No data found"):
             await delete_stock("AAPL")
@@ -145,7 +145,7 @@ async def test_delete_stock_invalidates_cache():
     _snapshot_cache.set("AAPL:detailed", "cached_value")
     _snapshot_cache.set("all_stocks", {"AAPL": "Apple"})
 
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.delete_symbol",
+    with patch("services.stock_service.market_data_service.delete_symbol",
                new_callable=AsyncMock, return_value=1):
         await delete_stock("AAPL")
 
@@ -161,10 +161,10 @@ async def test_fetch_returns_ohlcv_response():
         "low": 182.0, "close": 184.0, "volume": 5_000_000,
     }]
 
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_ohlcv",
+    with patch("services.stock_service.market_data_service.get_ohlcv",
                new_callable=AsyncMock, return_value=records):
         with patch(
-            "market_lens_dashboard.services.stock_service._last_completed_trading_day",
+            "services.stock_service._last_completed_trading_day",
             new_callable=AsyncMock,
             return_value=pd.Timestamp("2024-01-15"),
         ):
@@ -176,7 +176,7 @@ async def test_fetch_returns_ohlcv_response():
 
 
 async def test_fetch_no_data_raises():
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_ohlcv",
+    with patch("services.stock_service.market_data_service.get_ohlcv",
                new_callable=AsyncMock, return_value=[]):
         with pytest.raises(ValueError, match="No data found"):
             await fetch("AAPL")
@@ -193,14 +193,14 @@ async def test_fetch_stale_data_triggers_append():
     }]
 
     # last_completed is ahead of last_date → need_update=True
-    with patch("market_lens_dashboard.services.stock_service.market_data_service.get_ohlcv",
+    with patch("services.stock_service.market_data_service.get_ohlcv",
                new_callable=AsyncMock, side_effect=[stale_records, fresh_records]):
         with patch(
-            "market_lens_dashboard.services.stock_service._last_completed_trading_day",
+            "services.stock_service._last_completed_trading_day",
             new_callable=AsyncMock,
             return_value=pd.Timestamp("2024-01-15"),
         ):
-            with patch("market_lens_dashboard.services.price_fetcher.append_price_data",
+            with patch("services.price_fetcher.append_price_data",
                        new_callable=AsyncMock) as mock_append:
                 result = await fetch("AAPL", days=1)
 
@@ -273,7 +273,7 @@ async def test_fetch_current_market_open_aggregates_session(fake_to_thread):
     mock_stock.ticker = "AAPL"
     mock_stock.history.return_value = df
 
-    with patch("market_lens_dashboard.services.stock_service.asyncio.to_thread",
+    with patch("services.stock_service.asyncio.to_thread",
                side_effect=fake_to_thread):
         result = await fetch_current(mock_stock, is_market_open=True)
 
@@ -295,7 +295,7 @@ async def test_fetch_current_market_open_no_rth_data_raises(fake_to_thread):
     mock_stock.ticker = "AAPL"
     mock_stock.history.return_value = df
 
-    with patch("market_lens_dashboard.services.stock_service.asyncio.to_thread",
+    with patch("services.stock_service.asyncio.to_thread",
                side_effect=fake_to_thread):
         with pytest.raises(ValueError):
             await fetch_current(mock_stock, is_market_open=True)
@@ -311,9 +311,9 @@ async def test_fetch_current_market_closed_falls_back_to_archive(fake_to_thread)
     mock_stock.ticker = "AAPL"
     mock_stock.history.return_value = df
 
-    with patch("market_lens_dashboard.services.stock_service.asyncio.to_thread",
+    with patch("services.stock_service.asyncio.to_thread",
                side_effect=fake_to_thread):
-        with patch("market_lens_dashboard.services.stock_service.fetch",
+        with patch("services.stock_service.fetch",
                    new_callable=AsyncMock, return_value=last_data):
             result = await fetch_current(mock_stock, is_market_open=False)
 
@@ -330,9 +330,9 @@ async def test_fetch_current_market_closed_returns_after_hours_price(fake_to_thr
     mock_stock.ticker = "AAPL"
     mock_stock.history.return_value = df
 
-    with patch("market_lens_dashboard.services.stock_service.asyncio.to_thread",
+    with patch("services.stock_service.asyncio.to_thread",
                side_effect=fake_to_thread):
-        with patch("market_lens_dashboard.services.stock_service.fetch",
+        with patch("services.stock_service.fetch",
                    new_callable=AsyncMock, return_value=last_data):
             result = await fetch_current(mock_stock, is_market_open=False)
 
@@ -354,7 +354,7 @@ async def test_get_market_status_returns_true_when_open():
         "market_close": [pd.Timestamp(now + timedelta(hours=2))],
     })
 
-    with patch("market_lens_dashboard.services.stock_service.mcal.get_calendar",
+    with patch("services.stock_service.mcal.get_calendar",
                return_value=_mock_cal_with_schedule(schedule)):
         result = await get_market_status()
 
@@ -368,7 +368,7 @@ async def test_get_market_status_returns_false_when_closed():
         "market_close": [pd.Timestamp(now - timedelta(hours=2))],
     })
 
-    with patch("market_lens_dashboard.services.stock_service.mcal.get_calendar",
+    with patch("services.stock_service.mcal.get_calendar",
                return_value=_mock_cal_with_schedule(schedule)):
         result = await get_market_status()
 
@@ -376,7 +376,7 @@ async def test_get_market_status_returns_false_when_closed():
 
 
 async def test_get_market_status_holiday_empty_schedule_returns_false():
-    with patch("market_lens_dashboard.services.stock_service.mcal.get_calendar",
+    with patch("services.stock_service.mcal.get_calendar",
                return_value=_mock_cal_with_schedule(pd.DataFrame())):
         result = await get_market_status()
 
@@ -397,7 +397,7 @@ async def test_last_completed_trading_day_returns_most_recent_closed():
         index=pd.DatetimeIndex([pd.Timestamp(yesterday.date())]),
     )
 
-    with patch("market_lens_dashboard.services.stock_service.mcal.get_calendar",
+    with patch("services.stock_service.mcal.get_calendar",
                return_value=_mock_cal_with_schedule(schedule)):
         result = await _last_completed_trading_day()
 
@@ -406,7 +406,7 @@ async def test_last_completed_trading_day_returns_most_recent_closed():
 
 
 async def test_last_completed_trading_day_empty_schedule_returns_none():
-    with patch("market_lens_dashboard.services.stock_service.mcal.get_calendar",
+    with patch("services.stock_service.mcal.get_calendar",
                return_value=_mock_cal_with_schedule(pd.DataFrame())):
         result = await _last_completed_trading_day()
 
@@ -424,7 +424,7 @@ async def test_last_completed_trading_day_no_closed_sessions_returns_none():
         index=pd.DatetimeIndex([pd.Timestamp(now.date())]),
     )
 
-    with patch("market_lens_dashboard.services.stock_service.mcal.get_calendar",
+    with patch("services.stock_service.mcal.get_calendar",
                return_value=_mock_cal_with_schedule(schedule)):
         result = await _last_completed_trading_day()
 
@@ -600,7 +600,7 @@ async def test_fetch_detailed_cache_miss_calls_stock_service():
     mock_stock = MagicMock()
     mock_stock.ticker = "AAPL"
 
-    with patch("market_lens_dashboard.services.stock_service.StockService") as MockSvc:
+    with patch("services.stock_service.StockService") as MockSvc:
         MockSvc.return_value.get_stock_details.return_value = expected
         result = await fetch_detailed(mock_stock)
 
@@ -615,7 +615,7 @@ async def test_fetch_detailed_cache_hit_skips_stock_service():
     mock_stock = MagicMock()
     mock_stock.ticker = "AAPL"
 
-    with patch("market_lens_dashboard.services.stock_service.StockService") as MockSvc:
+    with patch("services.stock_service.StockService") as MockSvc:
         result = await fetch_detailed(mock_stock)
 
     MockSvc.assert_not_called()
@@ -630,9 +630,9 @@ async def test_get_industry_map_groups_tickers():
         m.info = {"industry": "Technology"}
         return m
 
-    with patch("market_lens_dashboard.services.stock_service.get_all_stocks",
+    with patch("services.stock_service.get_all_stocks",
                new_callable=AsyncMock, return_value={"AAPL": "Apple", "MSFT": "Microsoft"}):
-        with patch("market_lens_dashboard.services.stock_service.yf.Ticker", side_effect=_mock_yf):
+        with patch("services.stock_service.yf.Ticker", side_effect=_mock_yf):
             result = await get_industry_map()
 
     assert "Technology" in result
@@ -645,9 +645,9 @@ async def test_get_sector_map_groups_tickers():
         m.info = {"sector": "Technology" if sym == "AAPL" else "Financial Services"}
         return m
 
-    with patch("market_lens_dashboard.services.stock_service.get_all_stocks",
+    with patch("services.stock_service.get_all_stocks",
                new_callable=AsyncMock, return_value={"AAPL": "Apple", "JPM": "JPMorgan"}):
-        with patch("market_lens_dashboard.services.stock_service.yf.Ticker", side_effect=_mock_yf):
+        with patch("services.stock_service.yf.Ticker", side_effect=_mock_yf):
             result = await get_sector_map()
 
     assert "Technology" in result
@@ -663,14 +663,14 @@ async def test_fetch_stock_dashboard_returns_combined_response():
     eps = EPSHistoryResponse(ticker="AAPL", earnings_history=[])
     revenue = RevenueHistoryResponse(ticker="AAPL", revenue_history=[])
 
-    with patch("market_lens_dashboard.services.stock_service.yf.Ticker"):
-        with patch("market_lens_dashboard.services.stock_service.fetch",
+    with patch("services.stock_service.yf.Ticker"):
+        with patch("services.stock_service.fetch",
                    new_callable=AsyncMock, return_value=ohlcv):
-            with patch("market_lens_dashboard.services.stock_service.fetch_detailed",
+            with patch("services.stock_service.fetch_detailed",
                        new_callable=AsyncMock, return_value=detailed):
-                with patch("market_lens_dashboard.services.stock_service.fetch_eps_history",
+                with patch("services.stock_service.fetch_eps_history",
                            new_callable=AsyncMock, return_value=eps):
-                    with patch("market_lens_dashboard.services.stock_service.fetch_revenue_history",
+                    with patch("services.stock_service.fetch_revenue_history",
                                new_callable=AsyncMock, return_value=revenue):
                         result = await fetch_stock_dashboard("AAPL", days=1)
 
@@ -683,14 +683,14 @@ async def test_fetch_stock_dashboard_eps_and_revenue_errors_yield_none():
     ohlcv = OHLCVResponse(ticker="AAPL", data=[OHLCV(date="2024-01-15", close=184.0)])
     detailed = StockDetailedResponse(ticker="AAPL")
 
-    with patch("market_lens_dashboard.services.stock_service.yf.Ticker"):
-        with patch("market_lens_dashboard.services.stock_service.fetch",
+    with patch("services.stock_service.yf.Ticker"):
+        with patch("services.stock_service.fetch",
                    new_callable=AsyncMock, return_value=ohlcv):
-            with patch("market_lens_dashboard.services.stock_service.fetch_detailed",
+            with patch("services.stock_service.fetch_detailed",
                        new_callable=AsyncMock, return_value=detailed):
-                with patch("market_lens_dashboard.services.stock_service.fetch_eps_history",
+                with patch("services.stock_service.fetch_eps_history",
                            new_callable=AsyncMock, side_effect=ValueError("no eps")):
-                    with patch("market_lens_dashboard.services.stock_service.fetch_revenue_history",
+                    with patch("services.stock_service.fetch_revenue_history",
                                new_callable=AsyncMock, side_effect=ValueError("no revenue")):
                         result = await fetch_stock_dashboard("AAPL", days=1)
 

@@ -160,7 +160,7 @@ export async function buy(ticker: string, shares: number, boughtAt: number, date
     const companyName = await resolveTickerName(ticker)
     holding = { ticker, market: marketOf(ticker), companyName, shares: 0, soldShares: 0, averageCost: 0, transactions: [] }
     state[ticker] = holding
-    // A newly-bought ticker should show up on the dashboard too, not just the portfolio.
+    // A newly-bought ticker should show up on the tracker too, not just the portfolio.
     await guestWatchlist.addTicker(ticker)
   }
   const newTxn: GuestTxn = {

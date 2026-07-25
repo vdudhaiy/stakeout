@@ -4,6 +4,8 @@ import clsx from 'clsx'
 import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon, ChevronDown } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
+import { GetStartedPage } from './components/GetStartedPage'
+import { SettingsPage } from './components/SettingsPage'
 import { PortfolioPage } from './components/PortfolioPage'
 import { TickerSidebar } from './components/TickerSidebar'
 import { ComparisonView } from './components/ComparisonView'
@@ -17,6 +19,8 @@ import { StockInfoCard } from './components/StockInfoCard'
 import { AnalystPanel } from './components/AnalystPanel'
 import { EarningsHistoryPanel } from './components/EarningsHistoryPanel'
 import { Footer } from './components/Footer'
+import { AIInsightCard } from './components/AIInsightCard'
+import { AIChatWidget } from './components/AIChatWidget'
 import { fetchAllStocks, fetchCurrentStock, fetchHealth, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock, fetchIndicators } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
 import { NewsPanel } from './components/NewsPanel'
@@ -24,10 +28,11 @@ import { TickerTape } from './components/TickerTape'
 import { InfoTip } from './components/InfoTip'
 import { SignInGate } from './components/SignInGate'
 import { useAuth } from './contexts/AuthContext'
+import { usePrefs } from './contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney } from './utils/currency'
 import { marketOf } from './utils/market'
 import { HEALTH_REFRESH_MS, MARKET_STATUS_REFRESH_MS, PRICE_REFRESH_MS } from './utils/env'
-import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV } from './types'
+import type { OHLCV, HealthInfo, LatencyRecord, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV, PortfolioResponse, ChatContext } from './types'
 import { SMA_PERIODS, EMA_PERIODS, SMA_COLORS, EMA_COLORS } from './utils/indicators'
 import type { OverlayConfig } from './utils/indicators'
 
@@ -52,8 +57,11 @@ const SUBCHART_TITLES = {
 
 const PATH_TO_VIEW: Record<string, View> = {
   '/': 'home',
-  '/dashboard': 'dashboard',
+  '/tracker': 'tracker',
+  '/dashboard': 'tracker',   // legacy alias — the Dashboard was renamed to Tracker
   '/portfolio': 'portfolio',
+  '/settings': 'settings',
+  '/get-started': 'get-started',
 }
 
 export default function App() {
@@ -61,6 +69,7 @@ export default function App() {
   const navigate = useNavigate()
   const view: View = PATH_TO_VIEW[location.pathname] ?? 'home'
   const { canUseApp } = useAuth()
+  const { aiEnabled } = usePrefs()
 
   const [ticker, setTicker] = useState('')
   const [allTickers, setAllTickers] = useState<WatchlistMap | null>(null)
@@ -92,6 +101,7 @@ export default function App() {
   const [overlayBB, setOverlayBB] = useState(false)
   const [openDropdown, setOpenDropdown] = useState<'sma' | 'ema' | null>(null)
   const [subCharts, setSubCharts] = useState({ rsi: false, macd: false })
+  const [portfolioSnapshot, setPortfolioSnapshot] = useState<PortfolioResponse | null>(null)
 
   const checkHealth = useCallback(() =>
     fetchHealth().then(info => {
@@ -374,6 +384,17 @@ export default function App() {
   const shortName = details?.info?.shortName as string | undefined
   const primaryName = displayName ?? shortName
 
+  // The AI chat is only wired up with real context on the Tracker (watchlist +
+  // per-stock details) and Portfolio pages — nowhere else has anything for it
+  // to talk about, so it stays hidden there rather than showing an empty shell.
+  const showAIChat = view === 'tracker' || view === 'portfolio'
+  const aiChatContext: ChatContext =
+    view === 'tracker' && ticker
+      ? { kind: 'stock', ticker }
+      : view === 'portfolio' && portfolioSnapshot
+        ? { kind: 'portfolio', facts: portfolioSnapshot }
+        : { kind: 'general' }
+
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
       <Navbar
@@ -387,16 +408,20 @@ export default function App() {
         onRefreshMarket={checkMarket}
       />
 
-      {view !== 'home' && <TickerTape tickers={allTickers} />}
+      {view !== 'home' && view !== 'get-started' && <TickerTape tickers={allTickers} />}
 
       {view === 'home' ? (
         <HomePage />
+      ) : view === 'get-started' ? (
+        <GetStartedPage />
       ) : !canUseApp ? (
         <SignInGate view={view} />
+      ) : view === 'settings' ? (
+        <SettingsPage />
       ) : view === 'portfolio' ? (
         <PortfolioPage
           onViewTicker={async (t) => {
-            navigate('/dashboard')
+            navigate('/tracker')
             if (allTickers && t in allTickers) {
               setTicker(t)
               return
@@ -418,6 +443,7 @@ export default function App() {
             }
           }}
           onTickerAdded={async () => { setAllTickers(await fetchAllStocks()) }}
+          onData={setPortfolioSnapshot}
         />
       ) : (
         <div className="flex flex-1 overflow-hidden">
@@ -612,6 +638,9 @@ export default function App() {
 
               {/* Company info (sector / industry / summary) */}
               {details?.info && <StockInfoCard info={details.info} />}
+
+              {/* AI-generated plain-English summary of the indicators below */}
+              {aiEnabled && ticker && <AIInsightCard key={ticker} ticker={ticker} />}
 
               {/* Charts */}
               {error ? (
@@ -911,6 +940,8 @@ export default function App() {
       )}
 
       <Footer />
+
+      {aiEnabled && showAIChat && <AIChatWidget context={aiChatContext} />}
 
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">

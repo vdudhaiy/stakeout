@@ -12,9 +12,9 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "market-lens",
-    "market-lens-dashboard",
-    "market-lens-utils",
+    "stakeout",
+    "stakeout-dashboard",
+    "stakeout-utils",
 ]
 
 [[package]]
@@ -782,87 +782,6 @@ wheels = [
 ]
 
 [[package]]
-name = "market-lens"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "market-lens-dashboard" },
-    { name = "market-lens-utils" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "market-lens-dashboard", editable = "backend" },
-    { name = "market-lens-utils", editable = "utils" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-]
-
-[[package]]
-name = "market-lens-dashboard"
-version = "0.1.0"
-source = { editable = "backend" }
-dependencies = [
-    { name = "aiosqlite" },
-    { name = "alembic" },
-    { name = "asyncpg" },
-    { name = "bcrypt" },
-    { name = "email-validator" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "lxml" },
-    { name = "market-lens-utils" },
-    { name = "pandas" },
-    { name = "pandas-market-calendars" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "sqlalchemy" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "xlsxwriter" },
-    { name = "yfinance" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiosqlite" },
-    { name = "alembic" },
-    { name = "asyncpg" },
-    { name = "bcrypt" },
-    { name = "email-validator" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "lxml" },
-    { name = "market-lens-utils", editable = "utils" },
-    { name = "pandas" },
-    { name = "pandas-market-calendars" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "sqlalchemy" },
-    { name = "uvicorn", extras = ["standard"] },
-    { name = "xlsxwriter" },
-    { name = "yfinance", specifier = ">=1.4.1" },
-]
-
-[[package]]
-name = "market-lens-utils"
-version = "0.1.0"
-source = { editable = "utils" }
-
-[[package]]
 name = "markupsafe"
 version = "3.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1465,6 +1384,87 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/65/9b/112fb8f977582d7489d036e409e3723948bcf5320b3ac465f3c481bbe8f9/sqlalchemy-2.0.50-cp314-cp314t-win_amd64.whl", hash = "sha256:c5c3cdb753a9004183e1ccb634b41611654c989e61bc68617ce878e46d6f1e51", size = 2185794, upload-time = "2026-05-24T20:09:00.319Z" },
     { url = "https://files.pythonhosted.org/packages/d0/10/f7220e9b784d295d241c86ed99aeb537f92afcd469a64861f2717e9bb077/sqlalchemy-2.0.50-py3-none-any.whl", hash = "sha256:92064363517a3ff8212b5a93b8c62876579d8dfd1ca5b561335f30152d884fa9", size = 1943861, upload-time = "2026-05-24T19:59:01.119Z" },
 ]
+
+[[package]]
+name = "stakeout"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "stakeout-dashboard" },
+    { name = "stakeout-utils" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "stakeout-dashboard", editable = "backend" },
+    { name = "stakeout-utils", editable = "utils" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+]
+
+[[package]]
+name = "stakeout-dashboard"
+version = "0.1.0"
+source = { editable = "backend" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "bcrypt" },
+    { name = "email-validator" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "lxml" },
+    { name = "pandas" },
+    { name = "pandas-market-calendars" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "sqlalchemy" },
+    { name = "stakeout-utils" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "xlsxwriter" },
+    { name = "yfinance" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite" },
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "bcrypt" },
+    { name = "email-validator" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "lxml" },
+    { name = "pandas" },
+    { name = "pandas-market-calendars" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "sqlalchemy" },
+    { name = "stakeout-utils", editable = "utils" },
+    { name = "uvicorn", extras = ["standard"] },
+    { name = "xlsxwriter" },
+    { name = "yfinance", specifier = ">=1.4.1" },
+]
+
+[[package]]
+name = "stakeout-utils"
+version = "0.1.0"
+source = { editable = "utils" }
 
 [[package]]
 name = "starlette"

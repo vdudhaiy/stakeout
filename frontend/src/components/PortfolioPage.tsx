@@ -1,13 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import clsx from 'clsx'
 import {
   Plus, ChevronDown, ChevronUp,
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
   BarChart2, AlertTriangle, FileDown,
 } from 'lucide-react'
-import { PieChart, Pie, Cell, Tooltip as ChartTooltip, ResponsiveContainer } from 'recharts'
-import type { Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
-import { fetchPortfolio, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio } from '../api'
+import { PieChart, Pie, Cell, Tooltip as ChartTooltip, Legend, ResponsiveContainer } from 'recharts'
+import type { ClassificationMap, Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
+import { fetchPortfolio, fetchClassification, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio } from '../api'
 import { usePrefs } from '../contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney, type Currency } from '../utils/currency'
 import { marketOf, currencyOfExchange, type Exchange } from '../utils/market'
@@ -100,6 +100,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 const DONUT_COLORS = ['#E4B95B', '#2FBF71', '#5B9BE4', '#B45BE4', '#E45B7B', '#5BE4C4', '#E48A5B', '#8AE45B']
 
 function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: MoneyFmt }) {
+  const [open, setOpen] = useState(true)
   // Holdings with no live quote (stock_value == null) are left out of the
   // chart entirely rather than plotted as a $0 sliver — same reasoning as
   // excluding them from portfolio_value: an unpriced holding isn't "worth
@@ -119,38 +120,252 @@ function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: 
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-      <p className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500 mb-2">
+      <div
+        onClick={() => setOpen(o => !o)}
+        className={clsx('flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500 cursor-pointer', open && 'mb-2')}
+      >
         ALLOCATION <InfoTip k="allocation" />
         {unpriced > 0 && (
           <span className="ml-auto text-zinc-600 font-normal normal-case tracking-normal">
             {unpriced} holding{unpriced > 1 ? 's' : ''} excluded (price unavailable)
           </span>
         )}
-      </p>
-      <div className="flex items-center gap-6 flex-wrap">
-        <div className="w-40 h-40 shrink-0">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={70} paddingAngle={2} stroke="none">
-                {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
-              </Pie>
-              <ChartTooltip
-                formatter={(v: number, name: string) => [`${money(v)} · ${((v / total) * 100).toFixed(1)}%`, name]}
-                contentStyle={{ background: '#0A0E16', border: '1px solid #2A3446', borderRadius: 8, fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="flex-1 min-w-[180px] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-          {data.map((d, i) => (
-            <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
-              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-              <span className="text-zinc-300">{d.name}</span>
-              <span className="ml-auto text-zinc-500">{((d.value / total) * 100).toFixed(1)}%</span>
-            </div>
-          ))}
-        </div>
+        <button
+          onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
+          title={open ? 'Minimize' : 'Expand'}
+          className={clsx('p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors', !unpriced && 'ml-auto')}
+        >
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
       </div>
+      {open && (
+        <div className="flex items-center gap-6 flex-wrap">
+          <div className="w-40 h-40 shrink-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={70} paddingAngle={2} stroke="none">
+                  {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
+                </Pie>
+                <ChartTooltip
+                  formatter={(v: number, name: string) => [`${money(v)} · ${((v / total) * 100).toFixed(1)}%`, name]}
+                  contentStyle={{ background: '#0A0E16', border: '1px solid #2A3446', borderRadius: 8, fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+                  itemStyle={{ color: '#E4E4E7' }}
+                  labelStyle={{ color: '#E4E4E7' }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex-1 min-w-[180px] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            {data.map((d, i) => (
+              <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
+                <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                <span className="text-zinc-300">{d.name}</span>
+                <span className="ml-auto text-zinc-500">{((d.value / total) * 100).toFixed(1)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Sector / industry breakdown ───────────────────────────────────────────────
+//
+// Groups the current market's holdings by sector and by industry (via the
+// cached /stocks/classification endpoint) and charts them two ways:
+//   · Invested value — each group's share of total cost basis (total_invested)
+//   · Holdings count — how many positions fall in each group
+// The US/India split comes from the page's existing market tabs.
+
+type BreakdownMetric = 'invested' | 'count'
+
+function groupBy(
+  holdings: StockHolding[],
+  classification: ClassificationMap,
+  dim: 'sector' | 'industry',
+  metric: BreakdownMetric,
+): { name: string; value: number; tickers: string[] }[] {
+  const groups = new Map<string, { value: number; tickers: string[] }>()
+  for (const h of holdings) {
+    const label = classification[h.ticker]?.[dim] ?? 'Unclassified'
+    const weight = metric === 'invested' ? Number(h.total_invested) : 1
+    if (metric === 'invested' && !(weight > 0)) continue
+    const g = groups.get(label) ?? { value: 0, tickers: [] }
+    g.value += weight
+    g.tickers.push(h.ticker)
+    groups.set(label, g)
+  }
+  return [...groups.entries()]
+    .map(([name, g]) => ({ name, ...g }))
+    .sort((a, b) => b.value - a.value)
+}
+
+function BreakdownPie({
+  title, data, metric, money,
+}: {
+  title: string
+  data: { name: string; value: number; tickers: string[] }[]
+  metric: BreakdownMetric
+  money: MoneyFmt
+}) {
+  const total = data.reduce((s, d) => s + d.value, 0)
+  if (data.length === 0 || total <= 0) {
+    return (
+      <div className="flex-1 min-w-[260px]">
+        <p className="text-[10px] font-semibold tracking-widest text-zinc-500 mb-2">{title}</p>
+        <p className="text-xs text-zinc-600 py-6">Nothing to chart yet.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="flex-1 min-w-[260px]">
+      <p className="text-[10px] font-semibold tracking-widest text-zinc-500 mb-1">{title}</p>
+      <div className="h-56">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              innerRadius={40}
+              outerRadius={68}
+              paddingAngle={2}
+              stroke="none"
+            >
+              {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
+            </Pie>
+            <ChartTooltip
+              formatter={(v: number, name: string, entry: { payload?: { tickers?: string[] } }) => {
+                const pct = ((v / total) * 100).toFixed(1)
+                const tickers = entry?.payload?.tickers ?? []
+                const shown = tickers.slice(0, 6).join(', ') + (tickers.length > 6 ? ', …' : '')
+                const amount = metric === 'invested'
+                  ? `${money(v)} · ${pct}%`
+                  : `${v} holding${v === 1 ? '' : 's'} · ${pct}%`
+                return [`${amount}${shown ? ` — ${shown}` : ''}`, name]
+              }}
+              contentStyle={{
+                background: '#0A0E16',
+                border: '1px solid #2A3446',
+                borderRadius: 8,
+                fontSize: 11,
+                fontFamily: 'IBM Plex Mono, monospace',
+                maxWidth: 280,
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+              }}
+              itemStyle={{ color: '#E4E4E7', whiteSpace: 'normal' }}
+              labelStyle={{ color: '#E4E4E7' }}
+            />
+            <Legend
+              verticalAlign="bottom"
+              iconType="square"
+              iconSize={8}
+              formatter={(value: string) => <span className="text-[10px] font-mono text-zinc-400">{value}</span>}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
+function BreakdownCard({
+  holdings, market, money,
+}: {
+  holdings: StockHolding[]
+  market: Market
+  money: MoneyFmt
+}) {
+  const [classification, setClassification] = useState<ClassificationMap | null>(null)
+  const [metric, setMetric] = useState<BreakdownMetric>('invested')
+  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(true)
+
+  const tickers = useMemo(
+    () => holdings.filter(h => h.shares > 0).map(h => h.ticker).sort(),
+    [holdings],
+  )
+  const tickersKey = tickers.join(',')
+
+  useEffect(() => {
+    if (tickers.length === 0) { setClassification({}); return }
+    let cancelled = false
+    setClassification(null)
+    setFailed(false)
+    fetchClassification(tickers)
+      .then(map => { if (!cancelled) setClassification(map) })
+      .catch(() => { if (!cancelled) setFailed(true) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tickersKey])
+
+  const active = useMemo(() => holdings.filter(h => h.shares > 0), [holdings])
+  if (active.length < 2) return null
+  if (failed) return null
+
+  const sectorData = classification ? groupBy(active, classification, 'sector', metric) : []
+  const industryData = classification ? groupBy(active, classification, 'industry', metric) : []
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+      <div className={clsx('flex items-center gap-2 flex-wrap', open && 'mb-3')}>
+        <p className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500">
+          SECTOR &amp; INDUSTRY BREAKDOWN <InfoTip k="allocation" />
+        </p>
+        <span className="text-[10px] text-zinc-600 font-mono">
+          {market === 'IN' ? 'India · NSE/BSE' : 'US · NYSE/NASDAQ'} portfolio
+        </span>
+        {open && (
+          <div className="ml-auto flex rounded-lg overflow-hidden border border-zinc-800">
+            {([
+              { value: 'invested' as BreakdownMetric, label: 'Invested value' },
+              { value: 'count' as BreakdownMetric, label: 'Holdings count' },
+            ]).map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setMetric(value)}
+                className={clsx(
+                  'px-2.5 py-1 text-[10px] font-medium transition-colors',
+                  metric === value
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-zinc-400 hover:bg-zinc-950 hover:text-zinc-200',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        <button
+          onClick={() => setOpen(o => !o)}
+          title={open ? 'Minimize' : 'Expand'}
+          className={clsx('p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors', !open && 'ml-auto')}
+        >
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+      </div>
+
+      {open && (classification === null ? (
+        <div className="flex gap-6">
+          <div className="flex-1 h-56 rounded-lg bg-zinc-800/50 animate-pulse" />
+          <div className="flex-1 h-56 rounded-lg bg-zinc-800/50 animate-pulse" />
+        </div>
+      ) : (
+        <div className="flex gap-6 flex-wrap">
+          <BreakdownPie title="BY SECTOR" data={sectorData} metric={metric} money={money} />
+          <BreakdownPie title="BY INDUSTRY" data={industryData} metric={metric} money={money} />
+        </div>
+      ))}
+
+      {open && (
+        <p className="mt-2 text-[10px] text-zinc-600">
+          {metric === 'invested'
+            ? 'Slices are each group\u2019s share of your invested amount (cost basis of currently held shares).'
+            : 'Slices are how many of your positions fall in each group.'}
+        </p>
+      )}
     </div>
   )
 }
@@ -489,11 +704,11 @@ function HoldingRow({
           {money(holding.total_earned)}
         </span>
 
-        {/* Dashboard link */}
+        {/* Tracker link */}
         <div className="flex items-center justify-center">
           <button
             onClick={e => { e.stopPropagation(); onViewTicker() }}
-            title={`View ${holding.ticker} on dashboard`}
+            title={`View ${holding.ticker} on the tracker`}
             className="p-1 text-zinc-600 hover:text-indigo-400 hover:bg-indigo-500/10 rounded transition-colors"
           >
             <BarChart2 size={13} />
@@ -588,10 +803,13 @@ export function PortfolioPage({
   onViewTicker,
   onTickerRemoved,
   onTickerAdded,
+  onData,
 }: {
   onViewTicker: (ticker: string) => void
   onTickerRemoved?: (ticker: string) => void
   onTickerAdded?: () => void
+  /** Fired with the latest fetched portfolio — lets the AI chat widget stay aware of it without a duplicate fetch. */
+  onData?: (portfolio: PortfolioResponse | null) => void
 }) {
   const { market: prefsMarket, setMarket: setPrefsMarket } = usePrefs()
   const [tab, setTab] = useState<Market>(prefsMarket === 'IN' ? 'IN' : 'US')
@@ -613,14 +831,16 @@ export function PortfolioPage({
     setLoading(true)
     setError(null)
     try {
-      setPortfolio(await fetchPortfolio(tab))
+      const result = await fetchPortfolio(tab)
+      setPortfolio(result)
+      onData?.(result)
       setLastUpdated(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load portfolio')
     } finally {
       setLoading(false)
     }
-  }, [tab])
+  }, [tab, onData])
 
   // The tab's native currency: every aggregate below is stored in it.
   const nativeCcy: Currency = tab === 'IN' ? 'INR' : 'USD'
@@ -823,6 +1043,9 @@ export function PortfolioPage({
 
             {/* ── Allocation ─────────────────────────────────────────── */}
             <AllocationCard holdings={holdings} money={money} />
+
+            {/* ── Sector / industry breakdown ─────────────────────────── */}
+            <BreakdownCard holdings={holdings} market={tab} money={money} />
 
             {/* ── Holdings ───────────────────────────────────────────── */}
             {holdings.length === 0 ? (

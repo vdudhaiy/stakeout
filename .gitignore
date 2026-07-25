@@ -4,6 +4,7 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+.claude/
 
 # OS files
 .DS_Store

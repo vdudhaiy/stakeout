@@ -7,7 +7,7 @@ _replay_fifo only reads/writes plain attributes on its arguments.
 import pytest
 from types import SimpleNamespace
 
-from market_lens_dashboard.services.portfolio_service import _replay_fifo, _position_as_of
+from services.portfolio_service import _replay_fifo, _position_as_of
 
 
 def _holding(**kw):

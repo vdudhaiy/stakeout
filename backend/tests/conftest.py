@@ -11,12 +11,12 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from market_lens_dashboard import markets
-from market_lens_dashboard.auth import get_current_user, get_optional_user
-from market_lens_dashboard.database import Base, get_session
-from market_lens_dashboard.models import local_auth as _local_auth  # noqa: F401 — registers models with Base
-from market_lens_dashboard.models import portfolio as _  # noqa: F401 — registers models with Base
-from market_lens_dashboard.main import app
+import markets
+from auth import get_current_user, get_optional_user
+from database import Base, get_session
+from models import local_auth as _local_auth  # noqa: F401 — registers models with Base
+from models import portfolio as _  # noqa: F401 — registers models with Base
+from main import app
 
 TEST_USER_ID = "test-user"
 
@@ -77,8 +77,8 @@ async def client(db_engine):
     app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
     app.dependency_overrides[get_optional_user] = lambda: TEST_USER_ID
 
-    with patch("market_lens_dashboard.main.init_db", new_callable=AsyncMock):
-        with patch("market_lens_dashboard.main.repair_all_fifo", new_callable=AsyncMock):
+    with patch("main.init_db", new_callable=AsyncMock):
+        with patch("main.repair_all_fifo", new_callable=AsyncMock):
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
                 yield c
 

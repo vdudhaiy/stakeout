@@ -1,6 +1,4 @@
 import clsx from 'clsx'
-import { InfoTip } from './InfoTip'
-import type { GlossaryKey } from '../utils/glossary'
 
 interface Props {
   open: number | null
@@ -32,14 +30,13 @@ export function OHLCVStats({ open, high, low, close, volume, prevClose, format }
   const isPositive = change !== null ? change >= 0 : null
   const money = (v: number | null) => (v == null ? '—' : format ? format(v) : `$${fmtPrice(v)}`)
 
-  const stats: Array<{ label: string; tip: GlossaryKey; value: string; colored: boolean; isPositive?: boolean | null }> = [
-    { label: 'OPEN',  tip: 'open',  value: money(open),  colored: false },
-    { label: 'HIGH',  tip: 'high',  value: money(high),  colored: false },
-    { label: 'LOW',   tip: 'low',   value: money(low),   colored: false },
-    { label: 'CLOSE', tip: 'close', value: money(close), colored: false },
+  const stats: Array<{ label: string; value: string; colored: boolean; isPositive?: boolean | null }> = [
+    { label: 'OPEN',  value: money(open),  colored: false },
+    { label: 'HIGH',  value: money(high),  colored: false },
+    { label: 'LOW',   value: money(low),   colored: false },
+    { label: 'CLOSE', value: money(close), colored: false },
     {
       label: 'CHANGE',
-      tip: 'change',
       value:
         change !== null
           ? `${format ? format(change, { sign: true }) : `${isPositive ? '+' : ''}${fmtPrice(change)}`} (${isPositive ? '+' : ''}${changePct!.toFixed(2)}%)`
@@ -47,14 +44,14 @@ export function OHLCVStats({ open, high, low, close, volume, prevClose, format }
       colored: true,
       isPositive,
     },
-    { label: 'VOLUME', tip: 'volume', value: fmtVolume(volume), colored: false },
+    { label: 'VOLUME', value: fmtVolume(volume), colored: false },
   ]
 
   return (
     <div className="grid grid-cols-6 gap-px bg-zinc-800 rounded-xl overflow-hidden border border-zinc-800">
-      {stats.map(({ label, tip, value, colored, isPositive: pos }) => (
+      {stats.map(({ label, value, colored, isPositive: pos }) => (
         <div key={label} className="bg-zinc-900 px-4 py-3 flex flex-col gap-1.5">
-          <span className="flex items-center gap-1.5 text-zinc-500 text-[10px] tracking-widest font-medium">{label} <InfoTip k={tip} /></span>
+          <span className="text-zinc-500 text-[10px] tracking-widest font-medium">{label}</span>
           <span
             className={clsx(
               'font-mono text-sm font-medium',

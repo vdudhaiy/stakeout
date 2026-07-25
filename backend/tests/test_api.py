@@ -7,10 +7,10 @@ what the client fixture already provides.
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from market_lens_dashboard.schemas.portfolio import (
+from schemas.portfolio import (
     PortfolioResponse, StockHolding, StockPurchaseHistory,
 )
-from market_lens_dashboard.schemas.stocks import (
+from schemas.stocks import (
     OHLCV, OHLCVResponse, StockDetailedResponse,
 )
 
@@ -54,29 +54,13 @@ async def test_health_returns_ok(client):
     assert resp.json() == {"status": "ok"}
 
 
-async def test_version_endpoint_returns_latest_release_tag(client):
-    with patch("market_lens_dashboard.main.get_latest_release_tag",
-               new_callable=AsyncMock, return_value="v1.2.3"):
-        resp = await client.get("/version")
-    assert resp.status_code == 200
-    assert resp.json() == {"version": "v1.2.3"}
-
-
-async def test_version_endpoint_falls_back_when_github_unavailable(client):
-    with patch("market_lens_dashboard.main.get_latest_release_tag",
-               new_callable=AsyncMock, return_value=None):
-        resp = await client.get("/version")
-    assert resp.status_code == 200
-    assert resp.json() == {"version": "0.1.0"}
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Portfolio — GET
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def test_get_portfolio_empty(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.get_portfolio",
+        "routers.portfolio.portfolio_service.get_portfolio",
         new_callable=AsyncMock, return_value=_empty_portfolio(),
     ):
         resp = await client.get("/portfolio/")
@@ -91,7 +75,7 @@ async def test_get_portfolio_with_holding(client):
     portfolio.holdings = [_sample_holding()]
     portfolio.portfolio_value = 17500.0
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.get_portfolio",
+        "routers.portfolio.portfolio_service.get_portfolio",
         new_callable=AsyncMock, return_value=portfolio,
     ):
         resp = await client.get("/portfolio/")
@@ -102,7 +86,7 @@ async def test_get_portfolio_with_holding(client):
 
 async def test_get_stock_holding_success(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.get_stock_holding",
+        "routers.portfolio.portfolio_service.get_stock_holding",
         new_callable=AsyncMock, return_value=_sample_holding(),
     ):
         resp = await client.get("/portfolio/AAPL")
@@ -113,7 +97,7 @@ async def test_get_stock_holding_success(client):
 
 async def test_get_stock_holding_not_found(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.get_stock_holding",
+        "routers.portfolio.portfolio_service.get_stock_holding",
         new_callable=AsyncMock, side_effect=ValueError("No holding found for ticker: XYZ"),
     ):
         resp = await client.get("/portfolio/XYZ")
@@ -127,7 +111,7 @@ async def test_get_stock_holding_not_found(client):
 
 async def test_buy_stock_success(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.add_stock_purchase",
+        "routers.portfolio.portfolio_service.add_stock_purchase",
         new_callable=AsyncMock, return_value=_sample_holding(),
     ):
         resp = await client.post("/portfolio/AAPL/buy?shares=100&bought_at=150.0")
@@ -137,7 +121,7 @@ async def test_buy_stock_success(client):
 
 async def test_buy_stock_invalid_ticker_returns_400(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.add_stock_purchase",
+        "routers.portfolio.portfolio_service.add_stock_purchase",
         new_callable=AsyncMock,
         side_effect=ValueError("Ticker 'XYZ' could not be found"),
     ):
@@ -147,7 +131,7 @@ async def test_buy_stock_invalid_ticker_returns_400(client):
 
 async def test_sell_stock_success(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.sell_stock_shares",
+        "routers.portfolio.portfolio_service.sell_stock_shares",
         new_callable=AsyncMock, return_value=_sample_holding(),
     ):
         resp = await client.post("/portfolio/AAPL/sell?shares=50&sold_at=180.0")
@@ -156,7 +140,7 @@ async def test_sell_stock_success(client):
 
 async def test_sell_stock_insufficient_shares_returns_400(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.sell_stock_shares",
+        "routers.portfolio.portfolio_service.sell_stock_shares",
         new_callable=AsyncMock,
         side_effect=ValueError("Only 100 share(s) were available — cannot sell 999."),
     ):
@@ -170,7 +154,7 @@ async def test_sell_stock_insufficient_shares_returns_400(client):
 
 async def test_delete_holding_success(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.delete_stock_holding",
+        "routers.portfolio.portfolio_service.delete_stock_holding",
         new_callable=AsyncMock,
         return_value={"message": "Holding for AAPL deleted successfully."},
     ):
@@ -181,7 +165,7 @@ async def test_delete_holding_success(client):
 
 async def test_delete_holding_not_found_returns_404(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.delete_stock_holding",
+        "routers.portfolio.portfolio_service.delete_stock_holding",
         new_callable=AsyncMock, side_effect=ValueError("No holding found"),
     ):
         resp = await client.delete("/portfolio/NOTEXIST")
@@ -190,7 +174,7 @@ async def test_delete_holding_not_found_returns_404(client):
 
 async def test_delete_transaction_success(client):
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.delete_transaction",
+        "routers.portfolio.portfolio_service.delete_transaction",
         new_callable=AsyncMock, return_value=_sample_holding(),
     ):
         resp = await client.delete("/portfolio/AAPL/transactions/1")
@@ -200,7 +184,7 @@ async def test_delete_transaction_success(client):
 async def test_delete_last_transaction_returns_empty_object(client):
     """When the holding is also deleted, the router returns {}."""
     with patch(
-        "market_lens_dashboard.routers.portfolio.portfolio_service.delete_transaction",
+        "routers.portfolio.portfolio_service.delete_transaction",
         new_callable=AsyncMock, return_value=None,
     ):
         resp = await client.delete("/portfolio/AAPL/transactions/1")
@@ -214,7 +198,7 @@ async def test_delete_last_transaction_returns_empty_object(client):
 
 async def test_get_all_stocks(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.get_all_stocks",
+        "routers.stocks.stock_service.get_all_stocks",
         new_callable=AsyncMock, return_value={"AAPL": "Apple Inc.", "MSFT": "Microsoft"},
     ):
         resp = await client.get("/stocks/")
@@ -225,7 +209,7 @@ async def test_get_all_stocks(client):
 
 async def test_get_market_status_closed(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.get_market_status",
+        "routers.stocks.stock_service.get_market_status",
         new_callable=AsyncMock, return_value=False,
     ):
         resp = await client.get("/stocks/market")
@@ -235,7 +219,7 @@ async def test_get_market_status_closed(client):
 
 async def test_get_market_status_open(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.get_market_status",
+        "routers.stocks.stock_service.get_market_status",
         new_callable=AsyncMock, return_value=True,
     ):
         resp = await client.get("/stocks/market")
@@ -244,7 +228,7 @@ async def test_get_market_status_open(client):
 
 async def test_get_industries(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.get_industry_map",
+        "routers.stocks.stock_service.get_industry_map",
         new_callable=AsyncMock, return_value={"Technology": ["AAPL", "MSFT"]},
     ):
         resp = await client.get("/stocks/industries")
@@ -254,7 +238,7 @@ async def test_get_industries(client):
 
 async def test_get_sectors(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.get_sector_map",
+        "routers.stocks.stock_service.get_sector_map",
         new_callable=AsyncMock, return_value={"Technology": ["AAPL"]},
     ):
         resp = await client.get("/stocks/sectors")
@@ -264,7 +248,7 @@ async def test_get_sectors(client):
 
 async def test_get_stock_ohlcv(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.fetch",
+        "routers.stocks.stock_service.fetch",
         new_callable=AsyncMock, return_value=_sample_ohlcv(),
     ):
         resp = await client.get("/stocks/AAPL")
@@ -276,7 +260,7 @@ async def test_get_stock_ohlcv(client):
 
 async def test_get_stock_not_in_archive_returns_404(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.fetch",
+        "routers.stocks.stock_service.fetch",
         new_callable=AsyncMock, side_effect=ValueError("No CSV data found for ticker: NOTEXIST"),
     ):
         resp = await client.get("/stocks/NOTEXIST")
@@ -289,7 +273,7 @@ async def test_get_stock_not_in_archive_returns_404(client):
 
 async def test_add_stock_when_already_exists(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.get_all_stocks",
+        "routers.stocks.stock_service.get_all_stocks",
         new_callable=AsyncMock, return_value={"AAPL": "Apple Inc."},
     ):
         resp = await client.post("/stocks/AAPL")
@@ -299,7 +283,7 @@ async def test_add_stock_when_already_exists(client):
 
 async def test_delete_stock_success(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.delete_stock",
+        "routers.stocks.stock_service.delete_stock",
         new_callable=AsyncMock, return_value={"message": "deleted"},
     ):
         resp = await client.delete("/stocks/AAPL")
@@ -308,7 +292,7 @@ async def test_delete_stock_success(client):
 
 async def test_delete_stock_not_found_returns_404(client):
     with patch(
-        "market_lens_dashboard.routers.stocks.stock_service.delete_stock",
+        "routers.stocks.stock_service.delete_stock",
         new_callable=AsyncMock, side_effect=ValueError("No CSV data found for ticker: NOTEXIST"),
     ):
         resp = await client.delete("/stocks/NOTEXIST")

@@ -27,3 +27,11 @@ export const MARKET_STATUS_REFRESH_MS = envMs('VITE_MARKET_STATUS_REFRESH_MS', 5
 export const PRICE_REFRESH_MS = envMs('VITE_PRICE_REFRESH_MS', 2 * 60_000)
 export const PORTFOLIO_REFRESH_MS = envMs('VITE_PORTFOLIO_REFRESH_MS', 2 * 60_000)
 export const TICKER_TAPE_REFRESH_MS = envMs('VITE_TICKER_TAPE_REFRESH_MS', 5 * 60_000)
+
+// True when this build is talking to a locally-proxied backend (`VITE_API_URL`
+// unset — e.g. `npm run dev`, same convention api/index.ts uses for API_BASE)
+// rather than a deployed one (Vercel -> Render, VITE_API_URL set to the Render
+// URL). AI features call an Ollama instance expected to run next to the
+// backend process, which only holds for local dev — see aiAvailable in
+// PrefsContext.
+export const IS_LOCAL_DEV = !(import.meta.env.VITE_API_URL as string | undefined)?.trim()

@@ -27,7 +27,7 @@ interface AuthContextType {
   loading: boolean
   /** True once the visitor has chosen "Continue as Guest" this session */
   isGuest: boolean
-  /** True when the dashboard/portfolio may be viewed: signed in, or guest */
+  /** True when the tracker/portfolio may be viewed: signed in, or guest */
   canUseApp: boolean
   continueAsGuest: () => void
   signInWithGoogle: () => Promise<void>

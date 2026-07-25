@@ -19,8 +19,8 @@ import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 from sqlalchemy import select
 
-from market_lens_dashboard.models.portfolio import Holding, Transaction
-from market_lens_dashboard.services import portfolio_service
+from models.portfolio import Holding, Transaction
+from services import portfolio_service
 
 USER_ID = "test-user"
 
@@ -31,18 +31,18 @@ USER_ID = "test-user"
 # stubbing its two external dependencies (fetch_current, yf.Ticker.history).
 
 async def test_current_price_uses_live_quote():
-    from market_lens_dashboard.schemas.stocks import OHLCV, OHLCVResponse
+    from schemas.stocks import OHLCV, OHLCVResponse
     response = OHLCVResponse(ticker="AAPL", data=[OHLCV(date="2024-01-15", close=184.0)])
-    with patch("market_lens_dashboard.services.portfolio_service.fetch_current",
+    with patch("services.portfolio_service.fetch_current",
                new_callable=AsyncMock, return_value=response):
         price = await portfolio_service._current_price("AAPL")
     assert price == Decimal("184.0")
 
 
 async def test_current_price_returns_none_when_both_sources_fail():
-    with patch("market_lens_dashboard.services.portfolio_service.fetch_current",
+    with patch("services.portfolio_service.fetch_current",
                new_callable=AsyncMock, side_effect=Exception("network error")):
-        with patch("market_lens_dashboard.services.portfolio_service.yf.Ticker") as mock_ticker:
+        with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
             mock_ticker.return_value.history.side_effect = Exception("also fails")
             price = await portfolio_service._current_price("AAPL")
     assert price is None
@@ -50,9 +50,9 @@ async def test_current_price_returns_none_when_both_sources_fail():
 
 async def test_current_price_falls_back_to_direct_history_when_live_fetch_fails():
     import pandas as pd
-    with patch("market_lens_dashboard.services.portfolio_service.fetch_current",
+    with patch("services.portfolio_service.fetch_current",
                new_callable=AsyncMock, side_effect=Exception("archive missing")):
-        with patch("market_lens_dashboard.services.portfolio_service.yf.Ticker") as mock_ticker:
+        with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
             hist = pd.DataFrame({"Close": [123.45]})
             mock_ticker.return_value.history.return_value = hist
             price = await portfolio_service._current_price("AAPL")
@@ -84,11 +84,11 @@ async def aapl_session(db_session):
 # ── add_stock_purchase ────────────────────────────────────────────────────────
 
 async def test_add_purchase_creates_new_holding(db_session):
-    with patch("market_lens_dashboard.services.portfolio_service._validate_and_fetch_name",
+    with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
-        with patch("market_lens_dashboard.services.portfolio_service._current_price",
+        with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
-            with patch("market_lens_dashboard.services.portfolio_service.asyncio.create_task"):
+            with patch("services.portfolio_service.asyncio.create_task"):
                 result = await portfolio_service.add_stock_purchase(
                     db_session, USER_ID, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
                 )
@@ -101,7 +101,7 @@ async def test_add_purchase_creates_new_holding(db_session):
 
 
 async def test_add_purchase_to_existing_holding(aapl_session):
-    with patch("market_lens_dashboard.services.portfolio_service._current_price",
+    with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("175.0")):
         result = await portfolio_service.add_stock_purchase(
             aapl_session, USER_ID, "AAPL", shares=50, bought_at=Decimal("160.0"), date="2024-02-01"
@@ -122,7 +122,7 @@ async def test_add_purchase_future_date_raises(db_session):
 # ── sell_stock_shares ─────────────────────────────────────────────────────────
 
 async def test_sell_reduces_shares(aapl_session):
-    with patch("market_lens_dashboard.services.portfolio_service._current_price",
+    with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         result = await portfolio_service.sell_stock_shares(
             aapl_session, USER_ID, "AAPL", shares=40, sold_at=Decimal("200.0"), date="2024-02-01"
@@ -199,7 +199,7 @@ async def test_delete_one_of_two_transactions_rereplays_fifo(db_session):
     # Refresh to get IDs
     await db_session.refresh(b1)
 
-    with patch("market_lens_dashboard.services.portfolio_service._current_price",
+    with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("300.0")):
         result = await portfolio_service.delete_transaction(db_session, USER_ID, "TSLA", b1.id)
 
@@ -228,7 +228,7 @@ async def test_delete_holding_not_found_raises(db_session):
 # ── get_portfolio ─────────────────────────────────────────────────────────────
 
 async def test_get_portfolio_empty_db(db_session):
-    with patch("market_lens_dashboard.services.portfolio_service.get_market_status",
+    with patch("services.portfolio_service.get_market_status",
                new_callable=AsyncMock, return_value=False):
         result = await portfolio_service.get_portfolio(db_session, USER_ID)
 
@@ -308,11 +308,11 @@ async def test_get_portfolio_as_of_does_not_persist_changes(aapl_session):
 # ── audit log / undo ──────────────────────────────────────────────────────────
 
 async def test_buy_logs_an_insert_audit_entry(db_session):
-    with patch("market_lens_dashboard.services.portfolio_service._validate_and_fetch_name",
+    with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
-        with patch("market_lens_dashboard.services.portfolio_service._current_price",
+        with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
-            with patch("market_lens_dashboard.services.portfolio_service.asyncio.create_task"):
+            with patch("services.portfolio_service.asyncio.create_task"):
                 await portfolio_service.add_stock_purchase(
                     db_session, USER_ID, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
                 )
@@ -327,7 +327,7 @@ async def test_buy_logs_an_insert_audit_entry(db_session):
 async def test_undo_last_buy_reverts_to_prior_state(aapl_session):
     """aapl_session already has 100 shares seeded outside the audit log; buying
     more and undoing it should land exactly back on that pre-existing state."""
-    with patch("market_lens_dashboard.services.portfolio_service._current_price",
+    with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         await portfolio_service.add_stock_purchase(
             aapl_session, USER_ID, "AAPL", shares=50, bought_at=Decimal("160.0"), date="2024-02-01"
@@ -343,11 +343,11 @@ async def test_undo_last_buy_reverts_to_prior_state(aapl_session):
 
 
 async def test_undo_last_buy_that_created_the_holding_removes_it(db_session):
-    with patch("market_lens_dashboard.services.portfolio_service._validate_and_fetch_name",
+    with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
-        with patch("market_lens_dashboard.services.portfolio_service._current_price",
+        with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
-            with patch("market_lens_dashboard.services.portfolio_service.asyncio.create_task"):
+            with patch("services.portfolio_service.asyncio.create_task"):
                 await portfolio_service.add_stock_purchase(
                     db_session, USER_ID, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
                 )
@@ -373,7 +373,7 @@ async def test_undo_delete_of_last_transaction_restores_holding(aapl_session):
 
 
 async def test_undo_delete_holding_restores_holding_and_transactions(aapl_session):
-    with patch("market_lens_dashboard.services.portfolio_service._current_price",
+    with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         await portfolio_service.sell_stock_shares(
             aapl_session, USER_ID, "AAPL", shares=40, sold_at=Decimal("200.0"), date="2024-02-01"
@@ -395,7 +395,7 @@ async def test_undo_with_nothing_to_undo_raises(db_session):
 
 async def test_undo_is_lifo_and_marks_entries_undone(aapl_session):
     """A second undo call reverses the next-most-recent action, not the same one again."""
-    with patch("market_lens_dashboard.services.portfolio_service._current_price",
+    with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         await portfolio_service.add_stock_purchase(
             aapl_session, USER_ID, "AAPL", shares=10, bought_at=Decimal("160.0"), date="2024-02-01"
@@ -421,11 +421,11 @@ async def test_undo_is_lifo_and_marks_entries_undone(aapl_session):
 
 
 async def test_list_audit_log_returns_newest_first(db_session):
-    with patch("market_lens_dashboard.services.portfolio_service._validate_and_fetch_name",
+    with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value=""):
-        with patch("market_lens_dashboard.services.portfolio_service._current_price",
+        with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("100.0")):
-            with patch("market_lens_dashboard.services.portfolio_service.asyncio.create_task"):
+            with patch("services.portfolio_service.asyncio.create_task"):
                 await portfolio_service.add_stock_purchase(
                     db_session, USER_ID, "AAPL", shares=10, bought_at=Decimal("100.0"), date="2024-01-01"
                 )

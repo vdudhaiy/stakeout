@@ -2,7 +2,7 @@
  * Client-only watchlist for guest mode — sessionStorage instead of the
  * per-user `watchlist` table. Seeded once with a handful of default
  * tickers, so a new guest sees something on first load rather than a
- * blank dashboard.
+ * blank tracker.
  */
 import type { WatchlistMap } from '../types'
 import { marketOf } from '../utils/market'
@@ -34,7 +34,7 @@ export async function getWatchlist(): Promise<WatchlistMap> {
   if (!neverInitialized) return state
 
   // First call this session — seed with a small set of default tickers so a
-  // new guest sees something rather than a blank dashboard. Resolved in
+  // new guest sees something rather than a blank tracker. Resolved in
   // parallel: each is an independent archive lookup, and doing 5 tickers
   // sequentially would noticeably delay a guest's first load.
   const resolved = await Promise.allSettled(DEFAULT_TICKERS.map(resolveTickerName))

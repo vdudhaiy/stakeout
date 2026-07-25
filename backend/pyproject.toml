@@ -1,5 +1,5 @@
 [project]
-name = "market-lens-dashboard"  # internal package name kept for import stability; app brand is Stakeout
+name = "stakeout-dashboard"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,7 +9,7 @@ dependencies = [
     "sqlalchemy",
     "aiosqlite",
     "pandas",
-    "market-lens-utils",
+    "stakeout-utils",
     "yfinance>=1.4.1",
     "lxml",
     "pandas_market_calendars",
@@ -22,8 +22,15 @@ dependencies = [
     "email-validator",
 ]
 
+# Flat layout: backend/src has no wrapping package (main.py, config.py, etc. import
+# each other with relative imports and nothing outside backend imports this code),
+# so top-level modules and subpackages are both discovered directly under src.
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["auth", "cache", "config", "database", "main", "markets"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.uv.sources]
-market-lens-utils = { workspace = true }
+stakeout-utils = { workspace = true }

@@ -1,18 +1,10 @@
-import { useEffect, useState } from 'react'
 import { Github, ExternalLink, Bug } from 'lucide-react'
-import { fetchVersion } from '../api'
 
 const REPO_URL   = 'https://github.com/vdudhaiy/stakeout'
 const ISSUES_URL = 'https://github.com/vdudhaiy/stakeout/issues'
 const YFINANCE_URL = 'https://github.com/ranaroussi/yfinance'
 
 export function Footer() {
-  const [version, setVersion] = useState<string | null>(null)
-
-  useEffect(() => {
-    fetchVersion().then(setVersion)
-  }, [])
-
   return (
     <footer className="shrink-0 border-t border-zinc-800 bg-zinc-950 px-6 py-3.5">
       <div className="flex items-center justify-between gap-8 text-[11px]">
@@ -23,7 +15,7 @@ export function Footer() {
             <svg width="12" height="12" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 24l7-10 5 5 8-13" stroke="#E4B95B" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
             <span className="font-display font-semibold text-zinc-300">Stakeout</span>
             <span className="font-mono text-[10px] leading-none text-zinc-600 border border-zinc-800 rounded px-1.5 py-px">
-              {version ?? 'v0.1.0'}
+              v{__APP_VERSION__}
             </span>
           </div>
           <span className="text-zinc-600 pl-[19px]">Open markets, open source.</span>

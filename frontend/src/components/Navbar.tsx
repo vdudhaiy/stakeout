@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import clsx from 'clsx'
-import { House, LayoutDashboard, Briefcase, Sun, Moon, RefreshCw, LogOut, UserRound } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { House, LineChart, Briefcase, Sun, Moon, RefreshCw, LogOut, UserRound, Settings, Compass } from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router-dom'
 import type { HealthStatus, LatencyRecord } from '../types'
 import { useTheme } from '../contexts/ThemeContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -23,8 +23,9 @@ interface Props {
 
 const NAV_ITEMS: Array<{ path: string; label: string; icon: React.ElementType; end?: boolean }> = [
   { path: '/', label: 'Home', icon: House, end: true },
-  { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/tracker', label: 'Tracker', icon: LineChart },
   { path: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  { path: '/get-started', label: 'Get Started', icon: Compass },
 ]
 
 const US_SESSIONS = [
@@ -86,7 +87,8 @@ export function Navbar({
   marketOpen, marketOpenIN, onRefreshMarket,
 }: Props) {
   const { isDark, toggleTheme } = useTheme()
-  const { user, isGuest, signOut } = useAuth()
+  const { user, isGuest, localAuthMode, signOut } = useAuth()
+  const navigate = useNavigate()
   const [showMarketPopup, setShowMarketPopup] = useState(false)
   const [showHealthPopup, setShowHealthPopup] = useState(false)
   const [showUser, setShowUser] = useState(false)
@@ -333,8 +335,30 @@ export function Navbar({
                 {(user.email ?? '?').slice(0, 1)}
               </button>
               {showUser && (
-                <div className="absolute right-0 top-full mt-2 z-50 w-60 bg-zinc-950 border border-zinc-700 rounded-xl p-2 shadow-2xl">
-                  <p className="px-3 py-2 text-xs text-zinc-400 truncate border-b border-zinc-800 mb-1">{user.email}</p>
+                <div className="absolute right-0 top-full mt-2 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-2 shadow-2xl">
+                  {/* Account summary */}
+                  <div className="flex items-center gap-3 px-3 py-3 border-b border-zinc-800 mb-1">
+                    <span className="flex items-center justify-center w-9 h-9 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-sm font-semibold uppercase shrink-0">
+                      {(user.email ?? '?').slice(0, 1)}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-zinc-200 truncate">{user.email}</p>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">
+                        {localAuthMode ? 'Local account · this deployment only' : 'Stakeout account · synced across devices'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="px-3 py-2 border-b border-zinc-800 mb-1 space-y-1">
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">
+                      Your watchlist and both portfolios (US &amp; India) are saved to this account.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setShowUser(false); navigate('/settings') }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-zinc-300 hover:bg-zinc-900 transition-colors"
+                  >
+                    <Settings size={12} /> Account settings
+                  </button>
                   <button
                     onClick={() => { signOut(); setShowUser(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-zinc-300 hover:bg-zinc-900 transition-colors"

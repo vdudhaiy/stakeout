@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-from market_lens_dashboard.database import DATABASE_URL, Base
-from market_lens_dashboard.models import portfolio  # noqa: F401 — registers ORM models with Base.metadata
+from database import DATABASE_URL, Base
+from models import local_auth, market_data, portfolio  # noqa: F401 — registers ORM models with Base.metadata
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
-from market_lens_dashboard.services.stock_service import StockService
+from services.stock_service import StockService
 
 
 def _mock_ticker(ticker="AAPL", **attrs):

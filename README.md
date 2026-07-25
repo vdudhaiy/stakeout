@@ -2,7 +2,7 @@
 
 **Open markets, open source.**
 
-A free, open-source stock tracker for US and Indian markets, deployed to the cloud with multi-user accounts.
+A free, open-source stock tracker for US and Indian markets. Use the hosted web platform with multi-user accounts, or run your own fully private copy locally with Docker.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3b82f6)](https://www.python.org/)
@@ -15,9 +15,14 @@ A free, open-source stock tracker for US and Indian markets, deployed to the clo
 
 Stakeout is a free, open-source app built for everyday people who want to keep watch on their stakes in the market — without paying for a Bloomberg terminal or a SaaS subscription.
 
-You get a clean dashboard with price charts, technical indicators, analyst insights, earnings history, layered news headlines, peer comparison, and a two-market portfolio tracker (US and India) with FIFO cost basis — all powered by publicly available data.
+You get a clean tracker with price charts, technical indicators, analyst insights, earnings history, a week of layered news headlines (company, industry, sector, and market), peer comparison, major US/India index charts, and a two-market portfolio tracker (US and India) with FIFO cost basis and sector/industry breakdowns — all powered by publicly available data.
 
-Deploy the codebase to Vercel + Render + Supabase and get Google / email sign-in with per-user watchlists and portfolios. Don't want an account? Guest Mode lets anyone try the full app with nothing saved beyond their browser session.
+There are **two ways to use Stakeout** (also explained in-app on the **Get Started** page):
+
+1. **Web platform** — the hosted site. Google / email sign-in with per-user watchlists and portfolios that sync across devices, or **Guest Mode** with nothing saved beyond the browser session. Zero setup.
+2. **Local / self-hosted (Docker)** — the most private option, aimed at developers. Clone the repo and `docker compose up`: everything (accounts, portfolios, price data) lives in a Postgres database on your own machine and never leaves it.
+
+You can also deploy your own public instance to Vercel + Render + Supabase — see [Deploying to the Cloud](#deploying-to-the-cloud-vercel--render--supabase).
 
 You're also encouraged to fork this project and build your own version. The codebase is intentionally approachable — a Python backend and a React frontend.
 
@@ -37,16 +42,54 @@ You're also encouraged to fork this project and build your own version. The code
 - **Currency switching** — a USD/INR dropdown in the navbar converts every displayed price using a daily ECB reference rate, with Indian digit grouping (₹1,23,456.78) when INR is selected.
 - **Interactive price & volume charts** — 1-day intraday to 3 years, candlestick or area mode, with SMA/EMA overlays, Bollinger Bands, RSI and MACD oscillator panels.
 - **Explain-everything (?) buttons** — every statistic in the app (OHLC, RSI, FIFO cost basis, analyst upside, …) has a small `?` popover with a plain-language explanation.
-- **Layered news** — the home page shows US and India market headlines; each stock's dashboard shows company → industry → market news, all clickable through to the source.
+- **Layered news carousel** — the home page shows US and India market headlines; each stock's tracker page shows a horizontally scrollable carousel (with ‹ › controls) of the last 7 days of headlines about the company, its industry, its sector, and its market — newest first, all clickable through to the source.
 - **Live price updates** — refreshes every 2 minutes while that stock's home exchange is open; pre-market data shown with timezone info.
 - **Analyst insights** — price target range bar with upside %, recommendation drift (Strong Buy → Strong Sell), and EPS/revenue estimates for upcoming quarters.
 - **Earnings & revenue history** — bar charts with Growth %, Surprise %, and Actual toggles.
 - **Peer comparison** — normalized % change chart to compare stocks in the same industry or sector.
-- **Portfolio tracker** — FIFO cost basis, unrealized/realized P&L per holding, allocation donut, and one-click Excel export — per market.
+- **Portfolio tracker** — FIFO cost basis, unrealized/realized P&L per holding, allocation donut, interactive sector & industry breakdown pies (by invested value or by holdings count, per US/India portfolio), and one-click Excel export — per market.
 - **Watchlist with market filter** — organize by industry/sector tabs, filter All / US / India; a ticker-tape marquee streams your watchlist's latest prices under the navbar.
 - **Multi-user accounts** — Google OAuth or email magic-link sign-in via Supabase; each user gets their own watchlist and portfolios. **Guest Mode** lets anyone try the app without signing in — watchlist and portfolio data stay in the browser for that session and are never written to the database.
 - **Dual market status pill** — NYSE and NSE open/closed at a glance, with session times in ET/IST and your local timezone.
-- **Backend health monitor, dark/light themes, caching** — API latency pill with history; a paper-ledger light theme and terminal-dark theme; TTL caches for quotes (60 s), news (15 min), and FX (1 h) to stay well within free-tier data source limits.
+- **Major index charts** — the home page shows the S&P 500, Dow Jones, NASDAQ, NIFTY 50, SENSEX, and NIFTY Bank with 3-month sparklines and day change, no sign-in needed.
+- **Account settings** — click your avatar (top right) for an account summary popup and a settings page: theme, default market, portfolio exports, and sign-out.
+- **Backend health monitor, dark/light themes, caching** — API latency pill with history; a paper-ledger light theme and terminal-dark theme; TTL caches for quotes (60 s), news (15 min), FX (1 h), index quotes (10 min), and sector/industry classification (24 h) to stay well within free-tier data source limits.
+
+---
+
+## Quick Start — Docker (local / self-hosted)
+
+The fastest way to run your own private Stakeout. Requires only [Docker](https://docs.docker.com/get-docker/) (with Compose v2).
+
+```bash
+git clone https://github.com/vdudhaiy/stakeout.git
+cd stakeout
+docker compose up --build      # or: make docker-up
+```
+
+Open **http://localhost:3000**. That's it — no `.env` needed.
+
+What the stack runs:
+
+| Service | What it is |
+|---------|------------|
+| `db` | Postgres 16 with a persistent volume (`stakeout-pgdata`) — your accounts and portfolios survive restarts |
+| `backend` | The FastAPI API; runs `alembic upgrade head` automatically on start |
+| `frontend` | nginx serving the built React app and proxying API calls to the backend (single origin, no CORS) |
+
+Because no Supabase project is configured, the backend automatically runs its own **local email/password accounts** (stored in your Postgres container) — or click **Continue as Guest** to use the app with nothing saved server-side. All data stays on your machine.
+
+Handy commands:
+
+```bash
+make docker-up      # build + start in the background
+make docker-logs    # follow logs
+make docker-down    # stop (data kept)
+make docker-reset   # stop AND delete the Postgres volume (wipes local data)
+```
+
+> [!NOTE]
+> The Docker stack is for local/self-hosted use. It is entirely independent of the cloud deployment below — you can use either or both.
 
 ---
 
@@ -86,7 +129,7 @@ make frontend          # React at http://localhost:5173
 Open **http://localhost:5173** in your browser. Add a ticker (e.g. `AAPL`, or an Indian ticker like `TCS.NS`) — stock data downloads from Yahoo Finance on demand the first time a ticker is added.
 
 > [!NOTE]
-> The Dashboard and Portfolio views require signing in. Without a Supabase project configured (see [Deploying to the Cloud](#deploying-to-the-cloud-vercel--render--supabase) below), the sign-in screen automatically falls back to **local accounts** — a real email/password account stored in your own local SQLite database, no cloud setup needed. Prefer not to make an account at all? Click **Continue as Guest** instead to try the full app with data kept only in your browser for that session.
+> The Tracker and Portfolio views require signing in. Without a Supabase project configured (see [Deploying to the Cloud](#deploying-to-the-cloud-vercel--render--supabase) below), the sign-in screen automatically falls back to **local accounts** — a real email/password account stored in your own local SQLite database, no cloud setup needed. Prefer not to make an account at all? Click **Continue as Guest** instead to try the full app with data kept only in your browser for that session.
 >
 > If you *do* configure `SUPABASE_JWKS_URL` to test real Supabase sign-in locally instead, `DATABASE_URL` stays independent of it — leave it unset and your account's portfolio/watchlist/price data lands in a local SQLite file, never touching production.
 
@@ -149,7 +192,7 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `LOG_DIR` | `logs/` | Directory where log files are written |
 | `LOG_LEVEL` | `DEBUG` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `ARCHIVE_START_DATE` | `2023-01-01` | Earliest date to archive stock data from |
-| `MARKET_LENS_DATA_DIR` | _(empty → repo root)_ | Root data directory override |
+| `STAKEOUT_DATA_DIR` | _(empty → repo root)_ | Root data directory override |
 | `MODEL_DIR` | `model-store/` | Reserved for future ML model artifacts |
 | `DATABASE_URL` | _(empty → SQLite)_ | Postgres connection string for hosted mode |
 | `SUPABASE_JWKS_URL` | **required** | Verifies user sessions against Supabase's published signing keys |
@@ -161,8 +204,10 @@ Copy `.env.example` to `.env` and adjust as needed:
 
 ```
 stakeout/
+├── docker-compose.yml             # Local/self-hosted stack: Postgres + API + frontend
+├── docker/                        # Dockerfiles + nginx config for that stack
 ├── render.yaml                    # Render blueprint (hosted backend)
-├── Makefile                       # Common developer commands
+├── Makefile                       # Common developer commands (incl. docker-up/down)
 ├── pyproject.toml                 # uv workspace and dependency config
 ├── .env.example                   # Environment variable template
 │
@@ -174,8 +219,6 @@ stakeout/
 └── .github/
     └── workflows/ci.yml           # CI: runs the backend test suite on push/PR
 ```
-
-> **Why do the Python packages still say `market_lens`?** The internal package name (`market_lens_dashboard`) was deliberately kept when the app was rebranded — renaming it would break every import, the uv workspace config, and existing data directories, for zero user-facing benefit. Only the branding you see is Stakeout.
 
 ---
 
@@ -193,6 +236,8 @@ The backend exposes a REST API (Swagger docs at **`/openapi`**). Endpoints marke
 | `GET` | `/stocks/{ticker}?days=N` | Historical OHLCV data |
 | `GET` | `/stocks/{ticker}/current` · `/intraday` | Live price / 15-min bars (market-hours aware per exchange) |
 | `GET` | `/stocks/{ticker}/details` · `/eps` · `/revenue` · `/dashboard` | Analyst data and bundles |
+| `GET` | `/stocks/indices` | Major US/India index quotes + 3-month sparkline series (cached 10 min) |
+| `GET` | `/stocks/classification?tickers=A,B` | Batch sector/industry per ticker (cached 24 h) |
 
 **Watchlist** 🔒
 
@@ -216,7 +261,7 @@ The backend exposes a REST API (Swagger docs at **`/openapi`**). Endpoints marke
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/news/market?region=all\|us\|in` | Market headlines (GDELT, Yahoo fallback; cached 15 min) |
-| `GET` | `/news/stock/{ticker}` | Layered company → industry → market headlines |
+| `GET` | `/news/stock/{ticker}` | Last 7 days of company → industry → sector → market headlines, newest first |
 | `GET` | `/fx/USD/INR` | Daily reference exchange rate (cached 1 h) |
 
 ---
@@ -235,7 +280,7 @@ Market data is fetched via [yfinance](https://github.com/ranaroussi/yfinance), w
 | Auth & DB | Supabase (Postgres, Google OAuth, magic links), PyJWT |
 | Data | yfinance, pandas, pandas-market-calendars, GDELT, Frankfurter |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts, Framer Motion, React Router |
-| Deploy | uv, Render, Vercel |
+| Deploy | uv, Docker Compose (self-hosted), Render, Vercel |
 | CI/CD | GitHub Actions |
 
 ---

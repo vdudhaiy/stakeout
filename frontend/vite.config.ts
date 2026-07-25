@@ -1,6 +1,9 @@
+import { readFileSync } from 'fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import type { IncomingMessage } from 'http'
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
 
 // '/portfolio' is both a backend API prefix and a client-side SPA route.
 // Without this, a full page load/reload on /portfolio (or any deep link to
@@ -14,6 +17,9 @@ function bypassHtmlNavigations(req: IncomingMessage) {
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   server: {
     proxy: {
       '/stocks': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
@@ -23,6 +29,7 @@ export default defineConfig({
       '/watchlist': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/news': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/fx': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      '/ai': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/auth': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
     },
   },

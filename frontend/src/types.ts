@@ -25,7 +25,7 @@ export interface LatencyRecord {
   status: HealthStatus
 }
 
-export type View = 'home' | 'dashboard' | 'portfolio'
+export type View = 'home' | 'tracker' | 'portfolio' | 'settings' | 'get-started'
 
 export interface RecommendationPeriod {
   period?: string | null
@@ -167,7 +167,7 @@ export interface NewsArticle {
   image?: string | null
   provider: 'gdelt' | 'yahoo'
   region?: 'us' | 'in' | 'global'
-  layer?: 'company' | 'industry' | 'market'
+  layer?: 'company' | 'industry' | 'sector' | 'market'
 }
 
 export interface NewsResponse {
@@ -178,6 +178,7 @@ export interface NewsResponse {
 export interface StockNewsResponse {
   ticker: string
   company_name?: string | null
+  sector?: string | null
   industry?: string | null
   market: Market
   articles: NewsArticle[]
@@ -238,4 +239,79 @@ export interface IndicatorsResponse {
   rsi: { ticker: string; period: number; values: IndicatorPoint[] } | null
   macd: { ticker: string; fast: number; slow: number; signal_period: number; values: MACDDataPoint[] } | null
   bollinger: { ticker: string; period: number; std_dev: number; values: BollingerPoint[] } | null
+}
+
+export interface IndexPoint {
+  date: string
+  close: number
+}
+
+export interface IndexQuote {
+  symbol: string
+  name: string
+  region: 'US' | 'IN'
+  last: number
+  change?: number | null
+  change_pct?: number | null
+  points: IndexPoint[]
+}
+
+export interface IndicesResponse {
+  indices: IndexQuote[]
+}
+
+export interface TickerClassification {
+  sector?: string | null
+  industry?: string | null
+}
+
+export type ClassificationMap = Record<string, TickerClassification>
+
+// ── AI Explanation Layer ──────────────────────────────────────────────────
+
+export interface RSIRecoveryStats {
+  occurrences: number
+  horizon_days: number
+  recovered_pct: number
+  avg_return_pct: number
+}
+
+export interface StockFacts {
+  ticker: string
+  as_of: string
+  history_days: number
+  close: number
+  change_pct: number | null
+  rsi: number | null
+  rsi_zone: string | null
+  bollinger_position: string | null
+  macd_signal: string | null
+  sma_trend: string | null
+  volume_vs_avg_pct: number | null
+  rsi_recovery: RSIRecoveryStats | null
+  headlines: string[]
+  confidence: 'low' | 'medium' | 'high'
+}
+
+export interface StockExplanationResponse {
+  ticker: string
+  summary: string
+  facts: StockFacts
+  confidence: 'low' | 'medium' | 'high'
+  generated_at: string
+  model: string
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type ChatContext =
+  | { kind: 'stock'; ticker: string }
+  | { kind: 'portfolio'; facts: PortfolioResponse }
+  | { kind: 'general' }
+
+export interface ChatResponse {
+  reply: string
 }

@@ -15,7 +15,7 @@ interface RippleState {
 }
 
 function getInitialTheme(): boolean {
-  const saved = localStorage.getItem('stakeout-theme') ?? localStorage.getItem('market-lens-theme')
+  const saved = localStorage.getItem('stakeout-theme')
   if (saved === 'light') return false
   if (saved === 'dark') return true
   return true // default dark

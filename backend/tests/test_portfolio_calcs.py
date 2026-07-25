@@ -3,7 +3,7 @@
 import pytest
 from types import SimpleNamespace
 
-from market_lens_dashboard.services.portfolio_service import _realized_gains, _build_stock_holding
+from services.portfolio_service import _realized_gains, _build_stock_holding
 
 
 def _txn(id=1, sale=False, ticker="AAPL", date="2024-01-01",

@@ -2,8 +2,8 @@
 
 import pytest
 
-from market_lens_dashboard.services.export_service import build_portfolio_xlsx
-from market_lens_dashboard.schemas.portfolio import (
+from services.export_service import build_portfolio_xlsx
+from schemas.portfolio import (
     PortfolioResponse, StockHolding, StockPurchaseHistory,
 )
 

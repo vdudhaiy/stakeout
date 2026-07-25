@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from market_lens_dashboard.services.stock_service import _SnapshotCache
+from services.stock_service import _SnapshotCache
 
 
 def test_get_missing_key_returns_none():
@@ -59,7 +59,7 @@ def test_ttl_expiry():
     fake_time = [0.0]
 
     with patch(
-        "market_lens_dashboard.services.stock_service._time.monotonic",
+        "services.stock_service._time.monotonic",
         side_effect=lambda: fake_time[0],
     ):
         # t=0: write entry (expires at t=10)
@@ -81,7 +81,7 @@ def test_ttl_expired_entry_removed_from_store():
     fake_time = [0.0]
 
     with patch(
-        "market_lens_dashboard.services.stock_service._time.monotonic",
+        "services.stock_service._time.monotonic",
         side_effect=lambda: fake_time[0],
     ):
         fake_time[0] = 0.0

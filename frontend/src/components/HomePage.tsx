@@ -2,6 +2,7 @@ import { ArrowRight, BarChart2, Briefcase, Bug, Github, LineChart, Newspaper, St
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { NewsPanel } from './NewsPanel'
+import { IndexStrip } from './IndexStrip'
 
 const FEATURES = [
   {
@@ -93,12 +94,12 @@ export function HomePage() {
             terminal fee. Fork it, self-host it, make it yours.
           </motion.p>
 
-          <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4} className="flex items-center gap-3">
+          <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4} className="flex items-center gap-3 flex-wrap justify-center">
             <button
-              onClick={() => navigate('/dashboard')}
+              onClick={() => navigate('/tracker')}
               className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors"
             >
-              Explore the dashboard
+              Explore the tracker
               <ArrowRight size={14} />
             </button>
             <button
@@ -108,11 +109,20 @@ export function HomePage() {
               <Briefcase size={14} />
               My portfolios
             </button>
+            <button
+              onClick={() => navigate('/get-started')}
+              className="text-sm text-zinc-400 hover:text-zinc-200 underline underline-offset-4 decoration-zinc-700 transition-colors"
+            >
+              Or run it on your own machine →
+            </button>
           </motion.div>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 pb-16 space-y-10">
+        {/* ── Major indices: US + India ────────────────────────────────────── */}
+        <IndexStrip />
+
         {/* ── Headlines: US + India ────────────────────────────────────────── */}
         <div>
           <div className="flex items-center gap-2 mb-3">

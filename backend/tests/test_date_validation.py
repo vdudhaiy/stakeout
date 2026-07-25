@@ -3,7 +3,7 @@
 import datetime
 import pytest
 
-from market_lens_dashboard.services.portfolio_service import _resolve_date
+from services.portfolio_service import _resolve_date
 
 
 def test_none_returns_today():

@@ -9,8 +9,8 @@ which the /auth router actually gets mounted in a real local deployment.
 import pytest
 from fastapi import HTTPException
 
-from market_lens_dashboard import auth
-from market_lens_dashboard.models.local_auth import LocalSession, LocalUser
+import auth
+from models.local_auth import LocalSession, LocalUser
 
 
 # ── local_auth_enabled ────────────────────────────────────────────────────

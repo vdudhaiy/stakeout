@@ -9,7 +9,7 @@ interface Props {
   onSubmit: (ticker: string, exchange: Exchange) => Promise<void>
 }
 
-/** Modal for adding a ticker to the dashboard watchlist — asks for the bare
+/** Modal for adding a ticker to the tracker watchlist — asks for the bare
  * ticker plus its exchange, so the .NS/.BO suffix is never typed by hand. */
 export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
   const [ticker, setTicker] = useState('')
@@ -44,7 +44,7 @@ export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-sm font-semibold text-zinc-100">Add Ticker</h2>
-            <p className="text-xs text-zinc-500 mt-0.5">Track a stock on your dashboard.</p>
+            <p className="text-xs text-zinc-500 mt-0.5">Track a stock on your tracker.</p>
           </div>
           <button onClick={onClose} className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors">
             <X size={15} />

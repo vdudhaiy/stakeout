@@ -1,0 +1,65 @@
+# Stakeout — self-hosted / local Docker deployment.
+#
+#   docker compose up --build        # then open http://localhost:3000
+#
+# What you get:
+#   db        Postgres 16 with a persistent volume (stakeout-pgdata)
+#   backend   FastAPI API; runs `alembic upgrade head` on start
+#   frontend  nginx serving the built SPA and proxying API calls to backend
+#
+# Auth: no SUPABASE_JWKS_URL is set, so the backend automatically runs its
+# own local email/password accounts (stored in Postgres) — no cloud project
+# needed. "Continue as Guest" also works with nothing saved server-side.
+#
+# This file is for local/self-hosted use only. Cloud deployment (Vercel +
+# Render + Supabase) is documented separately in the README and does not
+# use these containers.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stakeout
+      POSTGRES_PASSWORD: stakeout
+      POSTGRES_DB: stakeout
+    volumes:
+      - stakeout-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stakeout -d stakeout"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Uncomment to reach Postgres from your host (psql, GUI clients):
+    # ports:
+    #   - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stakeout:stakeout@db:5432/stakeout
+      LOG_LEVEL: INFO
+      # SUPABASE_JWKS_URL intentionally unset → local email/password auth.
+      # Set it (plus the frontend Supabase env at build time) only if you
+      # want this stack to verify real Supabase sign-ins.
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    # Uncomment to hit the API directly (Swagger at http://localhost:8000/docs):
+    # ports:
+    #   - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  stakeout-pgdata:
