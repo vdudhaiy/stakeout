@@ -38,3 +38,16 @@ export async function localSignIn(email: string, password: string): Promise<Loca
 export async function localSignOut(token: string): Promise<void> {
   await post('/auth/logout', undefined, token).catch(() => {})
 }
+
+/** Changing the password rotates the session — the returned token replaces
+ * the caller's stored one so their own tab stays signed in. */
+export async function localChangePassword(
+  token: string, currentPassword: string, newPassword: string,
+): Promise<LocalAuthResult> {
+  const res = await post(
+    '/auth/change-password',
+    { current_password: currentPassword, new_password: newPassword },
+    token,
+  )
+  return parseAuthResult(res, 'Could not change password')
+}

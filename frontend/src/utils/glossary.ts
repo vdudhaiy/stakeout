@@ -92,7 +92,11 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   net_pl: {
     title: 'Net profit / loss',
-    body: 'The full picture: unrealized return on what you hold plus realized gains from what you sold.',
+    body: 'The full picture: unrealized return on what you hold, plus realized gains from what you sold, plus dividend income received.',
+  },
+  dividends: {
+    title: 'Dividends',
+    body: 'Cash income received while holding shares, independent of price moves. Auto-fetched from Yahoo Finance where available (shares held × amount per share on each ex-dividend date); you can add, edit, or delete entries by hand too.',
   },
   return_pct: {
     title: 'Return %',

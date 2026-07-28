@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, authEnabled } from '../lib/supabase'
-import { localSignUp, localSignIn, localSignOut } from '../lib/localAuth'
+import { localSignUp, localSignIn, localSignOut, localChangePassword } from '../lib/localAuth'
 import { setAuthTokenGetter } from '../api'
 import { isGuestModeActive, setGuestModeActive } from '../lib/guestMode'
 import { clearGuestPortfolio } from '../lib/guestPortfolio'
@@ -32,6 +32,26 @@ interface AuthContextType {
   continueAsGuest: () => void
   signInWithGoogle: () => Promise<void>
   signInWithEmail: (email: string) => Promise<void>
+  /** Supabase password sign-up. Resolves `needsConfirmation: true` when the
+   * project requires confirming the address before a session is issued. */
+  signUpWithPassword: (email: string, password: string) => Promise<{ needsConfirmation: boolean }>
+  signInWithPassword: (email: string, password: string) => Promise<void>
+  /** Emails a password-reset link for a Supabase account. */
+  sendPasswordReset: (email: string) => Promise<void>
+  /** True once the visitor has followed a password-reset email link back
+   * here — Supabase grants a short-lived recovery session and fires this,
+   * regardless of what page or modal state they land on. */
+  passwordRecovery: boolean
+  /** Sets a new password during that recovery session, then clears the flag. */
+  updatePassword: (newPassword: string) => Promise<void>
+  /** Dismiss the recovery prompt without changing the password. */
+  dismissPasswordRecovery: () => void
+  /** Change password for an already-signed-in user (Settings page).
+   * `currentPassword` is required in local mode (verified server-side) and
+   * unused in Supabase mode — Supabase's own session-freshness policy
+   * (Authentication → Providers → Email → "Secure password change") decides
+   * whether a re-login is needed, surfaced as a normal error if so. */
+  changePassword: (newPassword: string, currentPassword?: string) => Promise<void>
   localSignUp: (email: string, password: string) => Promise<void>
   localSignIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
@@ -47,6 +67,13 @@ const AuthContext = createContext<AuthContextType>({
   continueAsGuest: () => {},
   signInWithGoogle: async () => {},
   signInWithEmail: async () => {},
+  signUpWithPassword: async () => ({ needsConfirmation: false }),
+  signInWithPassword: async () => {},
+  sendPasswordReset: async () => {},
+  passwordRecovery: false,
+  updatePassword: async () => {},
+  dismissPasswordRecovery: () => {},
+  changePassword: async () => {},
   localSignUp: async () => {},
   localSignIn: async () => {},
   signOut: async () => {},
@@ -55,6 +82,7 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(authEnabled)
+  const [passwordRecovery, setPasswordRecovery] = useState(false)
   const [isGuest, setIsGuest] = useState(isGuestModeActive)
   const [localToken, setLocalToken] = useState<string | null>(
     () => (localAuthMode ? localStorage.getItem(LOCAL_TOKEN_KEY) : null),
@@ -71,7 +99,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(data.session)
       setLoading(false)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s))
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s)
+      if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true)
+    })
     return () => sub.subscription.unsubscribe()
   }, [])
 
@@ -123,6 +154,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error
   }
 
+  async function signUpWithPassword(email: string, password: string) {
+    if (!supabase) return { needsConfirmation: false }
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: window.location.origin },
+    })
+    if (error) throw error
+    // Supabase withholds the session until the address is confirmed when
+    // "Confirm email" is on for the project; onAuthStateChange picks up the
+    // session automatically once it exists, so there's nothing to store here.
+    return { needsConfirmation: !data.session }
+  }
+
+  async function signInWithPassword(email: string, password: string) {
+    if (!supabase) return
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) throw error
+  }
+
+  async function sendPasswordReset(email: string) {
+    if (!supabase) return
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    })
+    if (error) throw error
+  }
+
+  async function updatePassword(newPassword: string) {
+    if (!supabase) return
+    // Strength requirements aren't duplicated here either — same reasoning
+    // as signUpWithPassword: Supabase enforces its own policy and a
+    // violation comes back as a normal `error` below.
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) throw error
+    setPasswordRecovery(false)
+  }
+
+  function dismissPasswordRecovery() {
+    setPasswordRecovery(false)
+  }
+
+  async function changePassword(newPassword: string, currentPassword?: string) {
+    if (localAuthMode) {
+      if (!localTokenRef.current) throw new Error('Not signed in')
+      if (!currentPassword) throw new Error('Enter your current password')
+      const result = await localChangePassword(localTokenRef.current, currentPassword, newPassword)
+      _storeLocalSession(result.token, result.email)
+      return
+    }
+    if (!supabase) return
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) throw error
+  }
+
   function _storeLocalSession(token: string, email: string) {
     localStorage.setItem(LOCAL_TOKEN_KEY, token)
     localStorage.setItem(LOCAL_EMAIL_KEY, email)
@@ -163,7 +249,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         enabled: authEnabled, localAuthMode, user, loading, isGuest, canUseApp, continueAsGuest,
-        signInWithGoogle, signInWithEmail,
+        signInWithGoogle, signInWithEmail, signUpWithPassword, signInWithPassword,
+        sendPasswordReset, passwordRecovery, updatePassword, dismissPasswordRecovery, changePassword,
         localSignUp: handleLocalSignUp, localSignIn: handleLocalSignIn,
         signOut,
       }}

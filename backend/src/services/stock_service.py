@@ -3,6 +3,7 @@ Read relevant stock data from the market_data table and returns it in a format s
 '''
 
 import asyncio
+import logging
 import time as _time
 import pandas as pd
 import yfinance as yf
@@ -12,6 +13,8 @@ import markets as _markets
 from schemas.stocks import *
 import pandas_market_calendars as mcal
 from datetime import datetime, time, timezone, timedelta
+
+logger = logging.getLogger(__name__)
 
 
 def _session_bounds(ticker: str) -> tuple[time, time]:
@@ -115,7 +118,7 @@ async def add_stock(ticker: str):
         stock = yf.Ticker(ticker)
         detailed_info = await asyncio.to_thread(service.get_stock_details, stock)  # Get detailed info for the stock
         return StockCreateResponse(exist=False, ohlcv=ohlcv, details=detailed_info)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error creating stock data for {ticker}: {str(e)}")
 
 
@@ -134,7 +137,7 @@ async def delete_stock(ticker: str):
         _snapshot_cache.invalidate_ticker(ticker)
         _snapshot_cache.invalidate("all_stocks")
         return {"message": f"Stock data for {ticker} deleted successfully."}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error deleting stock data for {ticker}: {str(e)}")
 
 
@@ -170,7 +173,7 @@ async def fetch_intraday(stock: yf.Ticker):
                 volume=int(row["Volume"]) if not pd.isna(row["Volume"]) else None,
             ) for _, row in df.iterrows()]
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error fetching current stock data for {stock.ticker}: {str(e)}")
 
 
@@ -286,7 +289,7 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
                     volume=None,
                 )]
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error fetching current stock data for {stock.ticker}: {str(e)}")
 
 
@@ -393,7 +396,8 @@ async def get_classification(tickers: list[str]) -> dict:
         try:
             info = await asyncio.to_thread(_get_ticker_info, t)
             entry = {"sector": info.get("sector"), "industry": info.get("industry")}
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Classification lookup failed for %s: %r", t, e)
             entry = {"sector": None, "industry": None}
         return t, entry
 
@@ -404,6 +408,77 @@ async def get_classification(tickers: list[str]) -> dict:
             info_cache.set(f"class:{t}", entry)
         result[t] = entry
     return result
+
+
+_SEARCH_QUOTE_TYPES = {"EQUITY", "ETF"}
+_SEARCH_INDIAN_SUFFIXES = {"NSE": ".NS", "BSE": ".BO"}
+
+
+async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
+    '''
+    Ticker/company-name autocomplete for the "add ticker" UI, backed by
+    Yahoo Finance's search endpoint (yf.Search). Scoped to `exchange`
+    ("US" | "NSE" | "BSE", defaults to "US") so a search made while the user
+    has India/NSE selected only returns NSE-listed matches, etc.
+
+    Indian results have their .NS/.BO suffix stripped before returning —
+    the frontend's exchange picker is what decides which suffix to append,
+    so the autocomplete list should never show it twice.
+
+    Cached 5 minutes per (exchange, query). Best-effort: any yfinance/Yahoo
+    failure degrades to an empty list rather than a 5xx, since this only
+    powers suggestions — manual ticker entry still works regardless.
+    '''
+    from cache import search_cache
+
+    query = query.strip()
+    if not query:
+        return []
+
+    exchange = (exchange or "US").upper()
+    cache_key = f"{exchange}:{query.lower()}"
+    cached = search_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    def _search() -> list[dict]:
+        return yf.Search(query, max_results=25, news_count=0, lists_count=0).quotes
+
+    try:
+        quotes = await asyncio.to_thread(_search)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Ticker search failed for query %r: %r", query, e)
+        return []
+
+    wanted_suffix = _SEARCH_INDIAN_SUFFIXES.get(exchange)  # None for "US"
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    for q in quotes:
+        symbol = q.get("symbol") or ""
+        if q.get("quoteType") not in _SEARCH_QUOTE_TYPES or not symbol:
+            continue
+        is_indian = symbol.endswith((".NS", ".BO"))
+        if wanted_suffix is not None:
+            if not symbol.endswith(wanted_suffix):
+                continue
+            symbol = symbol[: -len(wanted_suffix)]
+        elif is_indian:
+            continue  # "US" exchange — skip Indian-listed matches
+
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        results.append({
+            "symbol": symbol,
+            "name": q.get("shortname") or q.get("longname") or symbol,
+            "exchange": q.get("exchDisp") or q.get("exchange") or "",
+        })
+        if len(results) >= 8:
+            break
+
+    search_cache.set(cache_key, results)
+    return results
 
 
 async def get_industry_map() -> dict:
@@ -419,8 +494,8 @@ async def get_industry_map() -> dict:
             industry = info.get("industry")
             if industry:
                 result.setdefault(industry, []).append(ticker)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Industry lookup failed for %s: %r", ticker, e)
     return {k: sorted(v) for k, v in sorted(result.items())}
 
 
@@ -437,8 +512,8 @@ async def get_sector_map() -> dict:
             sector = info.get("sector")
             if sector:
                 result.setdefault(sector, []).append(ticker)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Sector lookup failed for %s: %r", ticker, e)
     return {k: sorted(v) for k, v in sorted(result.items())}
 
 
@@ -512,7 +587,7 @@ async def fetch_eps_history(stock: yf.Ticker):
         result = EPSHistoryResponse(ticker=ticker, earnings_history=[EPSHistoryRow(**row) for row in earnings_history])
         _snapshot_cache.set(key, result)
         return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error fetching earnings history for {stock.ticker}: {str(e)}")
 
 
@@ -549,7 +624,7 @@ async def fetch_revenue_history(stock: yf.Ticker):
         result = RevenueHistoryResponse(ticker=ticker, revenue_history=[RevenueHistoryRow(**row) for row in revenue_history])
         _snapshot_cache.set(key, result)
         return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error fetching revenue history for {stock.ticker}: {str(e)}")
     
 
@@ -568,11 +643,13 @@ async def fetch_stock_dashboard(ticker: str, days: int = 30):
         detailed = await fetch_detailed(stock)
         try:
             eps = await fetch_eps_history(stock)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.warning("EPS history fetch failed for %s: %r", ticker, e)
             eps = None
         try:
             revenue = await fetch_revenue_history(stock)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Revenue history fetch failed for %s: %r", ticker, e)
             revenue = None
         return StockResponse(
             ticker=ticker,
@@ -585,5 +662,5 @@ async def fetch_stock_dashboard(ticker: str, days: int = 30):
             earnings_history=eps.earnings_history if eps else None,
             revenue_history=revenue.revenue_history if revenue else None,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error fetching dashboard data for {ticker}: {str(e)}")

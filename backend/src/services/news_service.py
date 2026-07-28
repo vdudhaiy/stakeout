@@ -204,7 +204,7 @@ async def _curated_feed_articles(market: str, per_feed_limit: int = 8) -> list[d
                 r.raise_for_status()
                 articles.extend(_parse_rss_items(r.content, "curated_rss", per_feed_limit))
             except Exception as e:  # noqa: BLE001
-                logger.warning("Curated RSS feed failed (%s): %s", url, e)
+                logger.warning("Curated RSS feed failed (%s): %r", url, e)
     return articles
 
 
@@ -256,7 +256,7 @@ async def get_market_news(region: str = "all", limit: int = 12) -> dict:
                 a["region"] = tag
             articles.extend(batch)
         except Exception as e:  # noqa: BLE001
-            logger.warning("GDELT market news (%s) failed: %s", tag, e)
+            logger.warning("GDELT market news (%s) failed: %r", tag, e)
 
     # Second layer: Google News RSS on the same topics, tagged by region.
     google_topics = {
@@ -271,7 +271,7 @@ async def get_market_news(region: str = "all", limit: int = 12) -> dict:
                 a["region"] = tag
             articles.extend(batch)
         except Exception as e:  # noqa: BLE001
-            logger.warning("Google News market news (%s) failed: %s", tag, e)
+            logger.warning("Google News market news (%s) failed: %r", tag, e)
 
     # Third layer: curated publisher RSS — only worth the extra requests when
     # both query-based sources above came back empty for a region.
@@ -284,7 +284,7 @@ async def get_market_news(region: str = "all", limit: int = 12) -> dict:
                     a["region"] = tag
                 articles.extend(batch)
             except Exception as e:  # noqa: BLE001
-                logger.warning("Curated RSS market news (%s) failed: %s", tag, e)
+                logger.warning("Curated RSS market news (%s) failed: %r", tag, e)
 
     if not articles:
         # Last resort: index-level news from Yahoo
@@ -296,10 +296,15 @@ async def get_market_news(region: str = "all", limit: int = 12) -> dict:
                         a["region"] = tag
                     articles.extend(batch)
                 except Exception as e:  # noqa: BLE001
-                    logger.warning("Yahoo market news (%s) failed: %s", tag, e)
+                    logger.warning("Yahoo market news (%s) failed: %r", tag, e)
 
-    result = {"region": region, "articles": _dedupe(articles, limit)}
-    news_cache.set(key, result)
+    deduped = _dedupe(articles, limit)
+    result = {"region": region, "articles": deduped}
+    # Don't cache a fully empty result for the full TTL — every source
+    # failing/rate-limiting at once is transient, and caching it would blank
+    # headlines for 15 minutes instead of retrying on the next request.
+    if deduped:
+        news_cache.set(key, result)
     return result
 
 
@@ -351,7 +356,7 @@ async def get_stock_news(
             sector = sector or fetched_sector
             industry = industry or fetched_industry
         except Exception as e:  # noqa: BLE001
-            logger.warning("Could not resolve info for %s: %s", ticker, e)
+            logger.warning("Could not resolve info for %s: %r", ticker, e)
 
     layers: list[tuple[str, str]] = []
     base_symbol = ticker.split(".")[0]
@@ -379,7 +384,7 @@ async def get_stock_news(
         try:
             batch = await _gdelt_articles(q, max_records=take, timespan=_STOCK_NEWS_TIMESPAN)
         except Exception as e:  # noqa: BLE001
-            logger.warning("GDELT stock news (%s/%s) failed: %s", ticker, tag, e)
+            logger.warning("GDELT stock news (%s/%s) failed: %r", ticker, tag, e)
             batch = []
         for a in batch:
             a["layer"] = tag
@@ -395,7 +400,7 @@ async def get_stock_news(
                 articles = _dedupe(articles + yahoo, limit)
                 remaining = limit - len(articles)
             except Exception as e:  # noqa: BLE001
-                logger.warning("Yahoo stock news (%s) failed: %s", ticker, e)
+                logger.warning("Yahoo stock news (%s) failed: %r", ticker, e)
 
     # Second layer: Google News RSS, backfilling anything still missing after
     # GDELT (and its Yahoo per-ticker fallback) — most useful for India-listed
@@ -415,7 +420,7 @@ async def get_stock_news(
             try:
                 batch = await _google_news_articles(q, market, max_records=max(4, remaining))
             except Exception as e:  # noqa: BLE001
-                logger.warning("Google News stock news (%s/%s) failed: %s", ticker, tag, e)
+                logger.warning("Google News stock news (%s/%s) failed: %r", ticker, tag, e)
                 batch = []
             for a in batch:
                 a["layer"] = tag
@@ -433,5 +438,8 @@ async def get_stock_news(
         "market": market,
         "articles": articles,
     }
-    news_cache.set(key, result)
+    # Same reasoning as get_market_news: don't lock in an empty result for
+    # the full TTL when every layer above came back empty.
+    if articles:
+        news_cache.set(key, result)
     return result

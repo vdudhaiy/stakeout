@@ -191,6 +191,27 @@ async def test_stock_news_skips_sector_layer_when_same_as_industry():
     assert '"Technology" sector' not in queried  # no redundant duplicate layer
 
 
+async def test_stock_news_empty_result_is_not_cached():
+    async def empty(*args, **kwargs):
+        return []
+
+    with patch.object(news_service, "_gdelt_articles", side_effect=empty) as gdelt, \
+         patch.object(news_service, "_yahoo_articles", new=AsyncMock(return_value=[])), \
+         patch.object(news_service, "_google_news_articles", side_effect=empty):
+        result = await news_service.get_stock_news(
+            "AAPL", company_name="Apple", sector="Technology", industry="Consumer Electronics", limit=6,
+        )
+        assert result["articles"] == []
+        first_call_count = gdelt.call_count
+
+        # Every layer coming back empty at once is transient (rate-limiting,
+        # an outage) — it must not pin an empty carousel for 15 minutes.
+        await news_service.get_stock_news(
+            "AAPL", company_name="Apple", sector="Technology", industry="Consumer Electronics", limit=6,
+        )
+        assert gdelt.call_count == 2 * first_call_count
+
+
 async def test_stock_news_google_layer_backfills_when_gdelt_is_empty():
     async def fake_gdelt(query, max_records=12, timespan="3d"):
         return []
@@ -246,6 +267,24 @@ async def test_market_news_falls_back_to_curated_rss_when_query_sources_are_empt
 
     assert [a["title"] for a in result["articles"]] == ["Curated headline for US"]
     assert result["articles"][0]["region"] == "us"
+
+
+async def test_market_news_empty_result_is_not_cached():
+    async def empty(*args, **kwargs):
+        return []
+
+    with patch.object(news_service, "_gdelt_articles", side_effect=empty) as gdelt, \
+         patch.object(news_service, "_google_news_articles", side_effect=empty), \
+         patch.object(news_service, "_curated_feed_articles", side_effect=empty), \
+         patch.object(news_service, "_yahoo_articles", side_effect=empty):
+        result = await news_service.get_market_news(region="us", limit=12)
+        assert result["articles"] == []
+        first_call_count = gdelt.call_count
+
+        # Every source failing/rate-limiting at once is transient — it must
+        # not pin an empty headlines feed for 15 minutes.
+        await news_service.get_market_news(region="us", limit=12)
+        assert gdelt.call_count == 2 * first_call_count
 
 
 async def test_market_news_skips_curated_rss_when_google_news_has_results():

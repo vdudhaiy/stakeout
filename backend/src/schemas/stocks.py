@@ -208,3 +208,14 @@ class TickerClassification(BaseModel):
 
 class ClassificationResponse(BaseModel):
     classification: dict[str, TickerClassification]
+
+
+class TickerSearchResult(BaseModel):
+    symbol: str    # bare ticker — no .NS/.BO suffix, the exchange picker in the UI applies that
+    name: str      # company / short name
+    exchange: str  # display label, e.g. "NASDAQ", "NYSE", "NSE", "BSE"
+
+
+class TickerSearchResponse(BaseModel):
+    query: str
+    results: List[TickerSearchResult]

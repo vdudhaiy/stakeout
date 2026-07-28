@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import patch, AsyncMock
 
 from schemas.portfolio import (
-    PortfolioResponse, StockHolding, StockPurchaseHistory,
+    DividendEntry, PortfolioResponse, StockHolding, StockPurchaseHistory,
 )
 from schemas.stocks import (
     OHLCV, OHLCVResponse, StockDetailedResponse,
@@ -188,6 +188,75 @@ async def test_delete_last_transaction_returns_empty_object(client):
         new_callable=AsyncMock, return_value=None,
     ):
         resp = await client.delete("/portfolio/AAPL/transactions/1")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Portfolio — Dividends
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sample_dividend():
+    return DividendEntry(
+        id=1, ticker="AAPL", date="2024-03-01",
+        amount_per_share=0.24, shares_held=100, total_amount=24.0, source="auto",
+    )
+
+
+async def test_get_dividends_success(client):
+    with patch(
+        "routers.portfolio.portfolio_service.get_dividends",
+        new_callable=AsyncMock, return_value=[_sample_dividend()],
+    ):
+        resp = await client.get("/portfolio/AAPL/dividends")
+    assert resp.status_code == 200
+    assert resp.json()[0]["amount_per_share"] == 0.24
+
+
+async def test_sync_dividends_success(client):
+    with patch(
+        "routers.portfolio.portfolio_service.sync_dividends",
+        new_callable=AsyncMock, return_value=[_sample_dividend()],
+    ):
+        resp = await client.post("/portfolio/AAPL/dividends/sync")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+
+async def test_add_dividend_success(client):
+    with patch(
+        "routers.portfolio.portfolio_service.add_dividend",
+        new_callable=AsyncMock, return_value=_sample_dividend(),
+    ):
+        resp = await client.post("/portfolio/AAPL/dividends?date=2024-03-01&amount_per_share=0.24")
+    assert resp.status_code == 200
+    assert resp.json()["ticker"] == "AAPL"
+
+
+async def test_add_dividend_invalid_returns_400(client):
+    with patch(
+        "routers.portfolio.portfolio_service.add_dividend",
+        new_callable=AsyncMock, side_effect=ValueError("A dividend entry for 2024-03-01 already exists."),
+    ):
+        resp = await client.post("/portfolio/AAPL/dividends?date=2024-03-01&amount_per_share=0.24")
+    assert resp.status_code == 400
+
+
+async def test_update_dividend_success(client):
+    with patch(
+        "routers.portfolio.portfolio_service.update_dividend",
+        new_callable=AsyncMock, return_value=_sample_dividend(),
+    ):
+        resp = await client.put("/portfolio/AAPL/dividends/1?amount_per_share=0.30")
+    assert resp.status_code == 200
+
+
+async def test_delete_dividend_success(client):
+    with patch(
+        "routers.portfolio.portfolio_service.delete_dividend",
+        new_callable=AsyncMock, return_value=None,
+    ):
+        resp = await client.delete("/portfolio/AAPL/dividends/1")
     assert resp.status_code == 200
     assert resp.json() == {}
 

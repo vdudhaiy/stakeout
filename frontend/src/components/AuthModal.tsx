@@ -9,22 +9,113 @@ interface Props {
   onClose: () => void
 }
 
+interface PasswordFieldsProps {
+  mode: 'signin' | 'signup'
+  setMode: (m: 'signin' | 'signup') => void
+  email: string
+  onEmailChange: (v: string) => void
+  password: string
+  onPasswordChange: (v: string) => void
+  onSubmit: () => void
+  sending: boolean
+  error: string | null
+  /** Shown as "Create a password (…)" on signup. Omit when there's no fixed
+   * policy to state up front (e.g. Supabase mode, where the real policy
+   * lives in that project's dashboard and any violation is reported by the
+   * signup call itself, not guessed at here). */
+  passwordHint?: string
+  /** "Forgot password?" link under the field, signin only. Omit for local
+   * mode — there's no email-based recovery for local accounts. */
+  onForgotPassword?: () => void
+}
+
+/** Shared Log In / Sign Up email+password form — used for both local-auth
+ * mode and Supabase's password option, which differ only in where the
+ * submit handler sends the credentials. */
+function PasswordFields({
+  mode, setMode, email, onEmailChange, password, onPasswordChange, onSubmit, sending, error, passwordHint, onForgotPassword,
+}: PasswordFieldsProps) {
+  return (
+    <>
+      <div className="flex rounded-lg border border-zinc-700 overflow-hidden mb-4 text-xs font-medium">
+        <button
+          onClick={() => setMode('signin')}
+          className={clsx('flex-1 py-2 transition-colors', mode === 'signin' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+        >
+          Log In
+        </button>
+        <button
+          onClick={() => setMode('signup')}
+          className={clsx('flex-1 py-2 transition-colors', mode === 'signup' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+        >
+          Sign Up
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        <input
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={e => onEmailChange(e.target.value)}
+          className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
+        />
+        <input
+          type="password"
+          placeholder={mode === 'signup' ? (passwordHint ? `Create a password (${passwordHint})` : 'Create a password') : 'Password'}
+          value={password}
+          onChange={e => onPasswordChange(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && onSubmit()}
+          className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
+        />
+        {mode === 'signin' && onForgotPassword && (
+          <div className="text-right">
+            <button
+              onClick={onForgotPassword}
+              className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              Forgot password?
+            </button>
+          </div>
+        )}
+        <button
+          onClick={onSubmit}
+          disabled={sending}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+        >
+          {sending ? <RefreshCw size={13} className="animate-spin" /> : <Lock size={13} />}
+          {mode === 'signup' ? 'Create Account' : 'Log In'}
+        </button>
+        {error && <p className="text-[11px] text-red-400">{error}</p>}
+      </div>
+    </>
+  )
+}
+
 export function AuthModal({ onClose }: Props) {
   const {
-    signInWithGoogle, signInWithEmail, localSignUp, localSignIn,
-    continueAsGuest, isGuest, localAuthMode,
+    signInWithGoogle, signInWithEmail, signUpWithPassword, signInWithPassword, sendPasswordReset,
+    localSignUp, localSignIn, continueAsGuest, isGuest, localAuthMode,
   } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
+  /** Supabase mode only: password is the default, magic-link is opt-in. */
+  const [authMethod, setAuthMethod] = useState<'magic' | 'password'>('password')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
+  const [confirmSent, setConfirmSent] = useState(false)
+  const [forgotMode, setForgotMode] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   function handleGuest() {
     continueAsGuest()
     onClose()
   }
+
+  function updateEmail(v: string) { setEmail(v); setError(null) }
+  function updatePassword(v: string) { setPassword(v); setError(null) }
 
   async function submitEmail() {
     if (!email.includes('@')) { setError('Enter a valid email address'); return }
@@ -51,6 +142,44 @@ export function AuthModal({ onClose }: Props) {
       onClose()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function submitCloudPassword() {
+    if (!email.includes('@')) { setError('Enter a valid email address'); return }
+    if (!password) { setError('Enter a password'); return }
+    setSending(true)
+    setError(null)
+    try {
+      if (mode === 'signup') {
+        // Password strength is enforced by Supabase (Authentication → Providers
+        // → Email), not duplicated here — a weak password comes back as a
+        // normal `error` below, worded however that project is configured.
+        const { needsConfirmation } = await signUpWithPassword(email, password)
+        if (needsConfirmation) setConfirmSent(true)
+        else onClose()
+      } else {
+        await signInWithPassword(email, password)
+        onClose()
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function submitForgotPassword() {
+    if (!email.includes('@')) { setError('Enter a valid email address'); return }
+    setSending(true)
+    setError(null)
+    try {
+      await sendPasswordReset(email)
+      setResetSent(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send the reset link')
     } finally {
       setSending(false)
     }
@@ -90,53 +219,65 @@ export function AuthModal({ onClose }: Props) {
         )}
 
         {localAuthMode ? (
+          <PasswordFields
+            mode={mode}
+            setMode={m => { setMode(m); setError(null) }}
+            email={email}
+            onEmailChange={updateEmail}
+            password={password}
+            onPasswordChange={updatePassword}
+            onSubmit={submitLocal}
+            sending={sending}
+            error={error}
+            passwordHint="min. 8 characters"
+          />
+        ) : sent ? (
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+            Check your inbox — a sign-in link is on its way to <span className="font-mono">{email}</span>.
+          </div>
+        ) : confirmSent ? (
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+            Almost there — confirm <span className="font-mono">{email}</span> using the link we just
+            emailed you, then log in.
+          </div>
+        ) : resetSent ? (
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+            Check your inbox — a password reset link is on its way to <span className="font-mono">{email}</span>.
+          </div>
+        ) : forgotMode ? (
           <>
-            <div className="flex rounded-lg border border-zinc-700 overflow-hidden mb-4 text-xs font-medium">
-              <button
-                onClick={() => { setMode('signin'); setError(null) }}
-                className={clsx('flex-1 py-2 transition-colors', mode === 'signin' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
-              >
-                Log In
-              </button>
-              <button
-                onClick={() => { setMode('signup'); setError(null) }}
-                className={clsx('flex-1 py-2 transition-colors', mode === 'signup' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
-              >
-                Sign Up
-              </button>
-            </div>
-
+            <p className="text-xs text-zinc-500 mb-3">
+              Enter your email and we'll send you a link to reset your password.
+            </p>
             <div className="space-y-2">
               <input
                 type="email"
                 placeholder="you@example.com"
                 value={email}
-                onChange={e => { setEmail(e.target.value); setError(null) }}
-                className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
-              />
-              <input
-                type="password"
-                placeholder={mode === 'signup' ? 'Create a password (min. 8 characters)' : 'Password'}
-                value={password}
-                onChange={e => { setPassword(e.target.value); setError(null) }}
-                onKeyDown={e => e.key === 'Enter' && submitLocal()}
+                onChange={e => updateEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && submitForgotPassword()}
+                autoFocus
                 className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
               />
               <button
-                onClick={submitLocal}
+                onClick={submitForgotPassword}
                 disabled={sending}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
               >
-                {sending ? <RefreshCw size={13} className="animate-spin" /> : <Lock size={13} />}
-                {mode === 'signup' ? 'Create Account' : 'Log In'}
+                {sending ? <RefreshCw size={13} className="animate-spin" /> : <Mail size={13} />}
+                Send reset link
               </button>
               {error && <p className="text-[11px] text-red-400">{error}</p>}
             </div>
+            <div className="mt-3 text-center">
+              <button
+                onClick={() => { setForgotMode(false); setError(null) }}
+                className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
+              >
+                Back to log in
+              </button>
+            </div>
           </>
-        ) : sent ? (
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
-            Check your inbox — a sign-in link is on its way to <span className="font-mono">{email}</span>.
-          </div>
         ) : (
           <>
             <button
@@ -158,29 +299,53 @@ export function AuthModal({ onClose }: Props) {
               <div className="flex-1 h-px bg-zinc-800" />
             </div>
 
-            <div className="space-y-2">
-              <input
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={e => { setEmail(e.target.value); setError(null) }}
-                onKeyDown={e => e.key === 'Enter' && submitEmail()}
-                className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
+            {authMethod === 'magic' ? (
+              <div className="space-y-2">
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={e => updateEmail(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && submitEmail()}
+                  className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
+                />
+                <button
+                  onClick={submitEmail}
+                  disabled={sending}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  {sending ? <RefreshCw size={13} className="animate-spin" /> : <Mail size={13} />}
+                  Email me a sign-in link
+                </button>
+                {error && <p className="text-[11px] text-red-400">{error}</p>}
+              </div>
+            ) : (
+              <PasswordFields
+                mode={mode}
+                setMode={m => { setMode(m); setError(null) }}
+                email={email}
+                onEmailChange={updateEmail}
+                password={password}
+                onPasswordChange={updatePassword}
+                onSubmit={submitCloudPassword}
+                sending={sending}
+                error={error}
+                onForgotPassword={() => { setForgotMode(true); setError(null) }}
               />
+            )}
+
+            <div className="mt-3 text-center">
               <button
-                onClick={submitEmail}
-                disabled={sending}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                onClick={() => { setAuthMethod(m => m === 'magic' ? 'password' : 'magic'); setError(null) }}
+                className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
               >
-                {sending ? <RefreshCw size={13} className="animate-spin" /> : <Mail size={13} />}
-                Email me a sign-in link
+                {authMethod === 'magic' ? 'Use a password instead' : 'Use a magic link instead'}
               </button>
-              {error && <p className="text-[11px] text-red-400">{error}</p>}
             </div>
           </>
         )}
 
-        {!isGuest && !sent && (
+        {!isGuest && !sent && !confirmSent && !resetSent && !forgotMode && (
           <div className="mt-4 text-center">
             <button
               onClick={handleGuest}

@@ -3,7 +3,7 @@ Router for stock-related endpoints.
 '''
 from fastapi import HTTPException, APIRouter
 import yfinance as yf
-from schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse, StockResponse, IndicesResponse, ClassificationResponse
+from schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse, StockResponse, IndicesResponse, ClassificationResponse, TickerSearchResponse
 from services import index_service, stock_service
 
 
@@ -80,6 +80,18 @@ async def get_classification(tickers: str):
         raise HTTPException(status_code=400, detail="At most 100 tickers per request")
     data = await stock_service.get_classification(symbols)
     return ClassificationResponse(classification=data)
+
+
+@router.get("/search", response_model=TickerSearchResponse)
+async def search_tickers(q: str, exchange: str = "US"):
+    '''
+    Ticker/company-name autocomplete, e.g. ?q=apple&exchange=US. `exchange`
+    is "US" | "NSE" | "BSE" (defaults to "US") — results are scoped to it,
+    and Indian results have their .NS/.BO suffix stripped since the
+    exchange picker in the UI is what applies it. Cached 5 minutes.
+    '''
+    results = await stock_service.search_tickers(q, exchange)
+    return TickerSearchResponse(query=q, results=results)
 
 
 @router.get("/{ticker}/current", response_model=OHLCVResponse)

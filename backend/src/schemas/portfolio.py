@@ -16,6 +16,16 @@ from pydantic import BaseModel, PlainSerializer
 Money = Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="json")]
 
 
+class DividendEntry(BaseModel):
+    id: int
+    ticker: str
+    date: str                  # ex-dividend date
+    amount_per_share: Money
+    shares_held: int            # shares held as of the ex-date when this was recorded
+    total_amount: Money         # amount_per_share * shares_held, snapshotted at creation
+    source: str                 # "auto" (yfinance) | "manual"
+
+
 class StockPurchaseHistory(BaseModel):
     id: int
     sale: bool = False          # False = buy, True = sell
@@ -46,7 +56,9 @@ class StockHolding(BaseModel):
     profit_loss_percentage: Money | None  # (stock_value - total_invested) / total_invested * 100
     total_earned: Money                # proceeds from all sell transactions
     total_invested: Money              # total amount invested (bought_at * shares for all buy transactions)
+    total_dividends: Money = Decimal(0)   # cash dividend income received while holding shares
     trade_history: list[StockPurchaseHistory]        # all buy + sell transactions, oldest first
+    dividends: list[DividendEntry] = []               # all dividend payments, oldest first
 
 
 class PositionAsOf(BaseModel):
@@ -85,5 +97,6 @@ class PortfolioResponse(BaseModel):
     total_invested: Money     # sum of (shares * average_cost) across all holdings
     total_return: Money       # portfolio_value - total_invested
     return_percentage: Money  # (portfolio_value - total_invested) / total_invested * 100
-    net_profit_loss: Money    # total_return + realized_gains
+    total_dividends: Money = Decimal(0)  # cash dividend income across all holdings
+    net_profit_loss: Money    # total_return + realized_gains + total_dividends
     holdings: list[StockHolding] # list of all holdings with detailed info

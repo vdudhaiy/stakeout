@@ -7,6 +7,12 @@ export function marketOf(ticker: string): Market {
   return t.endsWith('.NS') || t.endsWith('.BO') ? 'IN' : 'US'
 }
 
+/** Strip the .NS/.BO Yahoo Finance suffix for display — call sites that need
+ * the full ticker for API calls or lookups should keep using the raw value. */
+export function displayTicker(ticker: string): string {
+  return ticker.replace(/\.(NS|BO)$/i, '')
+}
+
 /** Exchange the user picks in the "add ticker" UI — drives which suffix gets appended. */
 export type Exchange = 'US' | 'NSE' | 'BSE'
 

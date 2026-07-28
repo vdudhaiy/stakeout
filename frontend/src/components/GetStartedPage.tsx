@@ -84,8 +84,8 @@ export function GetStartedPage() {
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed">
-              You're already here. Sign in with Google or an email magic link and your watchlist
-              and portfolios sync across devices — or click <span className="text-zinc-300">Continue as
+              You're already here. Sign in with Google, an email magic link, or a password and your
+              watchlist and portfolios sync across devices — or click <span className="text-zinc-300">Continue as
               Guest</span> to try everything with nothing saved beyond your browser session.
             </p>
 

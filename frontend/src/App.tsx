@@ -28,10 +28,11 @@ import { NewsPanel } from './components/NewsPanel'
 import { TickerTape } from './components/TickerTape'
 import { InfoTip } from './components/InfoTip'
 import { SignInGate } from './components/SignInGate'
+import { PasswordRecoveryModal } from './components/PasswordRecoveryModal'
 import { useAuth } from './contexts/AuthContext'
 import { usePrefs } from './contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney } from './utils/currency'
-import { marketOf } from './utils/market'
+import { marketOf, displayTicker } from './utils/market'
 import { MARKET_STATUS_REFRESH_MS, PRICE_REFRESH_MS } from './utils/env'
 import type { OHLCV, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV, PortfolioResponse, ChatContext } from './types'
 import { SMA_PERIODS, EMA_PERIODS, SMA_COLORS, EMA_COLORS } from './utils/indicators'
@@ -63,7 +64,7 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const view: View = PATH_TO_VIEW[location.pathname] ?? 'home'
-  const { canUseApp } = useAuth()
+  const { canUseApp, passwordRecovery } = useAuth()
   const { aiEnabled } = usePrefs()
 
   const [ticker, setTicker] = useState('')
@@ -449,7 +450,7 @@ export default function App() {
             <div className="flex flex-1 items-center justify-center">
               <div className="flex items-center gap-2 text-zinc-500 text-sm">
                 <RefreshCw size={14} className="animate-spin" />
-                Loading {preparingTicker}...
+                Loading {preparingTicker && displayTicker(preparingTicker)}...
               </div>
             </div>
           ) : (
@@ -460,9 +461,9 @@ export default function App() {
                 <div>
                   <div className="flex items-baseline gap-3 flex-wrap">
                     <h1 className="text-2xl font-bold tracking-tight">
-                      {primaryName ?? ticker}
+                      {primaryName ?? displayTicker(ticker)}
                       {primaryName && (
-                        <span className="text-zinc-500 font-normal text-lg ml-2">({ticker})</span>
+                        <span className="text-zinc-500 font-normal text-lg ml-2">({displayTicker(ticker)})</span>
                       )}
                     </h1>
 
@@ -543,7 +544,7 @@ export default function App() {
                   </button>
                   <button
                     onClick={() => setDeleteConfirm(true)}
-                    title={`Remove ${ticker} from watchlist`}
+                    title={`Remove ${displayTicker(ticker)} from watchlist`}
                     className="p-2 text-red-600 hover:text-red-400 hover:bg-zinc-900 rounded-lg transition-colors"
                   >
                     <Trash2 size={13} />
@@ -661,7 +662,7 @@ export default function App() {
                 <div className="flex items-center justify-center h-64 bg-zinc-900 border border-zinc-800 rounded-xl">
                   <div className="flex items-center gap-2 text-zinc-500 text-sm">
                     <RefreshCw size={13} className="animate-spin" />
-                    Loading {ticker}...
+                    Loading {displayTicker(ticker)}...
                   </div>
                 </div>
               ) : chartData.length > 0 ? (
@@ -990,6 +991,10 @@ export default function App() {
       {aiEnabled && showAIChat && <AIChatWidget context={aiChatContext} />}
 
       <AnimatePresence>
+        {passwordRecovery && <PasswordRecoveryModal />}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {deleteConfirm && (
           <motion.div
             variants={overlayFade}
@@ -999,9 +1004,9 @@ export default function App() {
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
           >
             <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">
-              <h2 className="text-sm font-semibold text-zinc-100 mb-1">Remove {ticker}?</h2>
+              <h2 className="text-sm font-semibold text-zinc-100 mb-1">Remove {displayTicker(ticker)}?</h2>
               <p className="text-xs text-zinc-400 mb-5">
-                {ticker} will be removed from your watchlist. You can add it back at any time.
+                {displayTicker(ticker)} will be removed from your watchlist. You can add it back at any time.
               </p>
               <div className="flex justify-end gap-2">
                 <button

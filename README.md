@@ -49,7 +49,7 @@ You're also encouraged to fork this project and build your own version. The code
 - **Peer comparison** — normalized % change chart to compare stocks in the same industry or sector.
 - **Portfolio tracker** — FIFO cost basis, unrealized/realized P&L per holding, allocation donut, interactive sector & industry breakdown pies (by invested value or by holdings count, per US/India portfolio), and one-click Excel export — per market.
 - **Watchlist with market filter** — organize by industry/sector tabs, filter All / US / India; a ticker-tape marquee streams your watchlist's latest prices under the navbar.
-- **Multi-user accounts** — Google OAuth or email magic-link sign-in via Supabase; each user gets their own watchlist and portfolios. **Guest Mode** lets anyone try the app without signing in — watchlist and portfolio data stay in the browser for that session and are never written to the database.
+- **Multi-user accounts** — Google OAuth, email magic-link, or email/password sign-in via Supabase; each user gets their own watchlist and portfolios. **Guest Mode** lets anyone try the app without signing in — watchlist and portfolio data stay in the browser for that session and are never written to the database.
 - **AI-powered explanations (optional)** — a per-stock "AI Insight" card that explains what the indicators and news mean in plain English, plus a floating chat aware of whatever stock or portfolio you're looking at. Both run against a local [Ollama](https://ollama.com) model, so nothing about your stocks or portfolio leaves your machine; if Ollama isn't reachable, both features degrade gracefully to an "unavailable" message.
 - **Dual market status pill** — NYSE and NSE open/closed at a glance, with session times in ET/IST and your local timezone.
 - **Major index charts** — the home page shows the S&P 500, Dow Jones, NASDAQ, NIFTY 50, SENSEX, and NIFTY Bank with 3-month sparklines and day change, no sign-in needed.
@@ -155,13 +155,17 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
    postgresql+asyncpg://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
    ```
 3. **JWKS URL:** Project Settings → API → *JWT Keys* → *JWKS URL*. The backend uses this to verify user tokens against Supabase's published signing keys.
-4. **Auth providers:** Authentication → Providers → enable **Email** (magic links work out of the box) and **Google** (follow Supabase's guide to create Google OAuth credentials). Under Authentication → URL Configuration, set the *Site URL* to your Vercel URL and add it to *Redirect URLs*.
+4. **Auth providers:** Authentication → Providers → enable **Email** (covers both magic links and password sign-in out of the box) and **Google** (follow Supabase's guide to create Google OAuth credentials). Under Authentication → URL Configuration, set the *Site URL* to your Vercel URL and add it to *Redirect URLs*.
+5. **Password policy** (only matters if you use the password option): Authentication → Providers → Email → set *Minimum password length* and *Password requirements* to whatever this deployment should enforce (e.g. 8 chars, "Lowercase, uppercase letters, digits and symbols"). The frontend doesn't duplicate this policy — a signup that violates it is rejected by Supabase itself, and the UI just displays whatever message comes back, so it always matches whatever this setting currently is.
 
 ### 2. Render — the API
 
 1. Push your fork to GitHub.
-2. In Render, create a **Blueprint** from the repo — it picks up [`render.yaml`](render.yaml) automatically.
-3. Fill in the environment variables when prompted:
+2. In Render, create a new **Web Service** from the repo.
+   - **Root Directory:** leave as the repo root (the build context spans `utils/` and `backend/`).
+   - **Runtime:** Docker, **Dockerfile Path:** [`docker/backend.Dockerfile`](docker/backend.Dockerfile). It runs `alembic upgrade head` automatically before starting the server.
+   - **Health Check Path:** `/health`
+3. Add the following environment variables:
 
    | Variable | Value |
    |----------|-------|
@@ -170,7 +174,7 @@ The hosted setup uses three free tiers: **Supabase** (Postgres + auth), **Render
    | `CORS_ORIGINS` | your Vercel URL, e.g. `https://stakeout.vercel.app` |
    | `SUPABASE_SECRET_KEY` | Project Settings → API → API Keys → Secret keys (prefer this over the legacy `service_role` key — same access, individually revocable). Optional — only needed for "Delete account" to also remove the Supabase auth user. Full-access key: server-side only, never in the frontend. |
 
-4. Deploy. The pre-deploy hook runs `alembic upgrade head` to create tables. Health check: `https://<your-service>.onrender.com/health`.
+4. Deploy. The container entrypoint runs `alembic upgrade head` before starting the server, so tables are created automatically. Health check: `https://<your-service>.onrender.com/health`.
 
 > [!NOTE]
 > Render's free tier has an **ephemeral disk**, but that no longer matters for price data — the market_data table lives in Supabase alongside holdings, watchlists, and users, so it survives every deploy/restart. Free-tier services also sleep after inactivity; the first request after a sleep takes ~30 s.
@@ -218,8 +222,7 @@ Copy `.env.example` to `.env` and adjust as needed:
 ```
 stakeout/
 ├── docker-compose.yml             # Local/self-hosted stack: Postgres + API + frontend
-├── docker/                        # Dockerfiles + nginx config for that stack
-├── render.yaml                    # Render blueprint (hosted backend)
+├── docker/                        # Dockerfiles (backend + frontend) + nginx config; docker/backend.Dockerfile also used for the Render cloud deploy
 ├── Makefile                       # Common developer commands — run `make help` to list them
 ├── pyproject.toml                 # uv workspace and dependency config
 ├── .env.example                   # Environment variable template

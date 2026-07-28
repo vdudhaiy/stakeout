@@ -133,9 +133,11 @@ function buildStockHolding(holding: GuestHoldingState, price: number | null): St
     stock_value: stockValue,
     total_invested: costBasis,
     total_earned: totalEarned,
+    total_dividends: 0,   // dividend tracking requires an account — not available in guest mode
     profit_loss: profitLoss,
     profit_loss_percentage: profitLossPercentage,
     trade_history: tradeHistory,
+    dividends: [],
   }
 }
 
@@ -248,6 +250,7 @@ export async function getPortfolio(market?: Market): Promise<PortfolioResponse> 
     total_invested: totalInvested,
     total_return: totalReturn,
     return_percentage: returnPct,
+    total_dividends: 0,
     net_profit_loss: netProfitLoss,
     holdings: built,
   }

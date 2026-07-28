@@ -18,7 +18,7 @@ async def market_news(
 ):
     try:
         data = await news_service.get_market_news(region=region, limit=limit)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — converted to a domain error below
         raise HTTPException(status_code=502, detail=f"News sources unavailable: {e}")
     response.headers["Cache-Control"] = _CACHE_HEADER
     return data
@@ -32,7 +32,7 @@ async def stock_news(
 ):
     try:
         data = await news_service.get_stock_news(ticker, limit=limit)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — converted to a domain error below
         raise HTTPException(status_code=502, detail=f"News sources unavailable: {e}")
     response.headers["Cache-Control"] = _CACHE_HEADER
     return data

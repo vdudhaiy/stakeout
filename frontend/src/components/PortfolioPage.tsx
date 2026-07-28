@@ -3,16 +3,20 @@ import clsx from 'clsx'
 import {
   Plus, ChevronDown, ChevronUp,
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
-  BarChart2, AlertTriangle, FileDown,
+  BarChart2, AlertTriangle, FileDown, Pencil, Coins,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { PieChart, Pie, Cell, Tooltip as ChartTooltip, Legend, ResponsiveContainer } from 'recharts'
-import type { ClassificationMap, Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
-import { fetchPortfolio, fetchClassification, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio } from '../api'
+import type { ClassificationMap, DividendEntry, Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
+import {
+  fetchPortfolio, fetchClassification, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio,
+  syncDividends, addDividend, updateDividend, deleteDividend,
+} from '../api'
 import { usePrefs } from '../contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney, type Currency } from '../utils/currency'
 import { marketOf, currencyOfExchange, type Exchange } from '../utils/market'
 import { ExchangeSelect } from './ExchangeSelect'
+import { TickerAutocomplete } from './TickerAutocomplete'
 import { InfoTip } from './InfoTip'
 import type { GlossaryKey } from '../utils/glossary'
 import { PORTFOLIO_REFRESH_MS } from '../utils/env'
@@ -499,26 +503,9 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
         </div>
 
         <form onSubmit={handle} className="space-y-4">
-          {/* Ticker */}
-          <div>
-            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
-              TICKER
-            </label>
-            <input
-              type="text"
-              value={ticker}
-              onChange={e => setTicker(e.target.value.toUpperCase())}
-              readOnly={!tickerEditable}
-              className={clsx(
-                'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono',
-                'text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors',
-                !tickerEditable && 'opacity-50 cursor-not-allowed select-none',
-              )}
-              placeholder="e.g. AAPL"
-            />
-          </div>
-
-          {/* Exchange — only relevant when adding a brand-new position */}
+          {/* Exchange — only relevant when adding a brand-new position. Shown
+              above the ticker field: it scopes the search below, and keeping
+              it above means the suggestion dropdown never has to cover it. */}
           {tickerEditable && (
             <div>
               <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
@@ -527,6 +514,29 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
               <ExchangeSelect value={exchange} onChange={setExchange} />
             </div>
           )}
+
+          {/* Ticker */}
+          <div>
+            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+              TICKER
+            </label>
+            {tickerEditable ? (
+              <TickerAutocomplete
+                value={ticker}
+                onChange={setTicker}
+                exchange={exchange}
+                placeholder="e.g. AAPL"
+              />
+            ) : (
+              <input
+                type="text"
+                value={ticker}
+                readOnly
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors opacity-50 cursor-not-allowed select-none"
+                placeholder="e.g. AAPL"
+              />
+            )}
+          </div>
 
           {/* Shares */}
           <div>
@@ -622,6 +632,155 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
   )
 }
 
+// ── Dividend modal ────────────────────────────────────────────────────────────
+
+interface DividendModalProps {
+  mode: 'add' | 'edit'
+  ticker: string
+  currency: Currency
+  entry?: DividendEntry
+  onClose: () => void
+  onSubmit: (date: string, amountPerShare: number, sharesHeld?: number) => Promise<void>
+}
+
+function DividendModal({ mode, ticker, currency, entry, onClose, onSubmit }: DividendModalProps) {
+  const today = new Date().toLocaleDateString('en-CA')
+  const [date, setDate] = useState(entry?.date ?? today)
+  const [amountPerShare, setAmountPerShare] = useState(entry ? String(entry.amount_per_share) : '')
+  const [sharesHeld, setSharesHeld] = useState(entry ? String(entry.shares_held) : '')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const amountNum = parseFloat(amountPerShare)
+  const sharesNum = sharesHeld.trim() === '' ? undefined : parseInt(sharesHeld, 10)
+  const total = !isNaN(amountNum) && amountNum > 0 && sharesNum != null && !isNaN(sharesNum) && sharesNum > 0
+    ? amountNum * sharesNum
+    : null
+
+  async function handle(e: React.FormEvent) {
+    e.preventDefault()
+    if (!date || isNaN(amountNum) || amountNum <= 0) {
+      setError('Please fill in a valid date and amount per share.')
+      return
+    }
+    if (sharesHeld.trim() !== '' && (sharesNum == null || isNaN(sharesNum) || sharesNum <= 0)) {
+      setError('Shares held must be a positive whole number, or left blank.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      await onSubmit(date, amountNum, sharesNum)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Operation failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <motion.div
+      variants={overlayFade}
+      initial="hidden"
+      animate="show"
+      exit="exit"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <div className="flex items-start justify-between mb-1">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-100">
+              {mode === 'add' ? 'Record Dividend' : 'Edit Dividend'}
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">{ticker} — cash dividend income.</p>
+          </div>
+          <button onClick={onClose} className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors">
+            <X size={15} />
+          </button>
+        </div>
+
+        <form onSubmit={handle} className="space-y-4 mt-3">
+          <div>
+            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+              EX-DIVIDEND DATE
+            </label>
+            <input
+              type="date"
+              value={date}
+              max={today}
+              onChange={e => setDate(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none focus:border-indigo-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+              AMOUNT PER SHARE
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm font-mono pointer-events-none">
+                {CURRENCY_SYMBOL[currency]}
+              </span>
+              <input
+                type="number"
+                min={0.0001}
+                step="0.0001"
+                value={amountPerShare}
+                onChange={e => setAmountPerShare(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-7 pr-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+              SHARES HELD
+              <span className="ml-2 normal-case font-normal tracking-normal text-zinc-600">
+                optional — defaults to your position on this date
+              </span>
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={sharesHeld}
+              onChange={e => setSharesHeld(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
+              placeholder="auto"
+            />
+          </div>
+
+          {total != null && (
+            <div className="bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2.5 flex items-center justify-between">
+              <span className="text-xs text-zinc-500">Total</span>
+              <span className="text-sm font-mono font-semibold text-zinc-200">
+                {CURRENCY_SYMBOL[currency]}{fmt(total)}
+              </span>
+            </div>
+          )}
+
+          {error && (
+            <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-2.5 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-500 text-white"
+          >
+            {loading && <RefreshCw size={13} className="animate-spin" />}
+            {mode === 'add' ? 'Record Dividend' : 'Save Changes'}
+          </button>
+        </form>
+      </motion.div>
+    </motion.div>
+  )
+}
+
 // ── Holding row ───────────────────────────────────────────────────────────────
 
 function TxRow({ txn, money, onDeleteRequest }: { txn: StockPurchaseHistory; money: MoneyFmt; onDeleteRequest: () => void }) {
@@ -666,8 +825,126 @@ function TxRow({ txn, money, onDeleteRequest }: { txn: StockPurchaseHistory; mon
   )
 }
 
+function DividendRow({
+  entry, money, onEdit, onDeleteRequest,
+}: {
+  entry: DividendEntry
+  money: MoneyFmt
+  onEdit: () => void
+  onDeleteRequest: () => void
+}) {
+  return (
+    <tr className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors">
+      <td className="px-5 py-2.5 font-mono text-xs text-zinc-500 whitespace-nowrap">{entry.date}</td>
+      <td className="px-5 py-2.5 font-mono text-xs text-zinc-400">{money(entry.amount_per_share)}</td>
+      <td className="px-5 py-2.5 font-mono text-xs text-zinc-400">{entry.shares_held}</td>
+      <td className="px-5 py-2.5 font-mono text-xs text-emerald-400">{money(entry.total_amount)}</td>
+      <td className="px-5 py-2.5">
+        <span className={clsx(
+          'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
+          entry.source === 'auto' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-zinc-700/30 text-zinc-400',
+        )}>
+          {entry.source === 'auto' ? 'AUTO' : 'MANUAL'}
+        </span>
+      </td>
+      <td className="px-4 py-2.5">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onEdit}
+            title="Edit dividend"
+            className="p-0.5 text-zinc-700 hover:text-indigo-400 transition-colors"
+          >
+            <Pencil size={11} />
+          </button>
+          <button
+            onClick={onDeleteRequest}
+            title="Delete dividend"
+            className="p-0.5 text-zinc-700 hover:text-red-400 transition-colors"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function DividendsSection({
+  holding, money, syncing, onSync, onAdd, onEdit, onDeleteRequest,
+}: {
+  holding: StockHolding
+  money: MoneyFmt
+  syncing: boolean
+  onSync: () => void
+  onAdd: () => void
+  onEdit: (entry: DividendEntry) => void
+  onDeleteRequest: (entry: DividendEntry) => void
+}) {
+  return (
+    <div className="border-t border-zinc-800/40">
+      <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+        <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500">
+          <Coins size={11} className="text-zinc-600" /> DIVIDENDS <InfoTip k="dividends" />
+        </span>
+        <span className="text-xs font-mono text-emerald-400">{money(holding.total_dividends)}</span>
+        <button
+          onClick={onSync}
+          disabled={syncing}
+          title="Fetch new dividend payments from Yahoo Finance"
+          className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-zinc-400 bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700 rounded-lg transition-colors disabled:opacity-40"
+        >
+          <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
+          Sync
+        </button>
+        <button
+          onClick={onAdd}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-zinc-400 bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700 rounded-lg transition-colors"
+        >
+          <Plus size={11} />
+          Add
+        </button>
+      </div>
+
+      {holding.dividends.length === 0 ? (
+        <p className="px-5 pb-4 text-xs text-zinc-600 italic">
+          No dividends recorded. Try "Sync" to fetch payment history, or add one by hand.
+        </p>
+      ) : (
+        <div className="overflow-x-auto pb-1">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-zinc-800/40">
+                {['Ex-Date', 'Per Share', 'Shares Held', 'Total', 'Source', ''].map(col => (
+                  <th
+                    key={col}
+                    className="px-5 py-2 text-left text-[10px] tracking-widest text-zinc-600 font-semibold whitespace-nowrap"
+                  >
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[...holding.dividends].reverse().map(entry => (
+                <DividendRow
+                  key={entry.id}
+                  entry={entry}
+                  money={money}
+                  onEdit={() => onEdit(entry)}
+                  onDeleteRequest={() => onDeleteRequest(entry)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function HoldingRow({
   holding, money, expanded, onToggle, onBuy, onSell, onDelete, onViewTicker, onDeleteTxn,
+  syncingDividends, onSyncDividends, onAddDividend, onEditDividend, onDeleteDividendRequest,
 }: {
   holding: StockHolding
   money: MoneyFmt
@@ -678,6 +955,11 @@ function HoldingRow({
   onDelete: () => void
   onViewTicker: () => void
   onDeleteTxn: (txnId: number, isLast: boolean) => void
+  syncingDividends: boolean
+  onSyncDividends: () => void
+  onAddDividend: () => void
+  onEditDividend: (entry: DividendEntry) => void
+  onDeleteDividendRequest: (entry: DividendEntry) => void
 }) {
   const pl    = holding.profit_loss
   const plPct = holding.profit_loss_percentage
@@ -854,6 +1136,17 @@ function HoldingRow({
               </table>
             </div>
           )}
+
+          {/* Dividends */}
+          <DividendsSection
+            holding={holding}
+            money={money}
+            syncing={syncingDividends}
+            onSync={onSyncDividends}
+            onAdd={onAddDividend}
+            onEdit={onEditDividend}
+            onDeleteRequest={onDeleteDividendRequest}
+          />
         </motion.div>
       )}
       </AnimatePresence>
@@ -890,6 +1183,11 @@ export function PortfolioPage({
   const [txnDeleteError, setTxnDeleteError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated]       = useState<Date | null>(null)
   const [downloading, setDownloading]       = useState(false)
+  const [dividendModal, setDividendModal]   = useState<{ mode: 'add' | 'edit'; ticker: string; entry?: DividendEntry } | null>(null)
+  const [syncingTicker, setSyncingTicker]   = useState<string | null>(null)
+  const [dividendDeleteTarget, setDividendDeleteTarget] = useState<{ ticker: string; id: number } | null>(null)
+  const [dividendDeleteLoading, setDividendDeleteLoading] = useState(false)
+  const [dividendDeleteError, setDividendDeleteError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -940,6 +1238,48 @@ export function PortfolioPage({
   function openTxnDelete(ticker: string, txnId: number, isLast: boolean) {
     setTxnDeleteTarget({ ticker, txnId, isLast })
     setTxnDeleteError(null)
+  }
+
+  async function handleSyncDividends(ticker: string) {
+    setSyncingTicker(ticker)
+    try {
+      await syncDividends(ticker)
+      await load()
+    } catch {
+      // Best-effort — the "Sync" button just stays available to retry.
+    } finally {
+      setSyncingTicker(null)
+    }
+  }
+
+  async function submitDividend(date: string, amountPerShare: number, sharesHeld?: number) {
+    if (!dividendModal) return
+    if (dividendModal.mode === 'edit' && dividendModal.entry) {
+      await updateDividend(dividendModal.ticker, dividendModal.entry.id, { date, amountPerShare, sharesHeld })
+    } else {
+      await addDividend(dividendModal.ticker, date, amountPerShare, sharesHeld)
+    }
+    await load()
+  }
+
+  function openDividendDelete(ticker: string, id: number) {
+    setDividendDeleteTarget({ ticker, id })
+    setDividendDeleteError(null)
+  }
+
+  async function handleConfirmDeleteDividend() {
+    if (!dividendDeleteTarget) return
+    setDividendDeleteLoading(true)
+    setDividendDeleteError(null)
+    try {
+      await deleteDividend(dividendDeleteTarget.ticker, dividendDeleteTarget.id)
+      setDividendDeleteTarget(null)
+      await load()
+    } catch (e) {
+      setDividendDeleteError(e instanceof Error ? e.message : 'Failed to delete dividend.')
+    } finally {
+      setDividendDeleteLoading(false)
+    }
   }
 
   async function handleConfirmDeleteTxn() {
@@ -1076,7 +1416,7 @@ export function PortfolioPage({
         ) : portfolio && (
           <>
             {/* ── Summary stats ──────────────────────────────────────── */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               <StatCard
                 label="PORTFOLIO VALUE"
                 tip="portfolio_value"
@@ -1101,6 +1441,12 @@ export function PortfolioPage({
                 tip="realized_gains"
                 value={money(portfolio.realized_gains)}
                 valueColor={portfolio.realized_gains > 0 ? gainText(1) : undefined}
+              />
+              <StatCard
+                label="DIVIDENDS"
+                tip="dividends"
+                value={money(portfolio.total_dividends)}
+                valueColor={portfolio.total_dividends > 0 ? gainText(1) : undefined}
               />
               <StatCard
                 label="NET P&L"
@@ -1149,6 +1495,11 @@ export function PortfolioPage({
                         onDelete={()      => setDeleteTarget(h.ticker)}
                         onViewTicker={()           => onViewTicker(h.ticker)}
                         onDeleteTxn={(id, isLast)  => openTxnDelete(h.ticker, id, isLast)}
+                        syncingDividends={syncingTicker === h.ticker}
+                        onSyncDividends={() => handleSyncDividends(h.ticker)}
+                        onAddDividend={() => setDividendModal({ mode: 'add', ticker: h.ticker })}
+                        onEditDividend={entry => setDividendModal({ mode: 'edit', ticker: h.ticker, entry })}
+                        onDeleteDividendRequest={entry => openDividendDelete(h.ticker, entry.id)}
                       />
                     ))}
                   </AnimatePresence>
@@ -1197,6 +1548,66 @@ export function PortfolioPage({
             onClose={() => setModal(null)}
             onSubmit={modal.mode === 'buy' ? submitBuy : submitSell}
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {dividendModal && (
+          <DividendModal
+            key="dividend"
+            mode={dividendModal.mode}
+            ticker={dividendModal.ticker}
+            currency={holdings.find(h => h.ticker === dividendModal.ticker)?.currency ?? nativeCcy}
+            entry={dividendModal.entry}
+            onClose={() => setDividendModal(null)}
+            onSubmit={submitDividend}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {dividendDeleteTarget && (
+          <motion.div
+            key="dividend-delete"
+            variants={overlayFade}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+            onClick={e => { if (e.target === e.currentTarget && !dividendDeleteLoading) setDividendDeleteTarget(null) }}
+          >
+            <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-80 shadow-2xl">
+              <h2 className="text-sm font-semibold text-zinc-100 mb-1">Delete dividend entry?</h2>
+              <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+                This dividend payment will be permanently removed from {dividendDeleteTarget.ticker}'s history.
+              </p>
+
+              {dividendDeleteError && (
+                <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5 mb-4">
+                  <X size={13} className="text-red-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-400 leading-relaxed">{dividendDeleteError}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => { setDividendDeleteTarget(null); setDividendDeleteError(null) }}
+                  disabled={dividendDeleteLoading}
+                  className="px-3 py-1.5 text-xs rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDeleteDividend}
+                  disabled={dividendDeleteLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-40"
+                >
+                  {dividendDeleteLoading ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                  Delete
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 

@@ -38,6 +38,11 @@ class Holding(Base):
         cascade="all, delete-orphan",
         order_by="Transaction.date",
     )
+    dividends: Mapped[list["Dividend"]] = relationship(
+        back_populates="holding",
+        cascade="all, delete-orphan",
+        order_by="Dividend.date",
+    )
 
 
 class Transaction(Base):
@@ -56,6 +61,36 @@ class Transaction(Base):
     shares_remaining: Mapped[int] = mapped_column(Integer, default=0)
 
     holding: Mapped["Holding"] = relationship(back_populates="transactions")
+
+
+class Dividend(Base):
+    """One row per dividend payment received on a holding, keyed by ex-dividend date.
+
+    Populated two ways: automatically from yfinance's per-share dividend
+    history (see portfolio_service._sync_dividends), or by hand for dates
+    yfinance doesn't have. Sync only ever *inserts* a row for a
+    (holding_id, date) it hasn't seen before — it never overwrites or
+    resurrects one, so a manual edit or delete always sticks.
+
+    `shares_held` / `total_amount` are snapshotted at creation time from the
+    FIFO transaction log as it existed then, not recomputed live — editing or
+    deleting a transaction that predates this dividend won't retroactively
+    change it (consistent with the "cash income only" scope: dividends don't
+    feed back into FIFO cost-basis math the way a DRIP reinvestment would).
+    """
+
+    __tablename__ = "dividends"
+    __table_args__ = (UniqueConstraint("holding_id", "date", name="uq_dividends_holding_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    holding_id: Mapped[int] = mapped_column(ForeignKey("holdings.id"), index=True)
+    date: Mapped[str] = mapped_column(String)  # ex-dividend date, ISO-8601
+    amount_per_share: Mapped[Decimal] = mapped_column(Money)
+    shares_held: Mapped[int] = mapped_column(Integer)  # FIFO shares held as of `date`
+    total_amount: Mapped[Decimal] = mapped_column(Money)  # amount_per_share * shares_held, stored
+    source: Mapped[str] = mapped_column(String, default="manual")  # "auto" | "manual"
+
+    holding: Mapped["Holding"] = relationship(back_populates="dividends")
 
 
 class AuditEntry(Base):

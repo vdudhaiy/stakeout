@@ -7,9 +7,14 @@
 #   backend   FastAPI API; runs `alembic upgrade head` on start
 #   frontend  nginx serving the built SPA and proxying API calls to backend
 #
-# Auth: no SUPABASE_JWKS_URL is set, so the backend automatically runs its
-# own local email/password accounts (stored in Postgres) — no cloud project
-# needed. "Continue as Guest" also works with nothing saved server-side.
+# Auth & data — two modes, chosen by what's in your root .env:
+#   - Nothing set: backend runs its own local email/password accounts,
+#     stored in the `db` container above. No cloud project needed.
+#   - DATABASE_URL / SUPABASE_JWKS_URL set (plus the frontend's
+#     VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY, baked in at frontend build
+#     time): backend verifies real Supabase sign-ins and talks to that
+#     DATABASE_URL instead. The `db` container still starts (harmless) but
+#     sits empty — nothing ever writes to its volume in this mode.
 #
 # This file is for local/self-hosted use only. Cloud deployment (Vercel +
 # Render + Supabase) is documented separately in the README and does not
@@ -38,11 +43,15 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://stakeout:stakeout@db:5432/stakeout
+      # Falls back to the local `db` container unless DATABASE_URL is set in
+      # the root .env (e.g. to a Supabase Postgres connection string).
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://stakeout:stakeout@db:5432/stakeout}
       LOG_LEVEL: INFO
-      # SUPABASE_JWKS_URL intentionally unset → local email/password auth.
-      # Set it (plus the frontend Supabase env at build time) only if you
-      # want this stack to verify real Supabase sign-ins.
+      # Unset by default → local email/password auth. Set both (plus the
+      # frontend's VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY at build time)
+      # to verify real Supabase sign-ins instead.
+      SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
     depends_on:
       db:
         condition: service_healthy

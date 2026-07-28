@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import logging
 import math
 from decimal import Decimal
 
@@ -7,12 +8,16 @@ import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cache import dividend_sync_cache
 from markets import MARKET_META, apply_exchange, currency_of, market_of, normalize_market
-from models.portfolio import AuditEntry, Holding, Transaction, WatchlistEntry
+from models.portfolio import AuditEntry, Dividend, Holding, Transaction, WatchlistEntry
 from schemas.portfolio import (
-    AuditEntrySummary, PortfolioResponse, PositionAsOf, StockHolding, StockPurchaseHistory, UndoResult,
+    AuditEntrySummary, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding, StockPurchaseHistory,
+    UndoResult,
 )
 from .stock_service import fetch_current, get_market_status, add_stock, get_all_stocks
+
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -39,7 +44,8 @@ async def _validate_and_fetch_name(ticker: str) -> str:
         return await asyncio.to_thread(_fetch)
     except ValueError:
         raise
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Name lookup failed for %s; creating holding unnamed: %r", ticker, e)
         return ""
 
 
@@ -56,8 +62,8 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
         close = response.data[0].close if response.data else None
         if close is not None and not math.isnan(close):
             return Decimal(str(close))
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Archive price fetch failed for %s: %r", ticker, e)
     # Archive may not exist (e.g. deleted from dashboard) — fetch last close directly.
     try:
         def _direct() -> float | None:
@@ -66,8 +72,8 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
         close = await asyncio.to_thread(_direct)
         if close is not None and not math.isnan(close):
             return Decimal(str(close))
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Direct price fetch failed for %s: %r", ticker, e)
     return None
 
 
@@ -83,6 +89,15 @@ async def _fetch_transactions(session: AsyncSession, holding_id: int) -> list[Tr
         select(Transaction)
         .where(Transaction.holding_id == holding_id)
         .order_by(Transaction.date)
+    )
+    return list(result.scalars().all())
+
+
+async def _fetch_dividends(session: AsyncSession, holding_id: int) -> list[Dividend]:
+    result = await session.execute(
+        select(Dividend)
+        .where(Dividend.holding_id == holding_id)
+        .order_by(Dividend.date)
     )
     return list(result.scalars().all())
 
@@ -188,14 +203,92 @@ def _position_as_of(ticker: str, transactions: list[Transaction], as_of: str) ->
     )
 
 
+async def _fetch_dividend_history(ticker: str) -> list[tuple[str, Decimal]]:
+    """Per-share dividend history from yfinance, oldest first. [] on any failure.
+
+    Best-effort like every other yfinance call in this module — a scrape
+    hiccup degrades to "no new dividends found", not an error surfaced to
+    the user.
+    """
+    def _fetch() -> list[tuple[str, Decimal]]:
+        series = yf.Ticker(ticker).dividends
+        return [(ts.date().isoformat(), Decimal(str(round(float(amt), 8)))) for ts, amt in series.items()]
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Dividend history fetch failed for %s: %r", ticker, e)
+        return []
+
+
+async def _sync_dividends(session: AsyncSession, holding: Holding, transactions: list[Transaction]) -> int:
+    """Insert any yfinance-reported dividend payments not already recorded for this holding.
+
+    Never overwrites or re-creates an existing (holding_id, date) row, so a
+    user's manual edit or deletion of an auto-fetched entry always sticks —
+    this is purely an additive "fill in what's missing" pass. Returns the
+    number of new rows inserted.
+    """
+    buys = [t for t in transactions if not t.sale]
+    if not buys:
+        return 0
+    earliest_buy = min(t.date for t in buys)
+    today = datetime.date.today().isoformat()
+
+    history = await _fetch_dividend_history(holding.ticker)
+    if not history:
+        return 0
+
+    known_dates = {d.date for d in await _fetch_dividends(session, holding.id)}
+
+    inserted = 0
+    for date, per_share in history:
+        if date in known_dates or date < earliest_buy or date > today:
+            continue
+        # "Held as of this date" uses the same on-or-before convention as the
+        # rest of the app's as-of positions (see _position_as_of) rather than
+        # modeling real ex-dividend settlement (T-1) — an approximation, but
+        # a consistent one.
+        shares_held = _position_as_of(holding.ticker, transactions, date).shares
+        if shares_held <= 0:
+            continue
+        session.add(Dividend(
+            holding_id=holding.id, date=date, amount_per_share=per_share,
+            shares_held=shares_held, total_amount=per_share * shares_held,
+            source="auto",
+        ))
+        inserted += 1
+    return inserted
+
+
+async def _sync_dividends_background(ticker: str, holding_id: int) -> None:
+    """Fire-and-forget: seed dividend history right after a holding is first created.
+
+    Uses its own session since the request-scoped one may already be closed
+    by the time this runs (mirrors repair_all_fifo's use of SessionLocal).
+    """
+    from database import SessionLocal
+    try:
+        async with SessionLocal() as session:
+            holding = await session.get(Holding, holding_id)
+            if holding is None:
+                return
+            transactions = await _fetch_transactions(session, holding_id)
+            await _sync_dividends(session, holding, transactions)
+            await session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Background dividend sync failed for holding %s: %r", holding_id, e)
+        # best-effort — dividends can still be synced later via the explicit endpoint
+
+
 async def _ensure_in_dashboard(ticker: str) -> None:
     """Fire-and-forget: add ticker to the shared price archive if not already tracked."""
     try:
         existing = await get_all_stocks()
         if ticker not in existing:
             await add_stock(ticker)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to ensure %s is tracked in the price archive: %r", ticker, e)
 
 
 async def _add_to_watchlist(session: AsyncSession, user_id: str, ticker: str, company_name: str) -> None:
@@ -231,7 +324,17 @@ def _realized_gains(transactions: list[Transaction]) -> Decimal:
     return sum((txn.sold_at - txn.bought_at) * txn.shares for txn in transactions if txn.sale)
 
 
-def _build_stock_holding(holding: Holding, transactions: list[Transaction], price: Decimal | None) -> StockHolding:
+def _dividend_to_schema(d: Dividend, ticker: str) -> DividendEntry:
+    return DividendEntry(
+        id=d.id, ticker=ticker, date=d.date, amount_per_share=d.amount_per_share,
+        shares_held=d.shares_held, total_amount=d.total_amount, source=d.source,
+    )
+
+
+def _build_stock_holding(
+    holding: Holding, transactions: list[Transaction], price: Decimal | None,
+    dividends: list[Dividend] | None = None,
+) -> StockHolding:
     """`price` is None when a live quote couldn't be fetched — never silently treated as $0.
 
     In that case every price-derived field (current_price, stock_value, profit_loss,
@@ -265,6 +368,10 @@ def _build_stock_holding(holding: Holding, transactions: list[Transaction], pric
         for txn in transactions
     ]
 
+    dividends = dividends or []
+    total_dividends = sum(d.total_amount for d in dividends)
+    dividend_entries = [_dividend_to_schema(d, holding.ticker) for d in dividends]
+
     return StockHolding(
         ticker=holding.ticker,
         market=holding.market or market_of(holding.ticker),
@@ -277,9 +384,11 @@ def _build_stock_holding(holding: Holding, transactions: list[Transaction], pric
         stock_value=stock_value,
         total_invested=cost_basis,
         total_earned=total_earned,
+        total_dividends=total_dividends,
         profit_loss=profit_loss,
         profit_loss_percentage=profit_loss_percentage,
         trade_history=trade_history,
+        dividends=dividend_entries,
     )
 
 
@@ -290,7 +399,10 @@ async def get_stock_holding(session: AsyncSession, user_id: str, ticker: str, pr
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     transactions = await _fetch_transactions(session, holding.id)
-    return _build_stock_holding(holding, transactions, price if price is not None else await _current_price(ticker))
+    dividends = await _fetch_dividends(session, holding.id)
+    return _build_stock_holding(
+        holding, transactions, price if price is not None else await _current_price(ticker), dividends,
+    )
 
 
 def _resolve_date(date: str | None) -> str:
@@ -348,6 +460,7 @@ async def add_stock_purchase(
 
     if is_new:
         asyncio.create_task(_ensure_in_dashboard(ticker))
+        asyncio.create_task(_sync_dividends_background(ticker, holding.id))
 
     return await get_stock_holding(session, user_id, ticker)
 
@@ -495,13 +608,15 @@ async def get_portfolio(
     realized_gains = 0
     total_shares = 0
     total_invested = 0
+    total_dividends = 0
 
     for holding in holdings:
         transactions = await _fetch_transactions(session, holding.id)
+        dividends = await _fetch_dividends(session, holding.id)
         # prices.get(...) may be None (quote unavailable) — _build_stock_holding
         # propagates that as an explicit "unavailable" state rather than $0, and
         # holdings with no price are excluded below rather than counted as worthless.
-        stock_holding = _build_stock_holding(holding, transactions, prices.get(holding.ticker))
+        stock_holding = _build_stock_holding(holding, transactions, prices.get(holding.ticker), dividends)
         portfolio_holdings.append(stock_holding)
 
         if stock_holding.stock_value is not None:
@@ -509,10 +624,11 @@ async def get_portfolio(
         realized_gains += stock_holding.total_earned
         total_shares += stock_holding.shares
         total_invested += stock_holding.total_invested
+        total_dividends += stock_holding.total_dividends
 
     total_return = portfolio_value - total_invested
     return_percentage = (total_return / total_invested * 100) if total_invested > 0 else 0
-    net_profit_loss = total_return + realized_gains
+    net_profit_loss = total_return + realized_gains + total_dividends
 
     return PortfolioResponse(
         market=normalize_market(market) if market is not None else None,
@@ -523,6 +639,7 @@ async def get_portfolio(
         total_invested=total_invested,
         total_return=total_return,
         return_percentage=return_percentage,
+        total_dividends=total_dividends,
         net_profit_loss=net_profit_loss,
         holdings=portfolio_holdings,
     )
@@ -647,4 +764,138 @@ async def get_portfolio_as_of(
         if position.shares > 0 or position.sold_shares > 0:
             positions.append(position)
     return positions
+
+
+# ── Dividends ─────────────────────────────────────────────────────────────────
+
+def _validate_dividend_date(date: str, transactions: list[Transaction]) -> None:
+    today = datetime.date.today().isoformat()
+    if date > today:
+        raise ValueError("Dividend date cannot be in the future.")
+    buys = [t for t in transactions if not t.sale]
+    if buys and date < min(t.date for t in buys):
+        raise ValueError(f"Dividend date {date} is before the earliest purchase.")
+
+
+def _parse_dividend_date(date: str) -> str:
+    try:
+        return datetime.date.fromisoformat(date).isoformat()
+    except ValueError:
+        raise ValueError(f"Invalid date '{date}'. Expected yyyy-mm-dd.")
+
+
+async def get_dividends(session: AsyncSession, user_id: str, ticker: str) -> list[DividendEntry]:
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        raise ValueError(f"No holding found for ticker: {ticker}")
+    dividends = await _fetch_dividends(session, holding.id)
+    return [_dividend_to_schema(d, ticker) for d in dividends]
+
+
+async def sync_dividends(session: AsyncSession, user_id: str, ticker: str) -> list[DividendEntry]:
+    """Explicit re-sync from yfinance, throttled to at most once per day per (user, ticker).
+
+    Returns the full current dividend list regardless of whether the throttle
+    skipped a fresh fetch — the "Sync" button always shows the latest known
+    state, it just won't hammer yfinance on repeated clicks.
+    """
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        raise ValueError(f"No holding found for ticker: {ticker}")
+
+    cache_key = f"{user_id}:{ticker}"
+    if dividend_sync_cache.get(cache_key) is None:
+        transactions = await _fetch_transactions(session, holding.id)
+        await _sync_dividends(session, holding, transactions)
+        await session.commit()
+        dividend_sync_cache.set(cache_key, True)
+
+    dividends = await _fetch_dividends(session, holding.id)
+    return [_dividend_to_schema(d, ticker) for d in dividends]
+
+
+async def add_dividend(
+    session: AsyncSession, user_id: str, ticker: str, date: str,
+    amount_per_share: Decimal, shares_held: int | None = None,
+) -> DividendEntry:
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        raise ValueError(f"No holding found for ticker: {ticker}")
+
+    date = _parse_dividend_date(date)
+    transactions = await _fetch_transactions(session, holding.id)
+    _validate_dividend_date(date, transactions)
+
+    if shares_held is None:
+        shares_held = _position_as_of(ticker, transactions, date).shares
+    if shares_held <= 0:
+        raise ValueError(f"No shares of {ticker} were held on {date}.")
+
+    existing = await _fetch_dividends(session, holding.id)
+    if any(d.date == date for d in existing):
+        raise ValueError(f"A dividend entry for {date} already exists.")
+
+    entry = Dividend(
+        holding_id=holding.id, date=date, amount_per_share=amount_per_share,
+        shares_held=shares_held, total_amount=amount_per_share * shares_held,
+        source="manual",
+    )
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return _dividend_to_schema(entry, ticker)
+
+
+async def update_dividend(
+    session: AsyncSession, user_id: str, ticker: str, dividend_id: int,
+    date: str | None = None, amount_per_share: Decimal | None = None, shares_held: int | None = None,
+) -> DividendEntry:
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        raise ValueError(f"No holding found for ticker: {ticker}")
+
+    result = await session.execute(
+        select(Dividend).where(Dividend.id == dividend_id, Dividend.holding_id == holding.id)
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise ValueError(f"Dividend entry {dividend_id} not found for {ticker}.")
+
+    transactions = await _fetch_transactions(session, holding.id)
+
+    if date is not None:
+        date = _parse_dividend_date(date)
+        _validate_dividend_date(date, transactions)
+        existing = await _fetch_dividends(session, holding.id)
+        if any(d.id != dividend_id and d.date == date for d in existing):
+            raise ValueError(f"A dividend entry for {date} already exists.")
+        entry.date = date
+
+    if amount_per_share is not None:
+        entry.amount_per_share = amount_per_share
+    if shares_held is not None:
+        entry.shares_held = shares_held
+
+    entry.total_amount = entry.amount_per_share * entry.shares_held
+    entry.source = "manual"  # any edit is treated as a manual override going forward
+
+    await session.commit()
+    await session.refresh(entry)
+    return _dividend_to_schema(entry, ticker)
+
+
+async def delete_dividend(session: AsyncSession, user_id: str, ticker: str, dividend_id: int) -> None:
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        raise ValueError(f"No holding found for ticker: {ticker}")
+
+    result = await session.execute(
+        select(Dividend).where(Dividend.id == dividend_id, Dividend.holding_id == holding.id)
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise ValueError(f"Dividend entry {dividend_id} not found for {ticker}.")
+
+    await session.delete(entry)
+    await session.commit()
 

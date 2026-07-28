@@ -182,7 +182,7 @@ async def build_fact_sheet(ticker: str) -> dict:
     try:
         news = await news_service.get_stock_news(ticker, limit=3)
         headlines = [a["title"] for a in news.get("articles", [])[:3]]
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass  # best-effort — an insight is still useful without headlines
 
     return {

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import {
-  AlertTriangle, Database, FileDown, Globe2, LogOut, Moon, Palette, RefreshCw,
+  AlertTriangle, CheckCircle2, Database, FileDown, Globe2, KeyRound, LogOut, Moon, Palette, RefreshCw,
   Settings as SettingsIcon, ShieldAlert, Sparkles, Sun, Trash2, UserRound,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
@@ -87,7 +87,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 }
 
 export function SettingsPage() {
-  const { user, isGuest, localAuthMode, signOut } = useAuth()
+  const { user, isGuest, localAuthMode, signOut, changePassword } = useAuth()
   const { market, setMarket, aiEnabled, setAiEnabled, aiAvailable } = usePrefs()
   const { isDark, toggleTheme } = useTheme()
   const navigate = useNavigate()
@@ -95,6 +95,13 @@ export function SettingsPage() {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [pwSaving, setPwSaving] = useState(false)
+  const [pwError, setPwError] = useState<string | null>(null)
+  const [pwDone, setPwDone] = useState(false)
 
   const accountType = isGuest
     ? 'Guest session'
@@ -106,6 +113,40 @@ export function SettingsPage() {
     setDownloading(m)
     try { await downloadPortfolio(m) } catch {}
     setDownloading(null)
+  }
+
+  function openChangePassword() {
+    setChangingPassword(true)
+    setCurrentPw('')
+    setNewPw('')
+    setPwError(null)
+    setPwDone(false)
+  }
+
+  function closeChangePassword() {
+    setChangingPassword(false)
+    setPwError(null)
+  }
+
+  async function submitChangePassword() {
+    if (localAuthMode && !currentPw) { setPwError('Enter your current password'); return }
+    if (localAuthMode && newPw.length < 8) { setPwError('Password must be at least 8 characters'); return }
+    if (!newPw) { setPwError('Enter a new password'); return }
+    setPwSaving(true)
+    setPwError(null)
+    try {
+      // Password strength beyond the local 8-char minimum isn't duplicated
+      // here — in Supabase mode a policy violation comes back as a normal
+      // error below, worded however that project is configured.
+      await changePassword(newPw, currentPw || undefined)
+      setPwDone(true)
+      setCurrentPw('')
+      setNewPw('')
+    } catch (e) {
+      setPwError(e instanceof Error ? e.message : 'Could not change password')
+    } finally {
+      setPwSaving(false)
+    }
   }
 
   async function confirmDeleteAccount() {
@@ -141,6 +182,97 @@ export function SettingsPage() {
           <Row label="Account type">
             <span className="text-xs text-zinc-400">{accountType}</span>
           </Row>
+
+          {!isGuest && (
+            <>
+              <Row
+                label="Change password"
+                hint={
+                  changingPassword
+                    ? undefined
+                    : localAuthMode
+                      ? 'Update the password for this local account.'
+                      : 'Update your account password.'
+                }
+              >
+                {!changingPassword && (
+                  <button
+                    onClick={openChangePassword}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 text-zinc-300 text-xs font-medium transition-colors"
+                  >
+                    <KeyRound size={12} />
+                    Change password
+                  </button>
+                )}
+              </Row>
+
+              <AnimatePresence>
+                {changingPassword && (
+                  <motion.div
+                    variants={collapse}
+                    initial="hidden"
+                    animate="show"
+                    exit="exit"
+                    style={{ overflow: 'hidden' }}
+                  >
+                    {pwDone ? (
+                      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-3 flex items-center justify-between gap-3">
+                        <p className="flex items-center gap-2 text-xs text-emerald-400">
+                          <CheckCircle2 size={13} />
+                          Password updated.
+                        </p>
+                        <button
+                          onClick={closeChangePassword}
+                          className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                        >
+                          Done
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3.5 space-y-2">
+                        {localAuthMode && (
+                          <input
+                            type="password"
+                            placeholder="Current password"
+                            value={currentPw}
+                            onChange={e => { setCurrentPw(e.target.value); setPwError(null) }}
+                            className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
+                          />
+                        )}
+                        <input
+                          type="password"
+                          placeholder={localAuthMode ? 'New password (min. 8 characters)' : 'New password'}
+                          value={newPw}
+                          onChange={e => { setNewPw(e.target.value); setPwError(null) }}
+                          onKeyDown={e => e.key === 'Enter' && submitChangePassword()}
+                          className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
+                        />
+                        {pwError && <p className="text-[11px] text-red-400">{pwError}</p>}
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            onClick={submitChangePassword}
+                            disabled={pwSaving}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                          >
+                            {pwSaving ? <RefreshCw size={12} className="animate-spin" /> : <KeyRound size={12} />}
+                            Update password
+                          </button>
+                          <button
+                            onClick={closeChangePassword}
+                            disabled={pwSaving}
+                            className="px-3 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 text-zinc-300 text-xs font-medium transition-colors disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </>
+          )}
+
           <Row
             label="Sign out"
             hint="Ends your session on this device. Your watchlist and portfolios stay safely in your account."

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { X, RefreshCw } from 'lucide-react'
 import { motion } from 'motion/react'
 import { ExchangeSelect } from './ExchangeSelect'
+import { TickerAutocomplete } from './TickerAutocomplete'
 import type { Exchange } from '../utils/market'
 import { overlayFade, scaleIn } from '../lib/motion'
 
@@ -58,26 +59,27 @@ export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
         </div>
 
         <form onSubmit={handle} className="space-y-4">
-          <div>
-            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
-              TICKER
-            </label>
-            <input
-              ref={inputRef}
-              type="text"
-              value={ticker}
-              onChange={e => { setTicker(e.target.value.toUpperCase()); setError(null) }}
-              disabled={loading}
-              placeholder="e.g. AAPL or RELIANCE"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono uppercase text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
-            />
-          </div>
-
+          {/* Exchange first: it scopes the ticker search below, and keeping it
+              above means the suggestion dropdown never has to cover it. */}
           <div>
             <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
               EXCHANGE
             </label>
             <ExchangeSelect value={exchange} onChange={setExchange} />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+              TICKER
+            </label>
+            <TickerAutocomplete
+              inputRef={inputRef}
+              value={ticker}
+              onChange={t => { setTicker(t); setError(null) }}
+              exchange={exchange}
+              disabled={loading}
+              placeholder="e.g. AAPL or RELIANCE"
+            />
           </div>
 
           {error && (

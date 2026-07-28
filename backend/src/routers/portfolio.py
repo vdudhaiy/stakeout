@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_session
-from schemas.portfolio import AuditEntrySummary, PortfolioResponse, PositionAsOf, StockHolding, UndoResult
+from schemas.portfolio import AuditEntrySummary, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding, UndoResult
 from services import portfolio_service
 from services.export_service import build_portfolio_xlsx
 
@@ -113,6 +113,81 @@ async def get_position_as_of(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return data
+
+
+@router.get("/{ticker}/dividends", response_model=list[DividendEntry])
+async def get_dividends(
+    ticker: str,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Dividend payments recorded for this holding, oldest first. Read-only — no yfinance call."""
+    try:
+        data = await portfolio_service.get_dividends(session, user_id, ticker)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return data
+
+
+@router.post("/{ticker}/dividends/sync", response_model=list[DividendEntry])
+async def sync_dividends(
+    ticker: str,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Fetch new dividend payments from yfinance (throttled to once/day per ticker).
+
+    Never overwrites or resurrects an existing entry, so prior manual edits/deletes stick.
+    """
+    try:
+        data = await portfolio_service.sync_dividends(session, user_id, ticker)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return data
+
+
+@router.post("/{ticker}/dividends", response_model=DividendEntry)
+async def add_dividend(
+    ticker: str, date: str, amount_per_share: Decimal,
+    shares_held: int | None = None,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Manually record a dividend payment. shares_held defaults to the FIFO position as of `date`."""
+    try:
+        data = await portfolio_service.add_dividend(session, user_id, ticker, date, amount_per_share, shares_held)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return data
+
+
+@router.put("/{ticker}/dividends/{dividend_id}", response_model=DividendEntry)
+async def update_dividend(
+    ticker: str, dividend_id: int,
+    date: str | None = None, amount_per_share: Decimal | None = None, shares_held: int | None = None,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        data = await portfolio_service.update_dividend(
+            session, user_id, ticker, dividend_id, date, amount_per_share, shares_held,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return data
+
+
+@router.delete("/{ticker}/dividends/{dividend_id}")
+async def delete_dividend(
+    ticker: str, dividend_id: int,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await portfolio_service.delete_dividend(session, user_id, ticker, dividend_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {}
 
 
 @router.post("/{ticker}/buy", response_model=StockHolding)

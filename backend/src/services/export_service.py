@@ -11,7 +11,7 @@ from schemas.portfolio import PortfolioResponse
 _S1_TITLE_ROW   = 0
 _S1_SUM_HDR_ROW = 2
 _S1_FIRST_SUM   = 3   # Portfolio Value row
-_S1_TABLE_ROW   = 9   # Holdings table header row
+_S1_TABLE_ROW   = 10  # Holdings table header row
 
 _S2_TITLE_ROW   = 0
 _S2_TABLE_ROW   = 2   # Transactions table header row
@@ -79,8 +79,9 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     ws1.set_column('H:H', 15)   # Unrealized P&L
     ws1.set_column('I:I', 12)   # % Gain/Loss
     ws1.set_column('J:J', 15)   # Realized Gains
+    ws1.set_column('K:K', 14)   # Dividends
 
-    ws1.merge_range(0, 0, 0, 9, f'Portfolio Snapshot — {dt_date.today().isoformat()}', title_fmt)
+    ws1.merge_range(0, 0, 0, 10, f'Portfolio Snapshot — {dt_date.today().isoformat()}', title_fmt)
     ws1.write(_S1_SUM_HDR_ROW, 0, 'PORTFOLIO SUMMARY', section_fmt)
 
     summary_rows = [
@@ -88,6 +89,7 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
         ('Total Invested',  portfolio.total_invested,  False),
         ('Unrealized P&L',  portfolio.total_return,    True),
         ('Realized Gains',  portfolio.realized_gains,  True),
+        ('Dividends',       portfolio.total_dividends, True),
         ('Net P&L',         portfolio.net_profit_loss, True),
     ]
     for i, (lbl, val, signed) in enumerate(summary_rows):
@@ -112,6 +114,7 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
         {'header': 'Unrealized P&L', 'format': money},
         {'header': '% Gain/Loss',    'format': pct_fmt},
         {'header': 'Realized Gains', 'format': money},
+        {'header': 'Dividends',      'format': money},
     ]
 
     data1 = []
@@ -133,9 +136,10 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
             f'=F{xl}-G{xl}' if priced else 'N/A',               # Unrealized P&L
             f'=IF(G{xl}>0,(F{xl}-G{xl})/G{xl},0)' if priced else 'N/A',  # % Gain/Loss
             float(h.total_earned),                               # Realized Gains
+            float(h.total_dividends),                            # Dividends
         ])
 
-    ws1.add_table(T1, 0, T1 + n, 9, {
+    ws1.add_table(T1, 0, T1 + n, 10, {
         'name': 'Holdings',
         'style': 'Table Style Medium 2',
         'columns': h_cols,

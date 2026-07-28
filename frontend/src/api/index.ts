@@ -1,4 +1,4 @@
-import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse } from '../types'
+import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse } from '../types'
 import { applyExchange, type Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
@@ -182,6 +182,75 @@ export async function deleteTransaction(ticker: string, transactionId: number): 
   }
 }
 
+// ── Dividends ─────────────────────────────────────────────────────────────
+// Not available in guest mode — dividend history is stored server-side per
+// holding, and guest positions never get a DB row to attach it to.
+
+export async function fetchDividends(ticker: string): Promise<DividendEntry[]> {
+  if (isGuestMode()) return []
+  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}/dividends`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load dividends for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function syncDividends(ticker: string): Promise<DividendEntry[]> {
+  if (isGuestMode()) throw new Error('Sign in to sync dividends.')
+  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}/dividends/sync`, { method: 'POST' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to sync dividends for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function addDividend(
+  ticker: string, date: string, amountPerShare: number, sharesHeld?: number,
+): Promise<DividendEntry> {
+  if (isGuestMode()) throw new Error('Sign in to track dividends.')
+  const sharesQs = sharesHeld != null ? `&shares_held=${sharesHeld}` : ''
+  const res = await apiFetch(
+    `/portfolio/${encodeURIComponent(ticker)}/dividends?date=${date}&amount_per_share=${amountPerShare}${sharesQs}`,
+    { method: 'POST' },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to add dividend for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function updateDividend(
+  ticker: string, dividendId: number,
+  fields: { date?: string; amountPerShare?: number; sharesHeld?: number },
+): Promise<DividendEntry> {
+  if (isGuestMode()) throw new Error('Sign in to track dividends.')
+  const params = new URLSearchParams()
+  if (fields.date != null) params.set('date', fields.date)
+  if (fields.amountPerShare != null) params.set('amount_per_share', String(fields.amountPerShare))
+  if (fields.sharesHeld != null) params.set('shares_held', String(fields.sharesHeld))
+  const res = await apiFetch(
+    `/portfolio/${encodeURIComponent(ticker)}/dividends/${dividendId}?${params.toString()}`,
+    { method: 'PUT' },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to update dividend')
+  }
+  return res.json()
+}
+
+export async function deleteDividend(ticker: string, dividendId: number): Promise<void> {
+  if (isGuestMode()) throw new Error('Sign in to track dividends.')
+  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}/dividends/${dividendId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to delete dividend')
+  }
+}
+
 export async function downloadPortfolio(market?: 'US' | 'IN'): Promise<void> {
   if (isGuestMode()) throw new Error('Sign in to export your portfolio.')
   const res = await apiFetch(`/portfolio/download${market ? `?market=${market}` : ''}`)
@@ -289,6 +358,25 @@ export async function fetchIndices(): Promise<IndicesResponse> {
     throw new Error(err.detail ?? 'Failed to load market indices')
   }
   return res.json()
+}
+
+/**
+ * Ticker/company-name autocomplete, scoped to `exchange` ("US" | "NSE" | "BSE").
+ * Indian results come back with their .NS/.BO suffix already stripped — the
+ * exchange picker in the UI is what applies it, not this list. Best-effort:
+ * fails silently to an empty list rather than throwing, since it only
+ * powers suggestions and shouldn't block manual ticker entry.
+ */
+export async function searchTickers(query: string, exchange: 'US' | 'NSE' | 'BSE'): Promise<TickerSuggestion[]> {
+  if (!query.trim()) return []
+  try {
+    const res = await apiFetch(`/stocks/search?q=${encodeURIComponent(query)}&exchange=${exchange}`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data.results as TickerSuggestion[]) ?? []
+  } catch {
+    return []
+  }
 }
 
 /** Sector/industry classification for a batch of tickers (24h-cached server-side). */

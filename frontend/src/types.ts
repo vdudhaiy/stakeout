@@ -119,6 +119,16 @@ export interface StockPurchaseHistory {
   shares_remaining: number
 }
 
+export interface DividendEntry {
+  id: number
+  ticker: string
+  date: string                // ex-dividend date
+  amount_per_share: number
+  shares_held: number          // shares held as of the ex-date when this was recorded
+  total_amount: number         // amount_per_share * shares_held
+  source: 'auto' | 'manual'
+}
+
 export interface StockHolding {
   ticker: string
   market: Market
@@ -135,7 +145,9 @@ export interface StockHolding {
   profit_loss_percentage: number | null
   total_earned: number
   total_invested: number
+  total_dividends: number
   trade_history: StockPurchaseHistory[]
+  dividends: DividendEntry[]
 }
 
 export interface PortfolioResponse {
@@ -147,6 +159,7 @@ export interface PortfolioResponse {
   total_invested: number
   total_return: number
   return_percentage: number
+  total_dividends: number
   net_profit_loss: number
   holdings: StockHolding[]
 }
@@ -266,6 +279,12 @@ export interface TickerClassification {
 }
 
 export type ClassificationMap = Record<string, TickerClassification>
+
+export interface TickerSuggestion {
+  symbol: string    // bare ticker — no .NS/.BO suffix, the exchange picker applies that
+  name: string
+  exchange: string  // display label, e.g. "NASDAQ", "NSE"
+}
 
 // ── AI Explanation Layer ──────────────────────────────────────────────────
 

@@ -72,7 +72,7 @@ def _synthesise_daily_from_hourly(ticker: str, date: pd.Timestamp) -> dict | Non
             'Close':  float(regular.iloc[-1]['Close']),
             'Volume': int(regular['Volume'].sum()),
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Could not synthesise daily bar for {ticker} on {date.date()}: {e}")
         return None
 
@@ -183,7 +183,7 @@ async def append_price_data(ticker):
         data, synthetic_dates = await asyncio.to_thread(_download, ticker, start_date, end_date)
         if data.empty:
             raise ValueError(f"No historical price data found for ticker: {ticker}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error re-fetching price data for {ticker}: {e}")
         return  # keep serving the existing archive rather than destroying it
 

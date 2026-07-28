@@ -6,7 +6,7 @@ import { fetchIndustryMap, fetchSectorMap, addStock } from '../api'
 import { usePrefs, type MarketFilter } from '../contexts/PrefsContext'
 import { AddTickerModal } from './AddTickerModal'
 import type { Exchange } from '../utils/market'
-import { applyExchange } from '../utils/market'
+import { applyExchange, displayTicker } from '../utils/market'
 import type { GroupedStocks, WatchlistMap, ComparisonGroup } from '../types'
 import { collapse, toastSlide, layoutSpring } from '../lib/motion'
 
@@ -85,7 +85,7 @@ function GroupSection({
                     : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
                 )}
               >
-                <span className="font-mono text-sm font-medium">{ticker}</span>
+                <span className="font-mono text-sm font-medium">{displayTicker(ticker)}</span>
               </button>
             ))}
           </motion.div>
@@ -268,7 +268,7 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
                           : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
                       )}
                     >
-                      <span className="font-mono text-sm font-medium">{ticker}</span>
+                      <span className="font-mono text-sm font-medium">{displayTicker(ticker)}</span>
                       <span className="ml-auto text-[9px] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
                         {tickers[ticker]?.market ?? 'US'}
                       </span>

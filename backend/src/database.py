@@ -1,7 +1,7 @@
 import os
 from typing import AsyncGenerator
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -26,6 +26,18 @@ _IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+if _IS_SQLITE:
+    # SQLite does not enforce FOREIGN KEY constraints per connection unless told
+    # to — unlike Postgres, which always enforces them. Without this, a write
+    # that races a concurrent delete of its FK parent (e.g. a background
+    # dividend-sync insert racing a holding delete) succeeds silently instead
+    # of raising IntegrityError, leaving an orphaned row with no error at all.
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:  # noqa: ANN001, ARG001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 class Base(DeclarativeBase):

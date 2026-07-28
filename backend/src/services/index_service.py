@@ -40,7 +40,7 @@ def _fetch_one(symbol: str, name: str, region: str) -> dict | None:
     try:
         hist = yf.Ticker(symbol).history(period="3mo", interval="1d")
     except Exception as e:  # noqa: BLE001
-        logger.warning("Index fetch failed for %s: %s", symbol, e)
+        logger.warning("Index fetch failed for %s: %r", symbol, e)
         return None
     if hist is None or hist.empty or "Close" not in hist:
         return None
