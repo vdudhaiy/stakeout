@@ -64,8 +64,9 @@ async def client(db_engine):
     logic, not token verification (that's covered separately, if at all, by
     mocking jwt.decode directly).
 
-    The app lifespan's init_db / repair_all_fifo are patched out so they don't
-    try to use the module-level engine (a separate in-memory instance).
+    The app lifespan's init_db / repair_all_fifo / repair_stock_metadata are
+    patched out so they don't try to use the module-level engine (a separate
+    in-memory instance).
     """
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -79,7 +80,8 @@ async def client(db_engine):
 
     with patch("main.init_db", new_callable=AsyncMock):
         with patch("main.repair_all_fifo", new_callable=AsyncMock):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-                yield c
+            with patch("main.repair_stock_metadata", new_callable=AsyncMock):
+                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                    yield c
 
     app.dependency_overrides.clear()

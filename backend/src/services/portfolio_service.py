@@ -5,7 +5,7 @@ import math
 from decimal import Decimal
 
 import yfinance as yf
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache import dividend_sync_cache
@@ -25,9 +25,13 @@ logger = logging.getLogger(__name__)
 async def _validate_and_fetch_name(ticker: str) -> str:
     """Confirms the ticker exists on yfinance and returns a display name.
 
-    Raises ValueError if yfinance returns no history (unknown ticker).
-    On any other unexpected error, returns an empty string so the holding
-    can still be created without a display name.
+    Raises ValueError if yfinance returns no history (unknown ticker) — that's
+    a real "this ticker doesn't exist" and retrying won't help. Any other
+    error (almost always the separate `.info` call, which is flakier than
+    `.history()`) gets one retry before giving up and returning an empty
+    string so the holding can still be created without a display name.
+    A holding that ends up unnamed here is picked up later by
+    repair_stock_metadata, which backfills it once the lookup succeeds.
     """
     def _fetch() -> str:
         stock = yf.Ticker(ticker)
@@ -40,13 +44,16 @@ async def _validate_and_fetch_name(ticker: str) -> str:
         info = stock.info
         return info.get("shortName") or info.get("longName") or ""
 
-    try:
-        return await asyncio.to_thread(_fetch)
-    except ValueError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Name lookup failed for %s; creating holding unnamed: %r", ticker, e)
-        return ""
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            return await asyncio.to_thread(_fetch)
+        except ValueError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+    logger.warning("Name lookup failed for %s; creating holding unnamed: %r", ticker, last_error)
+    return ""
 
 
 async def _current_price(ticker: str, is_market_open: bool | None = None) -> Decimal | None:
@@ -282,13 +289,24 @@ async def _sync_dividends_background(ticker: str, holding_id: int) -> None:
 
 
 async def _ensure_in_dashboard(ticker: str) -> None:
-    """Fire-and-forget: add ticker to the shared price archive if not already tracked."""
-    try:
-        existing = await get_all_stocks()
-        if ticker not in existing:
-            await add_stock(ticker)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Failed to ensure %s is tracked in the price archive: %r", ticker, e)
+    """Fire-and-forget: add ticker to the shared price archive if not already tracked.
+
+    `add_stock` does a real yfinance history fetch, which occasionally fails
+    transiently — losing it here silently leaves the ticker with no archive
+    data, which breaks the Tracker page for it (no OHLCV to serve). One retry
+    before giving up; a ticker that still fails is picked up later by
+    repair_stock_metadata.
+    """
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            existing = await get_all_stocks()
+            if ticker not in existing:
+                await add_stock(ticker)
+            return
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+    logger.warning("Failed to ensure %s is tracked in the price archive: %r", ticker, last_error)
 
 
 async def _add_to_watchlist(session: AsyncSession, user_id: str, ticker: str, company_name: str) -> None:
@@ -703,6 +721,66 @@ async def repair_all_fifo() -> None:
             except ValueError:
                 pass  # corrupt state — leave as-is rather than crashing startup
         await session.commit()
+
+
+async def repair_stock_metadata() -> None:
+    """Backfills two things that can fall through the fire-and-forget/best-effort
+    work add_stock_purchase(s) does for a brand-new holding: a transient
+    yfinance failure on the `.info` lookup leaves Holding.company_name empty
+    (shows as a bare ticker in the portfolio instead of a name), and a
+    transient failure fetching the initial price history leaves the ticker
+    missing from the shared archive (breaks the Tracker page for it — no
+    OHLCV data to serve). Both now get a retry at the point they first run
+    (see _validate_and_fetch_name / _ensure_in_dashboard), but anything that
+    already slipped through before that fix — or still fails twice — stays
+    broken forever with nothing else to revisit it. This backfills those.
+
+    Safe to call repeatedly (e.g. every startup) — a holding that's already
+    complete is a no-op. Does real yfinance I/O per affected ticker, so the
+    caller should run this as a background task rather than await it.
+    """
+    from database import SessionLocal
+
+    async with SessionLocal() as session:
+        result = await session.execute(select(Holding.ticker, Holding.company_name))
+        rows = result.all()
+    if not rows:
+        return
+
+    all_tickers = {ticker for ticker, _ in rows}
+    unnamed_tickers = {ticker for ticker, name in rows if not name}
+
+    for ticker in unnamed_tickers:
+        try:
+            name = await _validate_and_fetch_name(ticker)
+        except ValueError:
+            continue  # ticker itself no longer resolves — nothing to backfill
+        if not name:
+            continue
+        async with SessionLocal() as session:
+            await session.execute(
+                update(Holding).where(Holding.ticker == ticker, Holding.company_name == "").values(company_name=name)
+            )
+            # The watchlist entry got the same treatment at buy time — it just
+            # fell back to the bare ticker instead of staying truly empty.
+            await session.execute(
+                update(WatchlistEntry)
+                .where(WatchlistEntry.ticker == ticker, WatchlistEntry.company_name.in_(("", ticker)))
+                .values(company_name=name)
+            )
+            await session.commit()
+
+    try:
+        archived = await get_all_stocks()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("repair_stock_metadata: could not list the price archive: %r", e)
+        return
+
+    for ticker in all_tickers - set(archived):
+        try:
+            await add_stock(ticker)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("repair_stock_metadata: failed to backfill archive for %s: %r", ticker, e)
 
 
 async def get_portfolio(

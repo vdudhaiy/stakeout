@@ -1,5 +1,6 @@
 '''Main file for the dashboard backend. Sets up the FastAPI application and includes the necessary routers.'''
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -9,13 +10,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from auth import local_auth_enabled
 from database import init_db
 from routers import account, ai, fx, health, indicators, news, portfolio, stocks, watchlist
-from services.portfolio_service import repair_all_fifo
+from services.portfolio_service import repair_all_fifo, repair_stock_metadata
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await repair_all_fifo()
+    # Backfills any holding that lost its company name or its price-archive
+    # coverage to a transient yfinance failure when it was first bought (see
+    # repair_stock_metadata). Runs in the background, not awaited, since it
+    # does real network I/O per affected ticker and shouldn't delay startup.
+    asyncio.create_task(repair_stock_metadata())
     yield
 
 

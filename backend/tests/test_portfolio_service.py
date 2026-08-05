@@ -18,8 +18,9 @@ import pytest
 import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from models.portfolio import Holding, Transaction
+from models.portfolio import Holding, Transaction, WatchlistEntry
 from schemas.portfolio import BulkPurchaseLot, BulkSaleLot
 from services import portfolio_service
 
@@ -567,3 +568,112 @@ async def test_list_audit_log_returns_newest_first(db_session):
 
     entries = await portfolio_service.list_audit_log(db_session, USER_ID)
     assert [e.ticker for e in entries] == ["MSFT", "AAPL"]
+
+
+# ── repair_stock_metadata ───────────────────────────────────────────────────
+#
+# Like repair_all_fifo, this opens its own sessions via `from database import
+# SessionLocal` rather than taking one as a parameter — so tests patch
+# database.SessionLocal to the per-test engine (db_engine) instead of using
+# the db_session fixture directly.
+
+@pytest_asyncio.fixture
+async def repaired_db(db_engine):
+    """Runs portfolio_service.repair_stock_metadata() against the per-test
+    engine and hands back a session on it afterward for assertions."""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async def _run():
+        with patch("database.SessionLocal", factory):
+            await portfolio_service.repair_stock_metadata()
+
+    async with factory() as session:
+        yield session, _run
+
+
+async def test_repair_backfills_missing_company_name(repaired_db):
+    session, run = repaired_db
+    session.add(Holding(
+        user_id=USER_ID, ticker="AAPL", company_name="", market="US",
+        shares=10, sold_shares=0, average_cost=Decimal("150.0"),
+    ))
+    session.add(Holding(
+        user_id=USER_ID, ticker="MSFT", company_name="Microsoft Corp", market="US",
+        shares=5, sold_shares=0, average_cost=Decimal("300.0"),
+    ))
+    await session.commit()
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Apple Inc."):
+        with patch("services.portfolio_service.get_all_stocks",
+                   new_callable=AsyncMock, return_value={"AAPL": "Apple Inc.", "MSFT": "Microsoft Corp"}):
+            await run()
+
+    result = await session.execute(select(Holding).order_by(Holding.ticker))
+    holdings = {h.ticker: h.company_name for h in result.scalars().all()}
+    assert holdings["AAPL"] == "Apple Inc."
+    assert holdings["MSFT"] == "Microsoft Corp"  # untouched — wasn't broken
+
+
+async def test_repair_backfills_watchlist_entry_that_fell_back_to_ticker(repaired_db):
+    session, run = repaired_db
+    session.add(Holding(
+        user_id=USER_ID, ticker="AAPL", company_name="", market="US",
+        shares=10, sold_shares=0, average_cost=Decimal("150.0"),
+    ))
+    session.add(WatchlistEntry(user_id=USER_ID, ticker="AAPL", market="US", company_name="AAPL"))
+    await session.commit()
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Apple Inc."):
+        with patch("services.portfolio_service.get_all_stocks",
+                   new_callable=AsyncMock, return_value={"AAPL": "Apple Inc."}):
+            await run()
+
+    entry = (await session.execute(
+        select(WatchlistEntry).where(WatchlistEntry.ticker == "AAPL")
+    )).scalar_one()
+    assert entry.company_name == "Apple Inc."
+
+
+async def test_repair_backfills_missing_archive_entry(repaired_db):
+    session, run = repaired_db
+    session.add(Holding(
+        user_id=USER_ID, ticker="TSLA", company_name="Tesla, Inc.", market="US",
+        shares=3, sold_shares=0, average_cost=Decimal("200.0"),
+    ))
+    await session.commit()
+
+    with patch("services.portfolio_service.get_all_stocks",
+               new_callable=AsyncMock, return_value={}):  # TSLA missing from the archive
+        with patch("services.portfolio_service.add_stock", new_callable=AsyncMock) as mock_add_stock:
+            await run()
+
+    mock_add_stock.assert_awaited_once_with("TSLA")
+
+
+async def test_repair_skips_ticker_that_no_longer_resolves(repaired_db):
+    session, run = repaired_db
+    session.add(Holding(
+        user_id=USER_ID, ticker="DELISTED", company_name="", market="US",
+        shares=1, sold_shares=0, average_cost=Decimal("1.0"),
+    ))
+    await session.commit()
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, side_effect=ValueError("not found")):
+        with patch("services.portfolio_service.get_all_stocks",
+                   new_callable=AsyncMock, return_value={"DELISTED": "x"}):
+            await run()  # should not raise
+
+    holding = (await session.execute(
+        select(Holding).where(Holding.ticker == "DELISTED")
+    )).scalar_one()
+    assert holding.company_name == ""
+
+
+async def test_repair_no_holdings_is_a_noop(repaired_db):
+    _session, run = repaired_db
+    with patch("services.portfolio_service.get_all_stocks", new_callable=AsyncMock) as mock_get_all:
+        await run()
+    mock_get_all.assert_not_awaited()

@@ -6,7 +6,7 @@ import {
   BarChart2, AlertTriangle, FileDown, Pencil, Coins,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
-import { PieChart, Pie, Cell, Tooltip as ChartTooltip, Legend, ResponsiveContainer } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip as ChartTooltip, ResponsiveContainer } from 'recharts'
 import type { BuyLot, ClassificationMap, DividendEntry, Market, PortfolioResponse, SellLot, StockHolding, StockPurchaseHistory } from '../types'
 import {
   fetchPortfolio, fetchClassification, logBuyBulk, logSellBulk, deletePortfolioHolding, deleteTransaction, downloadPortfolio,
@@ -150,12 +150,12 @@ function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: 
   if (withValue.length < 2) return null
   const total = withValue.reduce((sum, h) => sum + h.stock_value, 0)
   const sorted = [...withValue].sort((a, b) => b.stock_value - a.stock_value)
-  const top = sorted.slice(0, 8)
-  const rest = sorted.slice(8)
-  const data = [
-    ...top.map(h => ({ name: h.ticker, value: h.stock_value })),
-    ...(rest.length ? [{ name: 'Other', value: rest.reduce((s, h) => s + h.stock_value, 0) }] : []),
-  ]
+  // The chart itself plots every holding — nothing is folded away, it's just
+  // a thin slice you can hover. The text list beside it is capped to the
+  // top 10 so it doesn't run off the page; the rest is still reachable on hover.
+  const data = sorted.map(h => ({ name: h.ticker, value: h.stock_value }))
+  const listItems = sorted.slice(0, 10)
+  const listRestCount = sorted.length - listItems.length
   const unpriced = holdings.filter(h => h.stock_value == null).length
 
   return (
@@ -197,14 +197,21 @@ function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: 
                   </PieChart>
                 </ResponsiveContainer>
               </div>
-              <div className="flex-1 min-w-[180px] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-                {data.map((d, i) => (
-                  <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
-                    <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                    <span className="text-zinc-300">{d.name}</span>
-                    <span className="ml-auto text-zinc-500">{((d.value / total) * 100).toFixed(1)}%</span>
-                  </div>
-                ))}
+              <div className="flex-1 min-w-[180px]">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+                  {listItems.map((h, i) => (
+                    <div key={h.ticker} className="flex items-center gap-2 text-xs font-mono">
+                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                      <span className="text-zinc-300">{h.ticker}</span>
+                      <span className="ml-auto text-zinc-500">{((h.stock_value / total) * 100).toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </div>
+                {listRestCount > 0 && (
+                  <p className="mt-1.5 text-[10px] text-zinc-600">
+                    +{listRestCount} more — hover the chart to see the rest.
+                  </p>
+                )}
               </div>
             </div>
           </motion.div>
@@ -262,6 +269,11 @@ function BreakdownPie({
       </div>
     )
   }
+  // The chart plots every group (data is already sorted descending by
+  // groupBy) — the text list below is capped to the top 5, with the rest
+  // still reachable by hovering the chart itself.
+  const listItems = data.slice(0, 5)
+  const listRestCount = data.length - listItems.length
   return (
     <div className="flex-1 min-w-[260px]">
       <p className="text-[10px] font-semibold tracking-widest text-zinc-500 mb-1">{title}</p>
@@ -302,14 +314,22 @@ function BreakdownPie({
               itemStyle={{ color: '#E4E4E7', whiteSpace: 'normal' }}
               labelStyle={{ color: '#E4E4E7' }}
             />
-            <Legend
-              verticalAlign="bottom"
-              iconType="square"
-              iconSize={8}
-              formatter={(value: string) => <span className="text-[10px] font-mono text-zinc-400">{value}</span>}
-            />
           </PieChart>
         </ResponsiveContainer>
+      </div>
+      <div className="mt-1.5 space-y-1">
+        {listItems.map((d, i) => (
+          <div key={d.name} className="flex items-center gap-2 text-xs font-mono">
+            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+            <span className="text-zinc-300 truncate">{d.name}</span>
+            <span className="ml-auto text-zinc-500 shrink-0">{((d.value / total) * 100).toFixed(1)}%</span>
+          </div>
+        ))}
+        {listRestCount > 0 && (
+          <p className="text-[10px] text-zinc-600 pt-0.5">
+            +{listRestCount} more — hover the chart to see the rest.
+          </p>
+        )}
       </div>
     </div>
   )
@@ -1273,18 +1293,24 @@ export function PortfolioPage({
   const [dividendDeleteLoading, setDividendDeleteLoading] = useState(false)
   const [dividendDeleteError, setDividendDeleteError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false
+    // The background poll (PORTFOLIO_REFRESH_MS) fetches quietly — no skeleton,
+    // no error banner — so a scheduled refresh never blanks a page the user is
+    // actively looking at. Values update in place once the new data lands (see
+    // StatCard's flash-on-change). Only the initial load and a tab switch,
+    // which have nothing on screen yet, show the loading state.
+    if (!silent) setLoading(true)
+    if (!silent) setError(null)
     try {
       const result = await fetchPortfolio(tab)
       setPortfolio(result)
       onData?.(result)
       setLastUpdated(new Date())
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load portfolio')
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load portfolio')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [tab, onData])
 
@@ -1304,7 +1330,7 @@ export function PortfolioPage({
   useEffect(() => { load() }, [load])
 
   useEffect(() => {
-    const id = setInterval(load, PORTFOLIO_REFRESH_MS)
+    const id = setInterval(() => load({ silent: true }), PORTFOLIO_REFRESH_MS)
     return () => clearInterval(id)
   }, [load])
 
@@ -1402,7 +1428,9 @@ export function PortfolioPage({
     }
   }
 
-  const holdings  = portfolio?.holdings ?? []
+  // Always alphabetical by ticker, regardless of the order the API returns —
+  // makes a given position easy to find without depending on backend order.
+  const holdings  = [...(portfolio?.holdings ?? [])].sort((a, b) => a.ticker.localeCompare(b.ticker))
   const netPl     = portfolio?.net_profit_loss ?? 0
   const totalRet  = portfolio?.total_return ?? 0
 
@@ -1448,7 +1476,7 @@ export function PortfolioPage({
           <div className="flex items-center gap-3">
             <div className="flex flex-col items-center gap-0.5">
               <button
-                onClick={load}
+                onClick={() => load()}
                 disabled={loading}
                 title="Refresh portfolio"
                 className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 rounded-lg transition-colors disabled:opacity-40"
@@ -1491,7 +1519,7 @@ export function PortfolioPage({
           <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
             <p className="text-sm text-red-400">{error}</p>
             <button
-              onClick={load}
+              onClick={() => load()}
               className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
             >
               Try again
