@@ -12,8 +12,8 @@ from cache import dividend_sync_cache
 from markets import MARKET_META, apply_exchange, currency_of, market_of, normalize_market
 from models.portfolio import AuditEntry, Dividend, Holding, Transaction, WatchlistEntry
 from schemas.portfolio import (
-    AuditEntrySummary, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding, StockPurchaseHistory,
-    UndoResult,
+    AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding,
+    StockPurchaseHistory, UndoResult,
 )
 from .stock_service import fetch_current, get_market_status, add_stock, get_all_stocks
 
@@ -462,6 +462,129 @@ async def add_stock_purchase(
         asyncio.create_task(_ensure_in_dashboard(ticker))
         asyncio.create_task(_sync_dividends_background(ticker, holding.id))
 
+    return await get_stock_holding(session, user_id, ticker)
+
+
+async def add_stock_purchases_bulk(
+    session: AsyncSession, user_id: str, ticker: str, lots: list[BulkPurchaseLot],
+    exchange: str | None = None,
+) -> StockHolding:
+    """Records several buy lots (e.g. backfilled purchase history) as one atomic write.
+
+    Same FIFO-replay logic as add_stock_purchase, but replayed once across all
+    new lots instead of once per lot — so a multi-row "buy more" submission
+    either lands in full or, on a bad date, not at all.
+    """
+    if not lots:
+        raise ValueError("At least one purchase is required.")
+
+    # Resolve/validate every date up front so a bad row anywhere in the batch
+    # fails before anything is written — no holding created, no transactions
+    # flushed — rather than leaving earlier rows dangling in the session.
+    resolved_dates = [_resolve_date(lot.date) for lot in lots]
+
+    ticker = apply_exchange(ticker, exchange)
+    holding = await _fetch_holding(session, user_id, ticker)
+    is_new = holding is None
+    if is_new:
+        company_name = await _validate_and_fetch_name(ticker)
+        holding = Holding(
+            user_id=user_id, ticker=ticker, market=market_of(ticker),
+            company_name=company_name, shares=0, sold_shares=0, average_cost=Decimal(0),
+        )
+        session.add(holding)
+        await session.flush()
+        # A newly-bought ticker should show up on the dashboard too, not just the portfolio.
+        await _add_to_watchlist(session, user_id, ticker, company_name)
+
+    new_txns = [
+        Transaction(
+            holding_id=holding.id,
+            sale=False,
+            date=resolved_date,
+            shares=lot.shares,
+            bought_at=lot.bought_at,
+            shares_remaining=lot.shares,
+        )
+        for lot, resolved_date in zip(lots, resolved_dates)
+    ]
+    existing = await _fetch_transactions(session, holding.id)
+    all_txns = sorted(existing + new_txns, key=lambda t: t.date)
+    _replay_fifo(holding, all_txns)
+
+    session.add_all(new_txns)
+    await session.flush()  # assign new_txn.id before logging it
+    for txn in new_txns:
+        _log_audit(session, user_id, ticker, "insert", {"transaction_id": txn.id})
+    await session.commit()
+    await session.refresh(holding)
+
+    if is_new:
+        asyncio.create_task(_ensure_in_dashboard(ticker))
+        asyncio.create_task(_sync_dividends_background(ticker, holding.id))
+
+    return await get_stock_holding(session, user_id, ticker)
+
+
+async def sell_stock_shares_bulk(
+    session: AsyncSession, user_id: str, ticker: str, lots: list[BulkSaleLot],
+) -> StockHolding:
+    """Records several sell lots (different dates/prices) as one atomic write.
+
+    Same FIFO-replay logic as sell_stock_shares, but replayed once across all
+    new lots instead of once per lot — a multi-row sale either lands in full
+    or, on a bad date or an oversell, not at all.
+    """
+    if not lots:
+        raise ValueError("At least one sale is required.")
+
+    # Resolve every date up front so a bad row anywhere in the batch fails
+    # before anything is written.
+    resolved_dates = [_resolve_date(lot.date) for lot in lots]
+
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        raise ValueError(f"No holding found for ticker: {ticker}")
+
+    # Upfront guard: no sale date may precede the earliest buy.
+    earliest_row = await session.execute(
+        select(Transaction.date)
+        .where(Transaction.holding_id == holding.id, Transaction.sale == False)  # noqa: E712
+        .order_by(Transaction.date)
+        .limit(1)
+    )
+    earliest_buy = earliest_row.scalar_one_or_none()
+    for txn_date in resolved_dates:
+        if earliest_buy and txn_date < earliest_buy:
+            raise ValueError(
+                f"Sale date {txn_date} is before the earliest purchase on {earliest_buy}."
+            )
+
+    new_txns = [
+        Transaction(
+            holding_id=holding.id,
+            sale=True,
+            date=resolved_date,
+            shares=lot.shares,
+            bought_at=Decimal(0),   # set correctly by _replay_fifo
+            sold_at=lot.sold_at,
+            shares_remaining=0,
+        )
+        for lot, resolved_date in zip(lots, resolved_dates)
+    ]
+    # Merge into the date-sorted list and validate via FIFO replay before touching
+    # the DB — raises if any sale (individually or combined) exceeds shares
+    # available as of its date. Nothing has been flushed yet, so no rollback needed.
+    existing = await _fetch_transactions(session, holding.id)
+    all_txns = sorted(existing + new_txns, key=lambda t: t.date)
+    _replay_fifo(holding, all_txns)
+
+    session.add_all(new_txns)
+    await session.flush()  # assign new_txn.id before logging it
+    for txn in new_txns:
+        _log_audit(session, user_id, ticker, "insert", {"transaction_id": txn.id})
+    await session.commit()
+    await session.refresh(holding)
     return await get_stock_holding(session, user_id, ticker)
 
 

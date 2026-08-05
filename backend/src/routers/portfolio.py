@@ -6,7 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_session
-from schemas.portfolio import AuditEntrySummary, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding, UndoResult
+from schemas.portfolio import (
+    AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding,
+    UndoResult,
+)
 from services import portfolio_service
 from services.export_service import build_portfolio_xlsx
 
@@ -205,6 +208,25 @@ async def add_stock_purchase(
     return data
 
 
+@router.post("/{ticker}/buy/bulk", response_model=StockHolding)
+async def add_stock_purchases_bulk(
+    ticker: str, lots: list[BulkPurchaseLot],
+    exchange: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Records several buy lots (different dates/prices) for `ticker` in one atomic write.
+
+    Meant for backfilling purchase history — e.g. transferring an existing
+    portfolio in — without a round trip per historical transaction.
+    """
+    try:
+        data = await portfolio_service.add_stock_purchases_bulk(session, user_id, ticker, lots, exchange)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return data
+
+
 @router.post("/{ticker}/sell", response_model=StockHolding)
 async def sell_stock_shares(
     ticker: str, shares: int, sold_at: Decimal,
@@ -214,6 +236,20 @@ async def sell_stock_shares(
 ):
     try:
         data = await portfolio_service.sell_stock_shares(session, user_id, ticker, shares, sold_at, date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return data
+
+
+@router.post("/{ticker}/sell/bulk", response_model=StockHolding)
+async def sell_stock_shares_bulk(
+    ticker: str, lots: list[BulkSaleLot],
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Records several sell lots (different dates/prices) for `ticker` in one atomic write."""
+    try:
+        data = await portfolio_service.sell_stock_shares_bulk(session, user_id, ticker, lots)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return data

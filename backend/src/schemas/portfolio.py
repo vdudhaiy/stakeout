@@ -26,6 +26,18 @@ class DividendEntry(BaseModel):
     source: str                 # "auto" (yfinance) | "manual"
 
 
+class BulkPurchaseLot(BaseModel):
+    shares: int
+    bought_at: Decimal
+    date: str | None = None    # defaults to today, same as the single-purchase endpoint
+
+
+class BulkSaleLot(BaseModel):
+    shares: int
+    sold_at: Decimal
+    date: str | None = None    # defaults to today, same as the single-sale endpoint
+
+
 class StockPurchaseHistory(BaseModel):
     id: int
     sale: bool = False          # False = buy, True = sell

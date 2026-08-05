@@ -1,4 +1,4 @@
-import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse } from '../types'
+import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot } from '../types'
 import { applyExchange, type Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
@@ -157,15 +157,37 @@ export async function logBuy(ticker: string, shares: number, bought_at: number, 
   return res.json()
 }
 
-export async function logSell(ticker: string, shares: number, sold_at: number, date: string): Promise<StockHolding> {
-  if (isGuestMode()) return guestPortfolio.sell(ticker, shares, sold_at, date)
+export async function logBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange): Promise<StockHolding> {
+  if (isGuestMode()) return guestPortfolio.buyBulk(exchange ? applyExchange(ticker, exchange) : ticker, lots)
+  const exchangeQs = exchange ? `?exchange=${exchange}` : ''
   const res = await apiFetch(
-    `/portfolio/${encodeURIComponent(ticker)}/sell?shares=${shares}&sold_at=${sold_at}&date=${date}`,
-    { method: 'POST' },
+    `/portfolio/${encodeURIComponent(ticker)}/buy/bulk${exchangeQs}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lots.map(l => ({ shares: l.shares, bought_at: l.bought_at, date: l.date }))),
+    },
   )
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail ?? `Failed to record sale of ${ticker}`)
+    throw new Error(err.detail ?? `Failed to record purchases of ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function logSellBulk(ticker: string, lots: SellLot[]): Promise<StockHolding> {
+  if (isGuestMode()) return guestPortfolio.sellBulk(ticker, lots)
+  const res = await apiFetch(
+    `/portfolio/${encodeURIComponent(ticker)}/sell/bulk`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lots.map(l => ({ shares: l.shares, sold_at: l.sold_at, date: l.date }))),
+    },
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to record sales of ${ticker}`)
   }
   return res.json()
 }

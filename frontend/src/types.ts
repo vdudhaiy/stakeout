@@ -108,6 +108,18 @@ export interface StockDashboardResponse {
   revenue_history?: RevenueHistoryRow[] | null
 }
 
+export interface BuyLot {
+  shares: number
+  bought_at: number
+  date: string
+}
+
+export interface SellLot {
+  shares: number
+  sold_at: number
+  date: string
+}
+
 export interface StockPurchaseHistory {
   id: number
   sale: boolean

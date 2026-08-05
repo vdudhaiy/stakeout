@@ -20,6 +20,7 @@ from unittest.mock import patch, AsyncMock
 from sqlalchemy import select
 
 from models.portfolio import Holding, Transaction
+from schemas.portfolio import BulkPurchaseLot, BulkSaleLot
 from services import portfolio_service
 
 USER_ID = "test-user"
@@ -119,6 +120,85 @@ async def test_add_purchase_future_date_raises(db_session):
         await portfolio_service.add_stock_purchase(db_session, USER_ID, "AAPL", 10, Decimal("100.0"), date=future)
 
 
+# ── add_stock_purchases_bulk ──────────────────────────────────────────────────
+
+async def test_bulk_purchase_creates_new_holding_with_multiple_lots(db_session):
+    lots = [
+        BulkPurchaseLot(shares=100, bought_at=Decimal("150.0"), date="2024-01-01"),
+        BulkPurchaseLot(shares=50, bought_at=Decimal("160.0"), date="2024-02-01"),
+    ]
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Apple Inc."):
+        with patch("services.portfolio_service._current_price",
+                   new_callable=AsyncMock, return_value=Decimal("175.0")):
+            with patch("services.portfolio_service.asyncio.create_task"):
+                result = await portfolio_service.add_stock_purchases_bulk(
+                    db_session, USER_ID, "AAPL", lots,
+                )
+
+    assert result.ticker == "AAPL"
+    assert result.shares == 150
+    assert len(result.trade_history) == 2
+    expected_avg = (100 * 150.0 + 50 * 160.0) / 150
+    assert float(result.average_cost) == pytest.approx(expected_avg, rel=1e-3)
+
+
+async def test_bulk_purchase_to_existing_holding(aapl_session):
+    lots = [
+        BulkPurchaseLot(shares=25, bought_at=Decimal("140.0"), date="2023-12-01"),
+        BulkPurchaseLot(shares=25, bought_at=Decimal("160.0"), date="2024-02-01"),
+    ]
+    with patch("services.portfolio_service._current_price",
+               new_callable=AsyncMock, return_value=Decimal("175.0")):
+        result = await portfolio_service.add_stock_purchases_bulk(
+            aapl_session, USER_ID, "AAPL", lots,
+        )
+
+    assert result.shares == 150
+    assert len(result.trade_history) == 3
+
+
+async def test_bulk_purchase_empty_list_raises(db_session):
+    with pytest.raises(ValueError, match="At least one purchase"):
+        await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, "AAPL", [])
+
+
+async def test_bulk_purchase_bad_date_rolls_back_entire_batch(db_session):
+    import datetime
+    future = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+    lots = [
+        BulkPurchaseLot(shares=100, bought_at=Decimal("150.0"), date="2024-01-01"),
+        BulkPurchaseLot(shares=50, bought_at=Decimal("160.0"), date=future),
+    ]
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Apple Inc."):
+        with pytest.raises(ValueError, match="future"):
+            await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, "AAPL", lots)
+
+    # Nothing from the batch should have been committed — not even the first,
+    # valid-looking lot, and not the holding itself.
+    result = await db_session.execute(select(Holding).where(Holding.ticker == "AAPL"))
+    assert result.scalar_one_or_none() is None
+
+
+async def test_bulk_purchase_logs_one_audit_entry_per_lot(db_session):
+    from models.portfolio import AuditEntry
+    lots = [
+        BulkPurchaseLot(shares=10, bought_at=Decimal("100.0"), date="2024-01-01"),
+        BulkPurchaseLot(shares=10, bought_at=Decimal("110.0"), date="2024-01-02"),
+        BulkPurchaseLot(shares=10, bought_at=Decimal("120.0"), date="2024-01-03"),
+    ]
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Apple Inc."):
+        with patch("services.portfolio_service._current_price",
+                   new_callable=AsyncMock, return_value=Decimal("175.0")):
+            with patch("services.portfolio_service.asyncio.create_task"):
+                await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, "AAPL", lots)
+
+    result = await db_session.execute(select(AuditEntry).where(AuditEntry.user_id == USER_ID))
+    assert len(result.scalars().all()) == 3
+
+
 # ── sell_stock_shares ─────────────────────────────────────────────────────────
 
 async def test_sell_reduces_shares(aapl_session):
@@ -151,6 +231,58 @@ async def test_sell_unknown_ticker_raises(db_session):
         await portfolio_service.sell_stock_shares(
             db_session, USER_ID, "NOTEXIST", shares=10, sold_at=Decimal("100.0")
         )
+
+
+# ── sell_stock_shares_bulk ────────────────────────────────────────────────────
+
+async def test_bulk_sell_reduces_shares_across_multiple_lots(aapl_session):
+    lots = [
+        BulkSaleLot(shares=20, sold_at=Decimal("200.0"), date="2024-02-01"),
+        BulkSaleLot(shares=10, sold_at=Decimal("210.0"), date="2024-03-01"),
+    ]
+    with patch("services.portfolio_service._current_price",
+               new_callable=AsyncMock, return_value=Decimal("220.0")):
+        result = await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", lots)
+
+    assert result.shares == 70
+    assert result.sold_shares == 30
+
+
+async def test_bulk_sell_exceeds_available_raises(aapl_session):
+    lots = [
+        BulkSaleLot(shares=60, sold_at=Decimal("200.0"), date="2024-02-01"),
+        BulkSaleLot(shares=60, sold_at=Decimal("200.0"), date="2024-03-01"),
+    ]
+    with pytest.raises(ValueError, match="cannot sell"):
+        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", lots)
+
+
+async def test_bulk_sell_before_earliest_buy_rolls_back_entire_batch(aapl_session):
+    lots = [
+        BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2024-02-01"),
+        BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2023-12-31"),
+    ]
+    with pytest.raises(ValueError, match="before the earliest purchase"):
+        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", lots)
+
+    # Nothing from the batch should have landed — not even the first, valid-looking lot.
+    holding = (await aapl_session.execute(
+        select(Holding).where(Holding.ticker == "AAPL")
+    )).scalar_one()
+    txns = await portfolio_service._fetch_transactions(aapl_session, holding.id)
+    assert len(txns) == 1  # only the original aapl_session buy
+
+
+async def test_bulk_sell_unknown_ticker_raises(db_session):
+    with pytest.raises(ValueError, match="No holding"):
+        await portfolio_service.sell_stock_shares_bulk(
+            db_session, USER_ID, "NOTEXIST", [BulkSaleLot(shares=10, sold_at=Decimal("100.0"))]
+        )
+
+
+async def test_bulk_sell_empty_list_raises(aapl_session):
+    with pytest.raises(ValueError, match="At least one sale"):
+        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", [])
 
 
 # ── get_stock_holding ─────────────────────────────────────────────────────────

@@ -34,6 +34,7 @@ import { usePrefs } from './contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney } from './utils/currency'
 import { marketOf, displayTicker } from './utils/market'
 import { MARKET_STATUS_REFRESH_MS, PRICE_REFRESH_MS } from './utils/env'
+import { usePersistedState } from './utils/usePersistedState'
 import type { OHLCV, View, StockDetails, WatchlistMap, StockMap, ComparisonGroup, EPSHistoryRow, RevenueHistoryRow, IndicatorsResponse, EnrichedOHLCV, PortfolioResponse, ChatContext } from './types'
 import { SMA_PERIODS, EMA_PERIODS, SMA_COLORS, EMA_COLORS } from './utils/indicators'
 import type { OverlayConfig } from './utils/indicators'
@@ -93,7 +94,7 @@ export default function App() {
   const [activeEMA, setActiveEMA] = useState<number[]>([])
   const [overlayBB, setOverlayBB] = useState(false)
   const [openDropdown, setOpenDropdown] = useState<'sma' | 'ema' | null>(null)
-  const [subCharts, setSubCharts] = useState({ rsi: true, macd: true })
+  const [subCharts, setSubCharts] = usePersistedState('tracker-subcharts', { rsi: true, macd: true })
   const [portfolioSnapshot, setPortfolioSnapshot] = useState<PortfolioResponse | null>(null)
 
   const checkMarket = useCallback(() => Promise.all([

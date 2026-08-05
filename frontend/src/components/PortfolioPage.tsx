@@ -7,9 +7,9 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { PieChart, Pie, Cell, Tooltip as ChartTooltip, Legend, ResponsiveContainer } from 'recharts'
-import type { ClassificationMap, DividendEntry, Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
+import type { BuyLot, ClassificationMap, DividendEntry, Market, PortfolioResponse, SellLot, StockHolding, StockPurchaseHistory } from '../types'
 import {
-  fetchPortfolio, fetchClassification, logBuy, logSell, deletePortfolioHolding, deleteTransaction, downloadPortfolio,
+  fetchPortfolio, fetchClassification, logBuyBulk, logSellBulk, deletePortfolioHolding, deleteTransaction, downloadPortfolio,
   syncDividends, addDividend, updateDividend, deleteDividend,
 } from '../api'
 import { usePrefs } from '../contexts/PrefsContext'
@@ -20,6 +20,7 @@ import { TickerAutocomplete } from './TickerAutocomplete'
 import { InfoTip } from './InfoTip'
 import type { GlossaryKey } from '../utils/glossary'
 import { PORTFOLIO_REFRESH_MS } from '../utils/env'
+import { usePersistedState } from '../utils/usePersistedState'
 import { overlayFade, scaleIn, collapse, layoutSpring } from '../lib/motion'
 
 type MoneyFmt = (v: number | null | undefined, opts?: { sign?: boolean; compact?: boolean }) => string
@@ -139,7 +140,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 const DONUT_COLORS = ['#E4B95B', '#2FBF71', '#5B9BE4', '#B45BE4', '#E45B7B', '#5BE4C4', '#E48A5B', '#8AE45B']
 
 function AllocationCard({ holdings, money }: { holdings: StockHolding[]; money: MoneyFmt }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = usePersistedState('portfolio-allocation-open', true)
   // Holdings with no live quote (stock_value == null) are left out of the
   // chart entirely rather than plotted as a $0 sliver — same reasoning as
   // excluding them from portfolio_value: an unpriced holding isn't "worth
@@ -324,7 +325,7 @@ function BreakdownCard({
   const [classification, setClassification] = useState<ClassificationMap | null>(null)
   const [metric, setMetric] = useState<BreakdownMetric>('invested')
   const [failed, setFailed] = useState(false)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = usePersistedState('portfolio-breakdown-open', true)
 
   const tickers = useMemo(
     () => holdings.filter(h => h.shares > 0).map(h => h.ticker).sort(),
@@ -424,6 +425,29 @@ function BreakdownCard({
 
 // ── Transaction modal ─────────────────────────────────────────────────────────
 
+interface LotDraft {
+  key: string
+  shares: string
+  price: string
+  date: string
+}
+
+interface ParsedLot {
+  shares: number
+  price: number
+  date: string
+  touched: boolean   // user has put something in this row
+  valid: boolean      // touched and every field parses to a usable value
+}
+
+function parseLot(l: LotDraft): ParsedLot {
+  const shares = parseInt(l.shares, 10)
+  const price = parseFloat(l.price)
+  const touched = l.shares.trim() !== '' || l.price.trim() !== ''
+  const valid = touched && !isNaN(shares) && shares > 0 && !isNaN(price) && price > 0 && !!l.date
+  return { shares, price, date: l.date, touched, valid }
+}
+
 interface TxModalProps {
   mode: 'buy' | 'sell'
   ticker: string
@@ -431,41 +455,83 @@ interface TxModalProps {
   initialExchange?: Exchange
   maxShares?: number
   onClose: () => void
-  onSubmit: (ticker: string, shares: number, price: number, date: string, exchange?: Exchange) => Promise<void>
+  /** Both modes accept one or more lots recorded in a single atomic request —
+   *  lets a whole purchase/sale history (different dates/prices) be
+   *  backfilled at once instead of one round trip per transaction. */
+  onSubmitBuy?: (ticker: string, lots: BuyLot[], exchange?: Exchange) => Promise<void>
+  onSubmitSell?: (ticker: string, lots: SellLot[]) => Promise<void>
 }
 
-function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExchange, maxShares, onClose, onSubmit }: TxModalProps) {
+function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExchange, maxShares, onClose, onSubmitBuy, onSubmitSell }: TxModalProps) {
   const today = new Date().toLocaleDateString('en-CA')  // yyyy-mm-dd in local time
   const [ticker, setTicker]   = useState(initTicker.toUpperCase())
   const [exchange, setExchange] = useState<Exchange>(initialExchange ?? 'US')
-  const [shares, setShares]   = useState('')
-  const [price, setPrice]     = useState('')
-  const [date, setDate]       = useState(today)
+
+  // One or more lots (shares/price/date each), so a whole purchase or sale
+  // history can be entered in one sitting instead of reopening the modal
+  // per transaction.
+  const lotKey = useRef(0)
+  function makeLot(): LotDraft {
+    lotKey.current += 1
+    return { key: String(lotKey.current), shares: '', price: '', date: today }
+  }
+  const [lots, setLots] = useState<LotDraft[]>(() => [makeLot()])
+
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
 
   const currency: Currency = tickerEditable ? currencyOfExchange(exchange) : (marketOf(ticker) === 'IN' ? 'INR' : 'USD')
 
-  const sharesNum = parseInt(shares, 10)
-  const priceNum  = parseFloat(price)
-  const total     = !isNaN(sharesNum) && !isNaN(priceNum) && sharesNum > 0 && priceNum > 0
-    ? sharesNum * priceNum
-    : null
+  function updateLot(key: string, patch: Partial<LotDraft>) {
+    setLots(prev => prev.map(l => l.key === key ? { ...l, ...patch } : l))
+  }
+  function addLot() {
+    setLots(prev => [...prev, makeLot()])
+  }
+  function removeLot(key: string) {
+    setLots(prev => prev.length > 1 ? prev.filter(l => l.key !== key) : prev)
+  }
+
+  const parsedLots = lots.map(parseLot)
+  const validLotCount = parsedLots.filter(l => l.valid).length
+  const total = parsedLots.reduce((sum, l) => l.valid ? sum + l.shares * l.price : sum, 0)
+  const noun = mode === 'buy' ? 'purchase' : 'sale'
 
   async function handle(e: React.FormEvent) {
     e.preventDefault()
-    if (!ticker.trim() || isNaN(sharesNum) || sharesNum <= 0 || isNaN(priceNum) || priceNum <= 0) {
-      setError('Please fill in all fields with valid values.')
+    if (!ticker.trim()) {
+      setError('Please enter a ticker.')
       return
     }
-    if (mode === 'sell' && maxShares !== undefined && sharesNum > maxShares) {
-      setError(`Cannot sell ${sharesNum} shares — only ${maxShares} held.`)
+
+    const touchedLots = parsedLots.filter(l => l.touched)
+    if (touchedLots.length === 0) {
+      setError(`Add at least one ${noun}.`)
       return
     }
+    const firstBadIdx = parsedLots.findIndex(l => l.touched && !l.valid)
+    if (firstBadIdx !== -1) {
+      setError(`${mode === 'buy' ? 'Purchase' : 'Sale'} #${firstBadIdx + 1} needs a valid share count, price, and date.`)
+      return
+    }
+    if (mode === 'sell' && maxShares !== undefined) {
+      const totalShares = touchedLots.reduce((sum, l) => sum + l.shares, 0)
+      if (totalShares > maxShares) {
+        setError(`Cannot sell ${totalShares} shares — only ${maxShares} held.`)
+        return
+      }
+    }
+
     setLoading(true)
     setError(null)
     try {
-      await onSubmit(ticker.trim().toUpperCase(), sharesNum, priceNum, date, tickerEditable ? exchange : undefined)
+      if (mode === 'buy') {
+        const payload: BuyLot[] = touchedLots.map(l => ({ shares: l.shares, bought_at: l.price, date: l.date }))
+        await onSubmitBuy?.(ticker.trim().toUpperCase(), payload, tickerEditable ? exchange : undefined)
+      } else {
+        const payload: SellLot[] = touchedLots.map(l => ({ shares: l.shares, sold_at: l.price, date: l.date }))
+        await onSubmitSell?.(ticker.trim().toUpperCase(), payload)
+      }
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed')
@@ -485,7 +551,7 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
     >
       <motion.div
         variants={scaleIn}
-        className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+        className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl max-h-[85vh] overflow-y-auto"
       >
         {/* Header */}
         <div className="flex items-start justify-between mb-1">
@@ -494,7 +560,9 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
               {mode === 'buy' ? 'Log Purchase' : 'Log Sale'}
             </h2>
             <p className="text-xs text-zinc-500 mt-0.5">
-              {mode === 'buy' ? 'Record shares you purchased.' : 'Record shares you sold.'}
+              {mode === 'buy'
+                ? 'Record one or more purchases — handy for backfilling your history.'
+                : 'Record one or more sales — handy for a multi-lot exit.'}
             </p>
           </div>
           <button onClick={onClose} className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors">
@@ -538,67 +606,81 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
             )}
           </div>
 
-          {/* Shares */}
+          {/* Purchases/sales — one row per lot */}
           <div>
             <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
-              SHARES
+              {mode === 'buy' ? 'PURCHASES' : 'SALES'}
               {mode === 'sell' && maxShares != null && (
                 <span className="ml-2 normal-case font-normal tracking-normal text-zinc-600">
-                  max {maxShares}
+                  max {maxShares} total held
                 </span>
               )}
             </label>
-            <input
-              type="number"
-              min={1}
-              max={mode === 'sell' ? maxShares : undefined}
-              value={shares}
-              onChange={e => setShares(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
-              placeholder="0"
-            />
-          </div>
-
-          {/* Price */}
-          <div>
-            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
-              {mode === 'buy' ? 'PRICE PAID PER SHARE' : 'PRICE SOLD PER SHARE'}
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm font-mono pointer-events-none">
-                {CURRENCY_SYMBOL[currency]}
-              </span>
-              <input
-                type="number"
-                min={0.01}
-                step="0.01"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-7 pr-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
-                placeholder="0.00"
-              />
+            <div className="grid grid-cols-[1fr_1fr_1.15fr_20px] gap-2 px-0.5 mb-1">
+              <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Shares</span>
+              <span className="text-[9px] text-zinc-600 uppercase tracking-wider">{mode === 'buy' ? 'Price paid' : 'Price sold'}</span>
+              <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Date</span>
+              <span />
             </div>
-          </div>
-
-          {/* Date */}
-          <div>
-            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
-              DATE
-            </label>
-            <input
-              type="date"
-              value={date}
-              max={today}
-              onChange={e => setDate(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none focus:border-indigo-500 transition-colors"
-            />
+            <div className="space-y-2">
+              {lots.map(lot => (
+                <div key={lot.key} className="grid grid-cols-[1fr_1fr_1.15fr_20px] gap-2 items-center">
+                  <input
+                    type="number"
+                    min={1}
+                    value={lot.shares}
+                    onChange={e => updateLot(lot.key, { shares: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                    placeholder="0"
+                  />
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 text-xs font-mono pointer-events-none">
+                      {CURRENCY_SYMBOL[currency]}
+                    </span>
+                    <input
+                      type="number"
+                      min={0.01}
+                      step="0.01"
+                      value={lot.price}
+                      onChange={e => updateLot(lot.key, { price: e.target.value })}
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-5 pr-2 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <input
+                    type="date"
+                    value={lot.date}
+                    max={today}
+                    onChange={e => updateLot(lot.key, { date: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs font-mono text-zinc-100 focus:outline-none focus:border-indigo-500 transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeLot(lot.key)}
+                    disabled={lots.length === 1}
+                    title={`Remove this ${noun}`}
+                    className="p-1 text-zinc-600 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addLot}
+              className="mt-2.5 flex items-center gap-1.5 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              <Plus size={11} />
+              Add another {noun}
+            </button>
           </div>
 
           {/* Total preview */}
-          {total != null && (
+          {validLotCount > 0 && (
             <div className="bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2.5 flex items-center justify-between">
               <span className="text-xs text-zinc-500">
-                Total {mode === 'buy' ? 'cost' : 'proceeds'}
+                Total {mode === 'buy' ? 'cost' : 'proceeds'}{validLotCount > 1 ? ` · ${validLotCount} ${noun}s` : ''}
               </span>
               <span className="text-sm font-mono font-semibold text-zinc-200">
                 {CURRENCY_SYMBOL[currency]}{fmt(total)}
@@ -624,7 +706,9 @@ function TxModal({ mode, ticker: initTicker, tickerEditable = false, initialExch
             )}
           >
             {loading && <RefreshCw size={13} className="animate-spin" />}
-            {mode === 'buy' ? 'Record Purchase' : 'Record Sale'}
+            {lots.length > 1
+              ? `Record ${lots.length} ${mode === 'buy' ? 'Purchases' : 'Sales'}`
+              : mode === 'buy' ? 'Record Purchase' : 'Record Sale'}
           </button>
         </form>
       </motion.div>
@@ -1224,14 +1308,14 @@ export function PortfolioPage({
     return () => clearInterval(id)
   }, [load])
 
-  async function submitBuy(ticker: string, shares: number, price: number, date: string, exchange?: Exchange) {
-    await logBuy(ticker, shares, price, date, exchange)
+  async function submitBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange) {
+    await logBuyBulk(ticker, lots, exchange)
     await load()
     onTickerAdded?.()
   }
 
-  async function submitSell(ticker: string, shares: number, price: number, date: string) {
-    await logSell(ticker, shares, price, date)
+  async function submitSellBulk(ticker: string, lots: SellLot[]) {
+    await logSellBulk(ticker, lots)
     await load()
   }
 
@@ -1531,7 +1615,7 @@ export function PortfolioPage({
             tickerEditable
             initialExchange={tab === 'IN' ? 'NSE' : 'US'}
             onClose={() => setAddOpen(false)}
-            onSubmit={submitBuy}
+            onSubmitBuy={submitBuyBulk}
           />
         )}
       </AnimatePresence>
@@ -1546,7 +1630,8 @@ export function PortfolioPage({
               ? (holdings.find(h => h.ticker === modal.ticker)?.shares ?? 0)
               : undefined}
             onClose={() => setModal(null)}
-            onSubmit={modal.mode === 'buy' ? submitBuy : submitSell}
+            onSubmitBuy={submitBuyBulk}
+            onSubmitSell={submitSellBulk}
           />
         )}
       </AnimatePresence>

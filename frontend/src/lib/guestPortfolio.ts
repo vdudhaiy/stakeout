@@ -6,7 +6,7 @@
  * reloads) and mirrors portfolio_service.py's FIFO cost-basis logic exactly,
  * so a guest sees the same math a signed-in account would.
  */
-import type { Market, PortfolioResponse, StockHolding, StockPurchaseHistory } from '../types'
+import type { BuyLot, Market, PortfolioResponse, SellLot, StockHolding, StockPurchaseHistory } from '../types'
 import { marketOf } from '../utils/market'
 import { resolveTickerName, fetchGuestPrice } from './guestApi'
 import * as guestWatchlist from './guestWatchlist'
@@ -174,22 +174,57 @@ export async function buy(ticker: string, shares: number, boughtAt: number, date
   return getHolding(ticker)
 }
 
-export async function sell(ticker: string, shares: number, soldAt: number, date?: string): Promise<StockHolding> {
+/** Records several buy lots (backfilled purchase history) as one atomic write —
+ * mirrors portfolio_service.add_stock_purchases_bulk's single-replay semantics. */
+export async function buyBulk(ticker: string, lots: BuyLot[]): Promise<StockHolding> {
   ticker = ticker.toUpperCase()
-  const txnDate = resolveDate(date)
+  if (lots.length === 0) throw new Error('At least one purchase is required.')
+  // Resolve every date up front so a bad row anywhere in the batch fails
+  // before anything is written.
+  const resolvedDates = lots.map(l => resolveDate(l.date))
+
+  const state = loadState()
+  let holding = state[ticker]
+  if (!holding) {
+    const companyName = await resolveTickerName(ticker)
+    holding = { ticker, market: marketOf(ticker), companyName, shares: 0, soldShares: 0, averageCost: 0, transactions: [] }
+    state[ticker] = holding
+    // A newly-bought ticker should show up on the tracker too, not just the portfolio.
+    await guestWatchlist.addTicker(ticker)
+  }
+  const firstId = nextIdFor(state)
+  const newTxns: GuestTxn[] = lots.map((lot, i) => ({
+    id: firstId + i, sale: false, date: resolvedDates[i], shares: lot.shares, boughtAt: lot.bought_at, soldAt: 0, sharesRemaining: lot.shares,
+  }))
+  const allTxns = [...holding.transactions, ...newTxns].sort((a, b) => a.date.localeCompare(b.date))
+  replayFifo(holding, allTxns)
+  saveState(state)
+  return getHolding(ticker)
+}
+
+/** Records several sell lots (different dates/prices) as one atomic write —
+ * mirrors portfolio_service.sell_stock_shares_bulk's single-replay semantics. */
+export async function sellBulk(ticker: string, lots: SellLot[]): Promise<StockHolding> {
+  ticker = ticker.toUpperCase()
+  if (lots.length === 0) throw new Error('At least one sale is required.')
+  const resolvedDates = lots.map(l => resolveDate(l.date))
+
   const state = loadState()
   const holding = state[ticker]
   if (!holding) throw new Error(`No holding found for ticker: ${ticker}`)
 
   const earliestBuy = holding.transactions.filter(t => !t.sale).map(t => t.date).sort()[0]
-  if (earliestBuy && txnDate < earliestBuy) {
-    throw new Error(`Sale date ${txnDate} is before the earliest purchase on ${earliestBuy}.`)
+  for (const d of resolvedDates) {
+    if (earliestBuy && d < earliestBuy) {
+      throw new Error(`Sale date ${d} is before the earliest purchase on ${earliestBuy}.`)
+    }
   }
 
-  const newTxn: GuestTxn = {
-    id: nextIdFor(state), sale: true, date: txnDate, shares, boughtAt: 0, soldAt, sharesRemaining: 0,
-  }
-  const allTxns = [...holding.transactions, newTxn].sort((a, b) => a.date.localeCompare(b.date))
+  const firstId = nextIdFor(state)
+  const newTxns: GuestTxn[] = lots.map((lot, i) => ({
+    id: firstId + i, sale: true, date: resolvedDates[i], shares: lot.shares, boughtAt: 0, soldAt: lot.sold_at, sharesRemaining: 0,
+  }))
+  const allTxns = [...holding.transactions, ...newTxns].sort((a, b) => a.date.localeCompare(b.date))
   replayFifo(holding, allTxns)
   saveState(state)
   return getHolding(ticker)
