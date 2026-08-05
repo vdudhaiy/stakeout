@@ -370,44 +370,47 @@ def _get_ticker_info(ticker: str) -> dict:
     return yf.Ticker(ticker).info or {}
 
 
-async def get_classification(tickers: list[str]) -> dict:
+async def _cached_classification(ticker: str) -> dict:
     '''
-    Sector/industry classification for a batch of tickers, for the portfolio
-    breakdown charts. Cached for 24 hours per ticker (info_cache) — a
-    company's sector/industry effectively never changes intraday.
-    Returns:
-        dict: { ticker: { "sector": str|None, "industry": str|None } }
+    Sector/industry for a single ticker, cached 24 hours (info_cache) — a
+    company's sector/industry effectively never changes intraday. Shared by
+    every caller that needs either field (get_classification, the industry/
+    sector maps and browse endpoints below) so they don't each fetch `.info`
+    separately for the same ticker — one warms the cache for all the others.
+
+    Never raises: a failed lookup degrades to {"sector": None, "industry":
+    None} (logged) rather than failing the whole caller, and isn't cached —
+    a transient yfinance failure shouldn't pin "unknown" for 24 hours.
     '''
     from cache import info_cache
 
-    result: dict[str, dict] = {}
-    missing: list[str] = []
-    for raw in tickers:
-        t = raw.upper().strip()
-        if not t:
-            continue
-        cached = info_cache.get(f"class:{t}")
-        if cached is not None:
-            result[t] = cached
-        else:
-            missing.append(t)
+    cache_key = f"class:{ticker}"
+    cached = info_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-    async def _lookup(t: str) -> tuple[str, dict]:
-        try:
-            info = await asyncio.to_thread(_get_ticker_info, t)
-            entry = {"sector": info.get("sector"), "industry": info.get("industry")}
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Classification lookup failed for %s: %r", t, e)
-            entry = {"sector": None, "industry": None}
-        return t, entry
+    try:
+        info = await asyncio.to_thread(_get_ticker_info, ticker)
+        entry = {"sector": info.get("sector"), "industry": info.get("industry")}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Classification lookup failed for %s: %r", ticker, e)
+        entry = {"sector": None, "industry": None}
 
-    for t, entry in await asyncio.gather(*(_lookup(t) for t in dict.fromkeys(missing))):
-        # Only cache successful, non-empty lookups — a transient yfinance
-        # failure shouldn't pin "Unknown" for 24 hours.
-        if entry["sector"] or entry["industry"]:
-            info_cache.set(f"class:{t}", entry)
-        result[t] = entry
-    return result
+    if entry["sector"] or entry["industry"]:
+        info_cache.set(cache_key, entry)
+    return entry
+
+
+async def get_classification(tickers: list[str]) -> dict:
+    '''
+    Sector/industry classification for a batch of tickers, for the portfolio
+    breakdown charts.
+    Returns:
+        dict: { ticker: { "sector": str|None, "industry": str|None } }
+    '''
+    unique = list(dict.fromkeys(raw.upper().strip() for raw in tickers if raw.strip()))
+    entries = await asyncio.gather(*(_cached_classification(t) for t in unique))
+    return dict(zip(unique, entries))
 
 
 _SEARCH_QUOTE_TYPES = {"EQUITY", "ETF"}
@@ -487,15 +490,14 @@ async def get_industry_map() -> dict:
     Returns:
         dict: { industry_name: [ticker, ...] } sorted alphabetically.
     '''
+    # get_symbols() rather than get_all_stocks(): this only needs the ticker
+    # set, and get_all_stocks() would additionally fetch `.info` for every
+    # ticker just to build display names this loop throws away.
     result: dict[str, list[str]] = {}
-    for ticker in await get_all_stocks():
-        try:
-            info = await asyncio.to_thread(_get_ticker_info, ticker)
-            industry = info.get("industry")
-            if industry:
-                result.setdefault(industry, []).append(ticker)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Industry lookup failed for %s: %r", ticker, e)
+    for ticker in await market_data_service.get_symbols():
+        industry = (await _cached_classification(ticker))["industry"]
+        if industry:
+            result.setdefault(industry, []).append(ticker)
     return {k: sorted(v) for k, v in sorted(result.items())}
 
 
@@ -506,14 +508,10 @@ async def get_sector_map() -> dict:
         dict: { sector_name: [ticker, ...] } sorted alphabetically.
     '''
     result: dict[str, list[str]] = {}
-    for ticker in await get_all_stocks():
-        try:
-            info = await asyncio.to_thread(_get_ticker_info, ticker)
-            sector = info.get("sector")
-            if sector:
-                result.setdefault(sector, []).append(ticker)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Sector lookup failed for %s: %r", ticker, e)
+    for ticker in await market_data_service.get_symbols():
+        sector = (await _cached_classification(ticker))["sector"]
+        if sector:
+            result.setdefault(sector, []).append(ticker)
     return {k: sorted(v) for k, v in sorted(result.items())}
 
 
@@ -526,9 +524,9 @@ async def fetch_industry_stocks(industry: str):
         IndustryStocksResponse: A list of stocks in the specified industry along with their OHLCV data.
     '''
     response = {"industry": industry, "ohlcv": []}
-    for ticker in await get_all_stocks():
-        info = await asyncio.to_thread(_get_ticker_info, ticker)
-        if info.get("industry", "").lower() == industry.lower():
+    for ticker in await market_data_service.get_symbols():
+        entry_industry = (await _cached_classification(ticker))["industry"] or ""
+        if entry_industry.lower() == industry.lower():
             ohlcv_data = await fetch(ticker)
             response["ohlcv"].append(ohlcv_data)
     return IndustryStocksResponse(**response)
@@ -543,9 +541,9 @@ async def fetch_sector_stocks(sector: str):
         SectorStocksResponse: A list of stocks in the specified sector along with their OHLCV data.
     '''
     response = {"sector": sector, "ohlcv": []}
-    for ticker in await get_all_stocks():
-        info = await asyncio.to_thread(_get_ticker_info, ticker)
-        if info.get("sector", "").lower() == sector.lower():
+    for ticker in await market_data_service.get_symbols():
+        entry_sector = (await _cached_classification(ticker))["sector"] or ""
+        if entry_sector.lower() == sector.lower():
             ohlcv_data = await fetch(ticker)
             response["ohlcv"].append(ohlcv_data)
     return SectorStocksResponse(**response)

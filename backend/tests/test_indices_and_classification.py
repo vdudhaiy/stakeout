@@ -119,6 +119,25 @@ async def test_classification_rejects_empty_and_oversized(client):
     assert res.status_code == 400
 
 
+async def test_classification_cache_is_shared_across_industry_sector_and_batch_lookups():
+    """_cached_classification is the single source of truth behind
+    get_classification, get_industry_map, and get_sector_map — a lookup
+    warmed by one is reused by the others instead of refetching `.info`."""
+    with patch.object(stock_service, "_get_ticker_info",
+                       return_value={"sector": "Technology", "industry": "Consumer Electronics"}) as info:
+        await stock_service.get_classification(["AAPL"])
+        assert info.call_count == 1
+
+        with patch("services.market_data_service.get_symbols",
+                   new_callable=AsyncMock, return_value=["AAPL"]):
+            industry_map = await stock_service.get_industry_map()
+            sector_map = await stock_service.get_sector_map()
+
+    assert industry_map == {"Consumer Electronics": ["AAPL"]}
+    assert sector_map == {"Technology": ["AAPL"]}
+    assert info.call_count == 1  # both maps served from the cache get_classification warmed
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Layered stock news (company → industry → sector → market, 7d, newest first)
 # ─────────────────────────────────────────────────────────────────────────────

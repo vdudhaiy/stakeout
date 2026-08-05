@@ -7,31 +7,43 @@ from decimal import Decimal
 import yfinance as yf
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from yfinance.exceptions import YFRateLimitError
 
-from cache import dividend_sync_cache
+from cache import dividend_sync_cache, quote_cache
 from markets import MARKET_META, apply_exchange, currency_of, market_of, normalize_market
 from models.portfolio import AuditEntry, Dividend, Holding, Transaction, WatchlistEntry
 from schemas.portfolio import (
     AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding,
     StockPurchaseHistory, UndoResult,
 )
-from .stock_service import fetch_current, get_market_status, add_stock, get_all_stocks
+from . import market_data_service
+from .stock_service import fetch_current, get_market_status, add_stock
 
 logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _is_rate_limited(e: BaseException) -> bool:
+    """True if `e` — or the exception it was raised while handling — is a
+    yfinance rate limit. add_stock wraps its underlying errors in a plain
+    ValueError, so the original type only survives via the implicit exception
+    chain Python sets on `raise ... ` inside an `except` block (__context__).
+    """
+    return isinstance(e, YFRateLimitError) or isinstance(getattr(e, "__context__", None), YFRateLimitError)
+
 async def _validate_and_fetch_name(ticker: str) -> str:
     """Confirms the ticker exists on yfinance and returns a display name.
 
     Raises ValueError if yfinance returns no history (unknown ticker) — that's
-    a real "this ticker doesn't exist" and retrying won't help. Any other
-    error (almost always the separate `.info` call, which is flakier than
-    `.history()`) gets one retry before giving up and returning an empty
-    string so the holding can still be created without a display name.
-    A holding that ends up unnamed here is picked up later by
-    repair_stock_metadata, which backfills it once the lookup succeeds.
+    a real "this ticker doesn't exist" and retrying won't help. A rate limit
+    isn't worth retrying immediately either — the window hasn't cleared a
+    moment later, so a second attempt is guaranteed to fail too and just adds
+    to the block. Any other (genuinely transient) error gets one retry before
+    giving up and returning an empty string so the holding can still be
+    created without a display name. A holding that ends up unnamed here is
+    picked up later by repair_stock_metadata, which backfills it once the
+    lookup succeeds.
     """
     def _fetch() -> str:
         stock = yf.Ticker(ticker)
@@ -52,6 +64,8 @@ async def _validate_and_fetch_name(ticker: str) -> str:
             raise
         except Exception as e:  # noqa: BLE001
             last_error = e
+            if _is_rate_limited(e):
+                break
     logger.warning("Name lookup failed for %s; creating holding unnamed: %r", ticker, last_error)
     return ""
 
@@ -63,25 +77,46 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
     real one downstream (stock_value, profit_loss, portfolio totals), and
     would silently misreport a fetch failure as a 100% loss. Callers must
     treat None as "unknown", not "worthless".
+
+    Cached for quote_cache's TTL (60s): get_portfolio calls this once per
+    holding on every load, and the portfolio page polls every couple minutes
+    — without this, two holdings of the same ticker, two browser tabs, or two
+    users watching the same stock each fire their own yfinance request within
+    the same window. A failed lookup is cached too (as "unavailable") rather
+    than retried on every next holding, since a real outage won't resolve in
+    the next few milliseconds anyway; it naturally retries once the TTL
+    expires. The 1-tuple wrapper distinguishes "not cached" (None) from
+    "cached as unavailable" ((None,)) — quote_cache.get() returns None for both
+    a missing key and a value that legitimately *is* None.
     """
+    cache_key = f"price:{ticker}"
+    cached = quote_cache.get(cache_key)
+    if cached is not None:
+        return cached[0]
+
+    price: Decimal | None = None
     try:
         response = await fetch_current(yf.Ticker(ticker), is_market_open)
         close = response.data[0].close if response.data else None
         if close is not None and not math.isnan(close):
-            return Decimal(str(close))
+            price = Decimal(str(close))
     except Exception as e:  # noqa: BLE001
         logger.warning("Archive price fetch failed for %s: %r", ticker, e)
-    # Archive may not exist (e.g. deleted from dashboard) — fetch last close directly.
-    try:
-        def _direct() -> float | None:
-            hist = yf.Ticker(ticker).history(period="5d")
-            return float(hist["Close"].iloc[-1]) if not hist.empty else None
-        close = await asyncio.to_thread(_direct)
-        if close is not None and not math.isnan(close):
-            return Decimal(str(close))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Direct price fetch failed for %s: %r", ticker, e)
-    return None
+
+    if price is None:
+        # Archive may not exist (e.g. deleted from dashboard) — fetch last close directly.
+        try:
+            def _direct() -> float | None:
+                hist = yf.Ticker(ticker).history(period="5d")
+                return float(hist["Close"].iloc[-1]) if not hist.empty else None
+            close = await asyncio.to_thread(_direct)
+            if close is not None and not math.isnan(close):
+                price = Decimal(str(close))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Direct price fetch failed for %s: %r", ticker, e)
+
+    quote_cache.set(cache_key, (price,))
+    return price
 
 
 async def _fetch_holding(session: AsyncSession, user_id: str, ticker: str) -> Holding | None:
@@ -291,21 +326,29 @@ async def _sync_dividends_background(ticker: str, holding_id: int) -> None:
 async def _ensure_in_dashboard(ticker: str) -> None:
     """Fire-and-forget: add ticker to the shared price archive if not already tracked.
 
-    `add_stock` does a real yfinance history fetch, which occasionally fails
-    transiently — losing it here silently leaves the ticker with no archive
-    data, which breaks the Tracker page for it (no OHLCV to serve). One retry
-    before giving up; a ticker that still fails is picked up later by
-    repair_stock_metadata.
+    Checking membership only needs the archive's own symbol list — a plain DB
+    read via market_data_service.get_symbols() — not stock_service.get_all_stocks(),
+    which additionally (and pointlessly, for a membership check) fetches
+    `.info` from yfinance for every already-tracked ticker just to build
+    display names nothing here uses. `add_stock` does a real yfinance history
+    fetch for a genuinely new ticker, which occasionally fails transiently —
+    losing it here silently leaves the ticker with no archive data, which
+    breaks the Tracker page for it (no OHLCV to serve). One retry before
+    giving up, except for a rate limit — the window hasn't cleared a moment
+    later, so retrying instantly just adds to the block. A ticker that still
+    fails is picked up later by repair_stock_metadata.
     """
     last_error: Exception | None = None
     for _attempt in range(2):
         try:
-            existing = await get_all_stocks()
+            existing = await market_data_service.get_symbols()
             if ticker not in existing:
                 await add_stock(ticker)
             return
         except Exception as e:  # noqa: BLE001
             last_error = e
+            if _is_rate_limited(e):
+                break
     logger.warning("Failed to ensure %s is tracked in the price archive: %r", ticker, last_error)
 
 
@@ -723,6 +766,16 @@ async def repair_all_fifo() -> None:
         await session.commit()
 
 
+# Gap between per-ticker yfinance calls in repair_stock_metadata. This is a
+# background task, not a user-facing one, so there's no cost to taking it
+# slow — spacing calls out means Yahoo sees sporadic traffic instead of a
+# burst, which is exactly the shape rate limiters are built to catch. A tight
+# loop over every broken ticker at once (worse, right at startup, alongside
+# whatever else is firing at boot) is the single biggest self-inflicted risk
+# here.
+_REPAIR_TICKER_DELAY_SECONDS = 2.0
+
+
 async def repair_stock_metadata() -> None:
     """Backfills two things that can fall through the fire-and-forget/best-effort
     work add_stock_purchase(s) does for a brand-new holding: a transient
@@ -736,8 +789,12 @@ async def repair_stock_metadata() -> None:
     broken forever with nothing else to revisit it. This backfills those.
 
     Safe to call repeatedly (e.g. every startup) — a holding that's already
-    complete is a no-op. Does real yfinance I/O per affected ticker, so the
-    caller should run this as a background task rather than await it.
+    complete is a no-op. The name backfill does real yfinance I/O per
+    affected ticker, spaced out by _REPAIR_TICKER_DELAY_SECONDS (see its
+    comment), so the caller should run this as a background task rather than
+    await it. The archive-coverage check itself is a plain DB read
+    (market_data_service.get_symbols(), no yfinance call) — only tickers
+    actually missing from the archive hit yfinance, via add_stock.
     """
     from database import SessionLocal
 
@@ -750,7 +807,9 @@ async def repair_stock_metadata() -> None:
     all_tickers = {ticker for ticker, _ in rows}
     unnamed_tickers = {ticker for ticker, name in rows if not name}
 
-    for ticker in unnamed_tickers:
+    for i, ticker in enumerate(unnamed_tickers):
+        if i > 0:
+            await asyncio.sleep(_REPAIR_TICKER_DELAY_SECONDS)
         try:
             name = await _validate_and_fetch_name(ticker)
         except ValueError:
@@ -771,12 +830,14 @@ async def repair_stock_metadata() -> None:
             await session.commit()
 
     try:
-        archived = await get_all_stocks()
+        archived = await market_data_service.get_symbols()
     except Exception as e:  # noqa: BLE001
         logger.warning("repair_stock_metadata: could not list the price archive: %r", e)
         return
 
-    for ticker in all_tickers - set(archived):
+    for i, ticker in enumerate(all_tickers - set(archived)):
+        if i > 0:
+            await asyncio.sleep(_REPAIR_TICKER_DELAY_SECONDS)
         try:
             await add_stock(ticker)
         except Exception as e:  # noqa: BLE001

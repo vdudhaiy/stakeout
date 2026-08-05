@@ -11,6 +11,7 @@ import pandas as pd
 from datetime import date, datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from cache import info_cache
 from services.stock_service import (
     _last_completed_trading_day,
     get_market_status,
@@ -46,9 +47,11 @@ def reset_module_state():
     """Clear module-level singletons so tests are independent."""
     _snapshot_cache._store.clear()
     _update_attempted.clear()
+    info_cache.clear()
     yield
     _snapshot_cache._store.clear()
     _update_attempted.clear()
+    info_cache.clear()
 
 
 def _make_ohlcv_df(datetimes: list[str], closes: list[float] | None = None) -> pd.DataFrame:
@@ -630,8 +633,8 @@ async def test_get_industry_map_groups_tickers():
         m.info = {"industry": "Technology"}
         return m
 
-    with patch("services.stock_service.get_all_stocks",
-               new_callable=AsyncMock, return_value={"AAPL": "Apple", "MSFT": "Microsoft"}):
+    with patch("services.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["AAPL", "MSFT"]):
         with patch("services.stock_service.yf.Ticker", side_effect=_mock_yf):
             result = await get_industry_map()
 
@@ -645,8 +648,8 @@ async def test_get_sector_map_groups_tickers():
         m.info = {"sector": "Technology" if sym == "AAPL" else "Financial Services"}
         return m
 
-    with patch("services.stock_service.get_all_stocks",
-               new_callable=AsyncMock, return_value={"AAPL": "Apple", "JPM": "JPMorgan"}):
+    with patch("services.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["AAPL", "JPM"]):
         with patch("services.stock_service.yf.Ticker", side_effect=_mock_yf):
             result = await get_sector_map()
 

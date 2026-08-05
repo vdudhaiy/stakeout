@@ -19,12 +19,24 @@ import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from yfinance.exceptions import YFRateLimitError
 
+from cache import quote_cache
 from models.portfolio import Holding, Transaction, WatchlistEntry
 from schemas.portfolio import BulkPurchaseLot, BulkSaleLot
 from services import portfolio_service
 
 USER_ID = "test-user"
+
+
+@pytest.fixture(autouse=True)
+def _clear_quote_cache():
+    """quote_cache is a module-level singleton — without clearing it, a price
+    cached by one test (e.g. for "AAPL") would silently serve a stale hit to
+    the next test that asks for the same ticker within the 60s TTL."""
+    quote_cache.clear()
+    yield
+    quote_cache.clear()
 
 
 # ── _current_price ────────────────────────────────────────────────────────────
@@ -59,6 +71,45 @@ async def test_current_price_falls_back_to_direct_history_when_live_fetch_fails(
             mock_ticker.return_value.history.return_value = hist
             price = await portfolio_service._current_price("AAPL")
     assert price == Decimal("123.45")
+
+
+async def test_current_price_cache_hit_skips_fetch():
+    from schemas.stocks import OHLCV, OHLCVResponse
+    response = OHLCVResponse(ticker="AAPL", data=[OHLCV(date="2024-01-15", close=184.0)])
+    with patch("services.portfolio_service.fetch_current",
+               new_callable=AsyncMock, return_value=response) as mock_fetch:
+        first = await portfolio_service._current_price("AAPL")
+        second = await portfolio_service._current_price("AAPL")
+
+    assert first == second == Decimal("184.0")
+    mock_fetch.assert_awaited_once()  # second call served from quote_cache
+
+
+async def test_current_price_caches_an_unavailable_result_too():
+    with patch("services.portfolio_service.fetch_current",
+               new_callable=AsyncMock, side_effect=Exception("network error")) as mock_fetch:
+        with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+            mock_ticker.return_value.history.side_effect = Exception("also fails")
+            first = await portfolio_service._current_price("AAPL")
+            second = await portfolio_service._current_price("AAPL")
+
+    assert first is None
+    assert second is None
+    mock_fetch.assert_awaited_once()  # second call served from quote_cache, not retried
+
+
+async def test_current_price_cache_is_scoped_per_ticker():
+    from schemas.stocks import OHLCV, OHLCVResponse
+    aapl = OHLCVResponse(ticker="AAPL", data=[OHLCV(date="2024-01-15", close=184.0)])
+    msft = OHLCVResponse(ticker="MSFT", data=[OHLCV(date="2024-01-15", close=300.0)])
+    with patch("services.portfolio_service.fetch_current",
+               new_callable=AsyncMock, side_effect=[aapl, msft]) as mock_fetch:
+        aapl_price = await portfolio_service._current_price("AAPL")
+        msft_price = await portfolio_service._current_price("MSFT")
+
+    assert aapl_price == Decimal("184.0")
+    assert msft_price == Decimal("300.0")
+    assert mock_fetch.await_count == 2  # distinct tickers, no cache collision
 
 
 # ── shared fixture: one AAPL holding with 100 shares @ $150 ──────────────────
@@ -605,8 +656,8 @@ async def test_repair_backfills_missing_company_name(repaired_db):
 
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
-        with patch("services.portfolio_service.get_all_stocks",
-                   new_callable=AsyncMock, return_value={"AAPL": "Apple Inc.", "MSFT": "Microsoft Corp"}):
+        with patch("services.market_data_service.get_symbols",
+                   new_callable=AsyncMock, return_value=["AAPL", "MSFT"]):
             await run()
 
     result = await session.execute(select(Holding).order_by(Holding.ticker))
@@ -626,8 +677,8 @@ async def test_repair_backfills_watchlist_entry_that_fell_back_to_ticker(repaire
 
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
-        with patch("services.portfolio_service.get_all_stocks",
-                   new_callable=AsyncMock, return_value={"AAPL": "Apple Inc."}):
+        with patch("services.market_data_service.get_symbols",
+                   new_callable=AsyncMock, return_value=["AAPL"]):
             await run()
 
     entry = (await session.execute(
@@ -644,8 +695,8 @@ async def test_repair_backfills_missing_archive_entry(repaired_db):
     ))
     await session.commit()
 
-    with patch("services.portfolio_service.get_all_stocks",
-               new_callable=AsyncMock, return_value={}):  # TSLA missing from the archive
+    with patch("services.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=[]):  # TSLA missing from the archive
         with patch("services.portfolio_service.add_stock", new_callable=AsyncMock) as mock_add_stock:
             await run()
 
@@ -662,8 +713,8 @@ async def test_repair_skips_ticker_that_no_longer_resolves(repaired_db):
 
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, side_effect=ValueError("not found")):
-        with patch("services.portfolio_service.get_all_stocks",
-                   new_callable=AsyncMock, return_value={"DELISTED": "x"}):
+        with patch("services.market_data_service.get_symbols",
+                   new_callable=AsyncMock, return_value=["DELISTED"]):
             await run()  # should not raise
 
     holding = (await session.execute(
@@ -674,6 +725,94 @@ async def test_repair_skips_ticker_that_no_longer_resolves(repaired_db):
 
 async def test_repair_no_holdings_is_a_noop(repaired_db):
     _session, run = repaired_db
-    with patch("services.portfolio_service.get_all_stocks", new_callable=AsyncMock) as mock_get_all:
+    with patch("services.market_data_service.get_symbols", new_callable=AsyncMock) as mock_get_symbols:
         await run()
-    mock_get_all.assert_not_awaited()
+    mock_get_symbols.assert_not_awaited()
+
+
+async def test_repair_spaces_out_calls_between_tickers(repaired_db):
+    session, run = repaired_db
+    session.add(Holding(
+        user_id=USER_ID, ticker="AAPL", company_name="", market="US",
+        shares=1, sold_shares=0, average_cost=Decimal("1.0"),
+    ))
+    session.add(Holding(
+        user_id=USER_ID, ticker="MSFT", company_name="", market="US",
+        shares=1, sold_shares=0, average_cost=Decimal("1.0"),
+    ))
+    await session.commit()
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Some Co"):
+        with patch("services.market_data_service.get_symbols",
+                   new_callable=AsyncMock, return_value=["AAPL", "MSFT"]):
+            with patch("services.portfolio_service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                await run()
+
+    # Two tickers in the same loop — one gap between them, not before the
+    # first or after the last.
+    mock_sleep.assert_awaited_once_with(portfolio_service._REPAIR_TICKER_DELAY_SECONDS)
+
+
+# ── rate limit handling ─────────────────────────────────────────────────────
+#
+# A yfinance rate limit isn't worth retrying immediately — the window hasn't
+# cleared a moment later, so a second attempt is guaranteed to fail too and
+# just adds to the block. _is_rate_limited also has to see through add_stock,
+# which wraps its underlying errors in a plain ValueError.
+
+def test_is_rate_limited_detects_direct_error():
+    assert portfolio_service._is_rate_limited(YFRateLimitError())
+
+
+def test_is_rate_limited_detects_error_wrapped_by_add_stock():
+    try:
+        try:
+            raise YFRateLimitError()
+        except YFRateLimitError:
+            # Mirrors add_stock's `raise ValueError(...)` with no `from` clause
+            # inside an except block — Python sets __context__ automatically.
+            raise ValueError("Error creating stock data for AAPL: Too Many Requests")
+    except ValueError as wrapped:
+        assert portfolio_service._is_rate_limited(wrapped)
+
+
+def test_is_rate_limited_false_for_unrelated_error():
+    assert not portfolio_service._is_rate_limited(ValueError("something else"))
+
+
+async def test_validate_and_fetch_name_does_not_retry_on_rate_limit():
+    with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.side_effect = YFRateLimitError()
+        name = await portfolio_service._validate_and_fetch_name("AAPL")
+
+    assert name == ""
+    assert mock_ticker.return_value.history.call_count == 1  # no wasted retry
+
+
+async def test_validate_and_fetch_name_retries_a_genuinely_transient_error():
+    import pandas as pd
+    ok_history = pd.DataFrame({"Close": [100.0]})
+    with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.side_effect = [ConnectionError("blip"), ok_history]
+        mock_ticker.return_value.info = {"shortName": "Apple Inc."}
+        name = await portfolio_service._validate_and_fetch_name("AAPL")
+
+    assert name == "Apple Inc."
+    assert mock_ticker.return_value.history.call_count == 2  # retried once, succeeded
+
+
+async def test_ensure_in_dashboard_does_not_retry_on_rate_limit():
+    with patch("services.market_data_service.get_symbols",
+               new_callable=AsyncMock, side_effect=YFRateLimitError()) as mock_get_symbols:
+        await portfolio_service._ensure_in_dashboard("AAPL")
+
+    assert mock_get_symbols.await_count == 1  # no wasted retry
+
+
+async def test_ensure_in_dashboard_retries_a_genuinely_transient_error():
+    with patch("services.market_data_service.get_symbols",
+               new_callable=AsyncMock, side_effect=[ConnectionError("blip"), ["AAPL"]]) as mock_get_symbols:
+        await portfolio_service._ensure_in_dashboard("AAPL")
+
+    assert mock_get_symbols.await_count == 2  # retried once, succeeded
