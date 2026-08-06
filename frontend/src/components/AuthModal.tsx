@@ -72,7 +72,7 @@ function PasswordFields({
           <div className="text-right">
             <button
               onClick={onForgotPassword}
-              className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+              className="text-[0.6875rem] text-zinc-500 hover:text-zinc-300 transition-colors"
             >
               Forgot password?
             </button>
@@ -86,7 +86,7 @@ function PasswordFields({
           {sending ? <RefreshCw size={13} className="animate-spin" /> : <Lock size={13} />}
           {mode === 'signup' ? 'Create Account' : 'Log In'}
         </button>
-        {error && <p className="text-[11px] text-red-400">{error}</p>}
+        {error && <p className="text-[0.6875rem] text-red-400">{error}</p>}
       </div>
     </>
   )
@@ -191,12 +191,12 @@ export function AuthModal({ onClose }: Props) {
       initial="hidden"
       animate="show"
       exit="exit"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onMouseDown={onClose}
     >
       <motion.div
         variants={scaleIn}
-        className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-[22rem] shadow-2xl"
+        className="bg-zinc-900 border border-zinc-700 rounded-xl p-5 sm:p-6 w-full max-w-[22rem] max-h-[90dvh] overflow-y-auto shadow-2xl"
         onMouseDown={e => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-1">
@@ -212,7 +212,7 @@ export function AuthModal({ onClose }: Props) {
         </p>
 
         {isGuest && (
-          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[0.6875rem] text-amber-300">
             You're browsing as a guest — signing in starts your real account. Your guest
             session's watchlist and portfolio won't be saved.
           </div>
@@ -267,12 +267,12 @@ export function AuthModal({ onClose }: Props) {
                 {sending ? <RefreshCw size={13} className="animate-spin" /> : <Mail size={13} />}
                 Send reset link
               </button>
-              {error && <p className="text-[11px] text-red-400">{error}</p>}
+              {error && <p className="text-[0.6875rem] text-red-400">{error}</p>}
             </div>
             <div className="mt-3 text-center">
               <button
                 onClick={() => { setForgotMode(false); setError(null) }}
-                className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
+                className="text-[0.6875rem] text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
               >
                 Back to log in
               </button>
@@ -295,7 +295,7 @@ export function AuthModal({ onClose }: Props) {
 
             <div className="flex items-center gap-3 my-4">
               <div className="flex-1 h-px bg-zinc-800" />
-              <span className="text-[10px] text-zinc-600 tracking-widest">OR</span>
+              <span className="text-[0.625rem] text-zinc-600 tracking-widest">OR</span>
               <div className="flex-1 h-px bg-zinc-800" />
             </div>
 
@@ -317,7 +317,7 @@ export function AuthModal({ onClose }: Props) {
                   {sending ? <RefreshCw size={13} className="animate-spin" /> : <Mail size={13} />}
                   Email me a sign-in link
                 </button>
-                {error && <p className="text-[11px] text-red-400">{error}</p>}
+                {error && <p className="text-[0.6875rem] text-red-400">{error}</p>}
               </div>
             ) : (
               <PasswordFields
@@ -337,7 +337,7 @@ export function AuthModal({ onClose }: Props) {
             <div className="mt-3 text-center">
               <button
                 onClick={() => { setAuthMethod(m => m === 'magic' ? 'password' : 'magic'); setError(null) }}
-                className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
+                className="text-[0.6875rem] text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
               >
                 {authMethod === 'magic' ? 'Use a password instead' : 'Use a magic link instead'}
               </button>
@@ -353,7 +353,7 @@ export function AuthModal({ onClose }: Props) {
             >
               Continue as Guest
             </button>
-            <p className="text-[10px] text-zinc-700 mt-1">
+            <p className="text-[0.625rem] text-zinc-700 mt-1">
               Nothing saved to an account — local to this device for this browser session.
             </p>
           </div>

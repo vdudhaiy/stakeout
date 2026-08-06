@@ -70,13 +70,13 @@ export function AIChatWidget({ context }: Props) {
           exit={{ opacity: 0, scale: 0.9, y: 12 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
           style={{ transformOrigin: 'bottom right' }}
-          className="fixed bottom-40 right-6 z-50 w-96 max-w-[calc(100vw-3rem)] h-[520px] max-h-[calc(100vh-12rem)] bg-zinc-950 border border-zinc-700 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+          className="fixed z-50 inset-x-3 bottom-20 sm:inset-x-auto sm:right-6 sm:bottom-40 sm:w-96 h-[min(32.5rem,70dvh)] bg-zinc-950 border border-zinc-700 rounded-xl shadow-2xl flex flex-col overflow-hidden">
           {/* Header */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800 shrink-0">
             <Bot size={15} className="text-indigo-400" />
             <span className="text-sm font-semibold text-zinc-100">Stakeout AI</span>
             {chip && (
-              <span className="ml-1 px-2 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-[10px] font-medium">
+              <span className="ml-1 px-2 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-[0.625rem] font-medium">
                 {chip}
               </span>
             )}
@@ -100,7 +100,7 @@ export function AIChatWidget({ context }: Props) {
 
           {/* Messages */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
-            <div className="max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed bg-zinc-800 text-zinc-300">
+            <div className="max-w-[90%] sm:max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed bg-zinc-800 text-zinc-300">
               {GREETING}
             </div>
             {messages.map((m, i) => (
@@ -111,7 +111,7 @@ export function AIChatWidget({ context }: Props) {
                 animate="show"
                 custom={0}
                 className={clsx(
-                  'max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap',
+                  'max-w-[90%] sm:max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words',
                   m.role === 'user'
                     ? 'ml-auto bg-indigo-600 text-white'
                     : 'bg-zinc-800 text-zinc-200',
@@ -154,7 +154,7 @@ export function AIChatWidget({ context }: Props) {
                 <Send size={13} />
               </button>
             </div>
-            <p className="text-[10px] text-zinc-600 text-center">AI-generated · not financial advice</p>
+            <p className="text-[0.625rem] text-zinc-600 text-center">AI-generated · not financial advice</p>
           </div>
         </motion.div>
       )}
@@ -163,7 +163,7 @@ export function AIChatWidget({ context }: Props) {
       <button
         onClick={() => setOpen(o => !o)}
         aria-label={open ? 'Close AI chat' : 'Open AI chat'}
-        className="fixed bottom-24 right-6 z-50 flex items-center justify-center w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xl transition-colors"
+        className="fixed bottom-4 right-4 sm:bottom-24 sm:right-6 z-50 flex items-center justify-center w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xl transition-colors"
       >
         {open ? <X size={19} /> : <MessageCircle size={19} />}
       </button>

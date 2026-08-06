@@ -176,6 +176,60 @@ export interface PortfolioResponse {
   holdings: StockHolding[]
 }
 
+// One data row from an uploaded import file, parsed and duplicate-checked
+// but not yet applied. Returned by POST /portfolio/import/preview.
+export interface ImportPreviewRow {
+  row: number                  // 1-indexed spreadsheet row (header is row 1)
+  market: string                 // market cell as given in the file (e.g. "US", "IND")
+  ticker: string                  // resolved ticker, exchange suffix applied (e.g. "RELIANCE.NS")
+  date: string | null            // null if the date itself failed to parse
+  action: 'buy' | 'sell' | ''   // '' only when the row failed before the action could be parsed
+  shares: number
+  price: number
+  valid: boolean                  // false if the row failed to parse — see `error`
+  error: string | null
+  duplicate: boolean               // true if this exactly matches another transaction
+  duplicate_reason: string | null   // e.g. "Matches a transaction..." or "Duplicate of row 4 in this file"
+}
+
+export interface ImportPreviewResult {
+  total_rows: number
+  rows: ImportPreviewRow[]
+}
+
+// A previously-previewed row (must have been `valid`), echoed back with the
+// user's include/skip decision. Sent to POST /portfolio/import/apply.
+export interface ImportApplyRow {
+  row: number
+  market: string
+  ticker: string
+  date: string
+  action: 'buy' | 'sell'
+  shares: number
+  price: number
+  include: boolean               // false = user chose to skip this one (usually a duplicate)
+}
+
+export interface ImportRowResult {
+  row: number
+  market: string
+  ticker: string
+  date: string
+  action: 'buy' | 'sell'
+  shares: number
+  price: number
+  status: 'imported' | 'failed' | 'skipped'
+  error: string | null
+}
+
+export interface PortfolioImportResult {
+  total_rows: number
+  imported_rows: number
+  failed_rows: number
+  skipped_rows: number
+  rows: ImportRowResult[]
+}
+
 export type StockMap = Record<string, string>
 
 export type Market = 'US' | 'IN'

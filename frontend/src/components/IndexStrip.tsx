@@ -26,8 +26,8 @@ function IndexCard({ q, delay }: { q: IndexQuote; delay: number }) {
       className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-700 transition-colors min-w-0"
     >
       <div className="flex items-baseline justify-between gap-2 mb-0.5">
-        <p className="text-[13px] font-medium text-zinc-200 truncate">{q.name}</p>
-        <span className="font-mono text-[10px] text-zinc-600 shrink-0">{q.symbol}</span>
+        <p className="text-[0.8125rem] font-medium text-zinc-200 truncate">{q.name}</p>
+        <span className="font-mono text-[0.625rem] text-zinc-600 shrink-0">{q.symbol}</span>
       </div>
       <div className="flex items-baseline gap-2 flex-wrap">
         <span className="font-mono text-lg font-semibold text-zinc-100">{fmtLevel(q.last)}</span>
@@ -57,7 +57,7 @@ function IndexCard({ q, delay }: { q: IndexQuote; delay: number }) {
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <p className="text-[10px] text-zinc-600 font-mono mt-1">Last 3 months · daily close</p>
+      <p className="text-[0.625rem] text-zinc-600 font-mono mt-1">Last 3 months · daily close</p>
     </motion.div>
   )
 }
@@ -102,7 +102,7 @@ export function IndexStrip() {
             { label: 'INDIA · NSE / BSE', items: india },
           ].filter(g => g.items.length > 0).map(({ label, items }) => (
             <div key={label}>
-              <p className="text-[10px] font-semibold tracking-widest text-zinc-500 mb-2">{label}</p>
+              <p className="text-[0.625rem] font-semibold tracking-widest text-zinc-500 mb-2">{label}</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {items.map((q, i) => <IndexCard key={q.symbol} q={q} delay={i * 0.06} />)}
               </div>

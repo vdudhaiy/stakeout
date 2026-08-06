@@ -7,8 +7,8 @@
  * so a guest sees the same math a signed-in account would.
  */
 import type { BuyLot, Market, PortfolioResponse, SellLot, StockHolding, StockPurchaseHistory } from '../types'
-import { marketOf } from '../utils/market'
-import { resolveTickerName, fetchGuestPrice } from './guestApi'
+import { marketOf, type Exchange } from '../utils/market'
+import { resolveTickerName, resolveGuestTicker, fetchGuestPrice } from './guestApi'
 import * as guestWatchlist from './guestWatchlist'
 
 interface GuestTxn {
@@ -153,10 +153,10 @@ export async function getStockHolding(ticker: string): Promise<StockHolding> {
   return getHolding(ticker.toUpperCase())
 }
 
-export async function buy(ticker: string, shares: number, boughtAt: number, date?: string): Promise<StockHolding> {
-  ticker = ticker.toUpperCase()
-  const txnDate = resolveDate(date)
+export async function buy(ticker: string, shares: number, boughtAt: number, date?: string, exchange?: Exchange): Promise<StockHolding> {
   const state = loadState()
+  ticker = await resolveGuestTicker(ticker, exchange, t => !!state[t])
+  const txnDate = resolveDate(date)
   let holding = state[ticker]
   if (!holding) {
     const companyName = await resolveTickerName(ticker)
@@ -176,14 +176,14 @@ export async function buy(ticker: string, shares: number, boughtAt: number, date
 
 /** Records several buy lots (backfilled purchase history) as one atomic write —
  * mirrors portfolio_service.add_stock_purchases_bulk's single-replay semantics. */
-export async function buyBulk(ticker: string, lots: BuyLot[]): Promise<StockHolding> {
-  ticker = ticker.toUpperCase()
+export async function buyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange): Promise<StockHolding> {
   if (lots.length === 0) throw new Error('At least one purchase is required.')
   // Resolve every date up front so a bad row anywhere in the batch fails
   // before anything is written.
   const resolvedDates = lots.map(l => resolveDate(l.date))
 
   const state = loadState()
+  ticker = await resolveGuestTicker(ticker, exchange, t => !!state[t])
   let holding = state[ticker]
   if (!holding) {
     const companyName = await resolveTickerName(ticker)

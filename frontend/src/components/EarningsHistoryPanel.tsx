@@ -49,13 +49,13 @@ interface ToggleProps<T extends string> {
 
 function Toggle<T extends string>({ options, active, onChange }: ToggleProps<T>) {
   return (
-    <div className="flex rounded-md overflow-hidden border border-zinc-800 text-[10px]">
+    <div className="flex rounded-md overflow-hidden border border-zinc-800 text-[0.625rem]">
       {options.map(o => (
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
           className={clsx(
-            'px-2 py-1 transition-colors',
+            'px-2.5 py-1.5 sm:py-1 transition-colors whitespace-nowrap',
             active === o.value ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-zinc-200',
           )}
         >
@@ -77,9 +77,9 @@ function EPSChart({ rows }: { rows: EPSHistoryRow[] }) {
   }))
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">EPS <InfoTip k="earnings_surprise" /></p>
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 sm:p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[0.625rem] text-zinc-500 tracking-widest font-medium">EPS <InfoTip k="earnings_surprise" /></p>
         <Toggle
           options={[
             { label: 'Growth', value: 'growth' },
@@ -131,9 +131,9 @@ function RevenueChart({ rows, currencySymbol }: { rows: RevenueHistoryRow[]; cur
   }))
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">REVENUE <InfoTip k="revenue_estimate" /></p>
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 sm:p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[0.625rem] text-zinc-500 tracking-widest font-medium">REVENUE <InfoTip k="revenue_estimate" /></p>
         <Toggle
           options={[
             { label: 'Growth', value: 'growth' },
@@ -195,9 +195,13 @@ export function EarningsHistoryPanel({ epsHistory, revenueHistory, currencySymbo
   if (!hasEps && !hasRevenue) return null
 
   return (
-    <div className={clsx('grid gap-4', hasEps && hasRevenue ? 'grid-cols-2' : 'grid-cols-1')}>
-      {hasEps && <EPSChart rows={epsHistory!} />}
-      {hasRevenue && <RevenueChart rows={revenueHistory!} currencySymbol={currencySymbol} />}
+    // Side by side once the column they sit in is wide enough — see
+    // .panel-cq in index.css. A single chart always spans the full width.
+    <div className="panel-cq">
+      <div className={clsx('grid gap-4 grid-cols-1', hasEps && hasRevenue && 'panel-cq-2col')}>
+        {hasEps && <EPSChart rows={epsHistory!} />}
+        {hasRevenue && <RevenueChart rows={revenueHistory!} currencySymbol={currencySymbol} />}
+      </div>
     </div>
   )
 }

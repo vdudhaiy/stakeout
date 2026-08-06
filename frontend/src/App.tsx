@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import { motion, AnimatePresence } from 'motion/react'
-import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon, ChevronDown, ChevronUp } from 'lucide-react'
+import { TrendingUp, TrendingDown, RefreshCw, Info, Trash2, CandlestickChart as CandleIcon, LineChart as LineChartIcon, ChevronDown, ChevronUp, PanelLeft } from 'lucide-react'
 import { Navbar } from './components/Navbar'
 import { HomePage } from './components/HomePage'
 import { GetStartedPage } from './components/GetStartedPage'
@@ -96,6 +96,8 @@ export default function App() {
   const [openDropdown, setOpenDropdown] = useState<'sma' | 'ema' | null>(null)
   const [subCharts, setSubCharts] = usePersistedState('tracker-subcharts', { rsi: true, macd: true })
   const [portfolioSnapshot, setPortfolioSnapshot] = useState<PortfolioResponse | null>(null)
+  // Only meaningful below `lg`, where the watchlist is a drawer rather than a rail.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const checkMarket = useCallback(() => Promise.all([
     fetchMarketStatus('US').then(setMarketOpen),
@@ -381,7 +383,7 @@ export default function App() {
         : { kind: 'general' }
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
+    <div className="app-shell flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
       <Navbar
         marketOpen={marketOpen}
         marketOpenIN={marketOpenIN}
@@ -440,9 +442,11 @@ export default function App() {
           <TickerSidebar
             selected={ticker}
             tickers={allTickers ?? {}}
-            onSelect={t => { setComparisonGroup(null); setTicker(t) }}
-            onCompare={setComparisonGroup}
+            onSelect={t => { setComparisonGroup(null); setTicker(t); setSidebarOpen(false) }}
+            onCompare={g => { setComparisonGroup(g); setSidebarOpen(false) }}
             onTickersUpdated={setAllTickers}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
           />
 
           {comparisonGroup ? (
@@ -455,13 +459,23 @@ export default function App() {
               </div>
             </div>
           ) : (
-          <main className="flex-1 overflow-y-auto p-6 min-w-0">
-            <div className="flex flex-col gap-5 max-w-6xl">
-              {/* Ticker header row */}
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-baseline gap-3 flex-wrap">
-                    <h1 className="text-2xl font-bold tracking-tight">
+          <main className="flex-1 overflow-y-auto p-4 sm:p-6 min-w-0">
+            <div className="flex flex-col gap-4 sm:gap-5 max-w-6xl">
+              {/* Ticker header row — side by side once there's room, stacked
+                  on phones where the range selector needs the full width. */}
+              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  {/* Watchlist drawer toggle — the rail is hidden below lg */}
+                  <button
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label="Open watchlist"
+                    className="tap-target lg:hidden mt-0.5 p-2 -ml-1 shrink-0 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 transition-colors"
+                  >
+                    <PanelLeft size={16} />
+                  </button>
+                  <div className="min-w-0">
+                  <div className="flex items-baseline gap-2 sm:gap-3 flex-wrap">
+                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
                       {primaryName ?? displayTicker(ticker)}
                       {primaryName && (
                         <span className="text-zinc-500 font-normal text-lg ml-2">({displayTicker(ticker)})</span>
@@ -505,22 +519,26 @@ export default function App() {
                         onClick={loadCurrent}
                         disabled={currentLoading}
                         title="Refresh current price"
-                        className="text-zinc-600 hover:text-zinc-400 disabled:opacity-40 transition-colors"
+                        aria-label="Refresh current price"
+                        className="tap-target p-1 -m-1 text-zinc-600 hover:text-zinc-400 disabled:opacity-40 transition-colors"
                       >
                         <RefreshCw size={10} className={currentLoading ? 'animate-spin' : ''} />
                       </button>
                     </div>
                   )}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex rounded-lg overflow-hidden border border-zinc-800">
+                <div className="flex items-center gap-2 min-w-0 lg:shrink-0">
+                  {/* Nine ranges never fit a phone — the strip scrolls sideways
+                      rather than wrapping into a second row or shrinking type. */}
+                  <div className="flex rounded-lg overflow-x-auto no-scrollbar border border-zinc-800 min-w-0">
                     {DAYS_OPTIONS.map(({ label, value }) => (
                       <button
                         key={value}
                         onClick={() => setDays(value)}
                         className={clsx(
-                          'relative px-3 py-1.5 text-xs font-medium transition-colors',
+                          'relative px-3.5 py-3 sm:px-3 sm:py-1.5 text-xs font-medium transition-colors shrink-0',
                           days === value ? 'text-white' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
                         )}
                       >
@@ -539,14 +557,16 @@ export default function App() {
                     onClick={load}
                     disabled={loading}
                     title="Refresh"
-                    className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 rounded-lg transition-colors"
+                    aria-label="Refresh"
+                    className="tap-target p-2 shrink-0 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 rounded-lg transition-colors"
                   >
                     <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
                   </button>
                   <button
                     onClick={() => setDeleteConfirm(true)}
                     title={`Remove ${displayTicker(ticker)} from watchlist`}
-                    className="p-2 text-red-600 hover:text-red-400 hover:bg-zinc-900 rounded-lg transition-colors"
+                    aria-label={`Remove ${displayTicker(ticker)} from watchlist`}
+                    className="tap-target p-2 shrink-0 text-red-600 hover:text-red-400 hover:bg-zinc-900 rounded-lg transition-colors"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -555,8 +575,8 @@ export default function App() {
 
               {/* Pre-market / after-hours block */}
               {isPreMarket && preMarketClose != null && (
-                <div className="flex items-center gap-5 bg-zinc-900 border border-amber-500/20 rounded-xl px-5 py-3">
-                  <span className="text-[10px] font-semibold tracking-widest text-amber-400 shrink-0">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-zinc-900 border border-amber-500/20 rounded-xl px-4 sm:px-5 py-3">
+                  <span className="text-[0.625rem] font-semibold tracking-widest text-amber-400 shrink-0">
                     {offHoursLabel}
                   </span>
                   <span className="font-mono text-sm font-semibold text-zinc-100">
@@ -585,7 +605,8 @@ export default function App() {
                       <button
                         onClick={() => setShowMarketHours(s => !s)}
                         title="NYSE market hours"
-                        className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                        aria-label="NYSE market hours"
+                        className="tap-target p-1 -m-1 text-zinc-600 hover:text-zinc-400 transition-colors"
                       >
                         <Info size={14} />
                       </button>
@@ -597,9 +618,9 @@ export default function App() {
                             animate="show"
                             exit="exit"
                             style={{ transformOrigin: 'top right' }}
-                            className="absolute right-0 top-6 z-50 w-72 bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl"
+                            className="absolute right-0 top-6 z-50 w-[min(18rem,calc(100vw-2rem))] bg-zinc-950 border border-zinc-700 rounded-xl p-4 shadow-2xl"
                           >
-                            <p className="text-[10px] font-semibold tracking-widest text-zinc-400 mb-3">
+                            <p className="text-[0.625rem] font-semibold tracking-widest text-zinc-400 mb-3">
                               NYSE MARKET HOURS
                             </p>
                             <div className="space-y-3">
@@ -609,7 +630,7 @@ export default function App() {
                                 { label: 'After-hours', color: 'text-blue-400',    et: '16:00 – 20:00', local: `${scheduleLocal.mktClose} – ${scheduleLocal.ahEnd}` },
                               ] as const).map(({ label, color, et, local }) => (
                                 <div key={label} className="space-y-0.5">
-                                  <span className={`text-[10px] font-semibold tracking-widest ${color}`}>
+                                  <span className={`text-[0.625rem] font-semibold tracking-widest ${color}`}>
                                     {label.toUpperCase()}
                                   </span>
                                   <div className="flex items-center justify-between text-xs font-mono">
@@ -668,19 +689,19 @@ export default function App() {
                 </div>
               ) : chartData.length > 0 ? (
                 <>
-                  <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
+                  <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 sm:p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                      <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">
                         {chartType === 'candle' ? 'PRICE' : 'CLOSE PRICE'}
                       </p>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         {days === 0 && chartData.length > 0 && (() => {
                           const dateStr = chartData[0].date.slice(0, 10)
                           const etDate = formatEtDate(dateStr)
                           const localDate = formatLocalDate(dateStr)
                           const tz = localTzAbbr()
                           return (
-                            <span className="text-[10px] font-mono text-zinc-500">
+                            <span className="text-[0.625rem] font-mono text-zinc-500">
                               {etDate} ET{etDate !== localDate ? ` (${localDate} ${tz})` : ` (${tz})`}
                             </span>
                           )
@@ -688,14 +709,14 @@ export default function App() {
 
                         {/* Overlay controls — hidden in 1D mode */}
                         {days > 0 && indicators && (
-                          <div ref={overlayRef} className="flex items-center gap-1">
+                          <div ref={overlayRef} className="flex flex-wrap items-center gap-1">
                             {/* SMA dropdown */}
                             <div className="relative">
                               <button
                                 onClick={() => setOpenDropdown(d => d === 'sma' ? null : 'sma')}
                                 title="Simple Moving Average"
                                 className={clsx(
-                                  'flex items-center gap-0.5 px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                                  'flex items-center gap-0.5 px-2 py-0.5 text-[0.5625rem] rounded border transition-colors uppercase tracking-wider font-medium',
                                   activeSMA.length > 0
                                     ? 'border-amber-500/50 text-amber-300 bg-amber-950/50'
                                     : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
@@ -720,14 +741,14 @@ export default function App() {
                                           prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
                                         )}
                                         title={`${period}-day Simple Moving Average`}
-                                        className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
+                                        className="flex items-center gap-2 w-full px-2.5 py-2 sm:py-1 text-[0.625rem] rounded hover:bg-zinc-800 transition-colors"
                                       >
                                         <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: SMA_COLORS[period] }} />
                                         <span className={activeSMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
                                           {period}
                                         </span>
                                         {activeSMA.includes(period) && (
-                                          <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
+                                          <span className="ml-auto text-zinc-400 text-[0.5rem]">✓</span>
                                         )}
                                       </button>
                                     ))}
@@ -739,13 +760,13 @@ export default function App() {
                             {[...activeSMA].sort((a, b) => a - b).map(period => (
                               <span
                                 key={`chip-sma-${period}`}
-                                className="flex items-center px-1.5 py-0.5 text-[9px] rounded border"
+                                className="flex items-center px-1.5 py-0.5 text-[0.5625rem] rounded border"
                                 style={{ borderColor: `${SMA_COLORS[period]}60`, color: SMA_COLORS[period] }}
                               >
                                 {period}
                                 <button
                                   onClick={() => setActiveSMA(prev => prev.filter(p => p !== period))}
-                                  className="ml-0.5 opacity-60 hover:opacity-100 leading-none"
+                                  className="tap-target ml-1 px-0.5 opacity-60 hover:opacity-100 leading-none"
                                 >×</button>
                               </span>
                             ))}
@@ -756,7 +777,7 @@ export default function App() {
                                 onClick={() => setOpenDropdown(d => d === 'ema' ? null : 'ema')}
                                 title="Exponential Moving Average"
                                 className={clsx(
-                                  'flex items-center gap-0.5 px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                                  'flex items-center gap-0.5 px-2 py-0.5 text-[0.5625rem] rounded border transition-colors uppercase tracking-wider font-medium',
                                   activeEMA.length > 0
                                     ? 'border-violet-500/50 text-violet-300 bg-violet-950/50'
                                     : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
@@ -781,14 +802,14 @@ export default function App() {
                                           prev.includes(period) ? prev.filter(p => p !== period) : [...prev, period]
                                         )}
                                         title={`${period}-day Exponential Moving Average`}
-                                        className="flex items-center gap-2 w-full px-2 py-1 text-[10px] rounded hover:bg-zinc-800 transition-colors"
+                                        className="flex items-center gap-2 w-full px-2.5 py-2 sm:py-1 text-[0.625rem] rounded hover:bg-zinc-800 transition-colors"
                                       >
                                         <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: EMA_COLORS[period] }} />
                                         <span className={activeEMA.includes(period) ? 'text-zinc-200' : 'text-zinc-500'}>
                                           {period}
                                         </span>
                                         {activeEMA.includes(period) && (
-                                          <span className="ml-auto text-zinc-400 text-[8px]">✓</span>
+                                          <span className="ml-auto text-zinc-400 text-[0.5rem]">✓</span>
                                         )}
                                       </button>
                                     ))}
@@ -800,13 +821,13 @@ export default function App() {
                             {[...activeEMA].sort((a, b) => a - b).map(period => (
                               <span
                                 key={`chip-ema-${period}`}
-                                className="flex items-center px-1.5 py-0.5 text-[9px] rounded border"
+                                className="flex items-center px-1.5 py-0.5 text-[0.5625rem] rounded border"
                                 style={{ borderColor: `${EMA_COLORS[period]}60`, color: EMA_COLORS[period] }}
                               >
                                 {period}
                                 <button
                                   onClick={() => setActiveEMA(prev => prev.filter(p => p !== period))}
-                                  className="ml-0.5 opacity-60 hover:opacity-100 leading-none"
+                                  className="tap-target ml-1 px-0.5 opacity-60 hover:opacity-100 leading-none"
                                 >×</button>
                               </span>
                             ))}
@@ -816,7 +837,7 @@ export default function App() {
                               title="Bollinger Bands (20-day, ±2σ)"
                               onClick={() => setOverlayBB(prev => !prev)}
                               className={clsx(
-                                'px-2 py-0.5 text-[9px] rounded border transition-colors uppercase tracking-wider font-medium',
+                                'px-2 py-0.5 text-[0.5625rem] rounded border transition-colors uppercase tracking-wider font-medium',
                                 overlayBB
                                   ? 'border-blue-500 text-blue-300 bg-blue-950'
                                   : 'border-zinc-700 text-zinc-500 hover:text-zinc-300',
@@ -833,7 +854,7 @@ export default function App() {
                           <button
                             onClick={() => setChartType('candle')}
                             className={clsx(
-                              'relative flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                              'relative flex items-center gap-1 px-2 py-1 text-[0.625rem] font-medium transition-colors',
                               chartType === 'candle' ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
                             )}
                           >
@@ -846,7 +867,7 @@ export default function App() {
                           <button
                             onClick={() => setChartType('area')}
                             className={clsx(
-                              'relative flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                              'relative flex items-center gap-1 px-2 py-1 text-[0.625rem] font-medium transition-colors',
                               chartType === 'area' ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
                             )}
                           >
@@ -859,7 +880,7 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    <div className="h-64">
+                    <div className="h-56 sm:h-64 lg:h-72">
                       {(() => {
                         const overlayConfig: OverlayConfig = { activeSMA, activeEMA, bb: overlayBB }
                         return chartType === 'candle'
@@ -871,17 +892,17 @@ export default function App() {
 
                   {/* RSI — its own collapsible block */}
                   {days > 0 && indicators?.rsi && (
-                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
+                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 sm:p-4">
                       <div
                         onClick={() => setSubCharts(prev => ({ ...prev, rsi: !prev.rsi }))}
                         className={clsx('flex items-center justify-between cursor-pointer', subCharts.rsi && 'mb-3')}
                       >
-                        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
+                        <p className="flex items-center gap-1.5 text-[0.625rem] text-zinc-500 tracking-widest font-medium">
                           RSI ({indicators.rsi.period}) <InfoTip k="rsi" />
                         </p>
                         <div className="flex items-center gap-3">
                           {subCharts.rsi && (
-                            <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
+                            <div className="hidden sm:flex items-center gap-3 text-[0.5625rem] font-mono text-zinc-600">
                               <span><span className="text-red-400/60">—</span> 70 overbought</span>
                               <span><span className="text-emerald-400/60">—</span> 30 oversold</span>
                             </div>
@@ -889,7 +910,7 @@ export default function App() {
                           <button
                             onClick={e => { e.stopPropagation(); setSubCharts(prev => ({ ...prev, rsi: !prev.rsi })) }}
                             title={subCharts.rsi ? 'Minimize' : 'Expand'}
-                            className="p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
+                            className="tap-target p-1.5 sm:p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
                           >
                             {subCharts.rsi ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                           </button>
@@ -898,7 +919,7 @@ export default function App() {
                       <AnimatePresence>
                         {subCharts.rsi && (
                           <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
-                            <div className="h-32">
+                            <div className="h-28 sm:h-32">
                               <RSIChart data={indicators.rsi.values} days={days} />
                             </div>
                           </motion.div>
@@ -909,17 +930,17 @@ export default function App() {
 
                   {/* MACD — its own collapsible block */}
                   {days > 0 && indicators?.macd && (
-                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
+                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 sm:p-4">
                       <div
                         onClick={() => setSubCharts(prev => ({ ...prev, macd: !prev.macd }))}
                         className={clsx('flex items-center justify-between cursor-pointer', subCharts.macd && 'mb-3')}
                       >
-                        <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
+                        <p className="flex items-center gap-1.5 text-[0.625rem] text-zinc-500 tracking-widest font-medium">
                           MACD ({indicators.macd.fast}, {indicators.macd.slow}, {indicators.macd.signal_period}) <InfoTip k="macd" />
                         </p>
                         <div className="flex items-center gap-3">
                           {subCharts.macd && (
-                            <div className="flex items-center gap-3 text-[9px] font-mono text-zinc-600">
+                            <div className="hidden sm:flex items-center gap-3 text-[0.5625rem] font-mono text-zinc-600">
                               <span><span className="text-blue-400">—</span> MACD</span>
                               <span><span className="text-orange-400">—</span> Signal</span>
                             </div>
@@ -927,7 +948,7 @@ export default function App() {
                           <button
                             onClick={e => { e.stopPropagation(); setSubCharts(prev => ({ ...prev, macd: !prev.macd })) }}
                             title={subCharts.macd ? 'Minimize' : 'Expand'}
-                            className="p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
+                            className="tap-target p-1.5 sm:p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
                           >
                             {subCharts.macd ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                           </button>
@@ -936,7 +957,7 @@ export default function App() {
                       <AnimatePresence>
                         {subCharts.macd && (
                           <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
-                            <div className="h-32">
+                            <div className="h-28 sm:h-32">
                               <MACDChart data={indicators.macd.values} days={days} />
                             </div>
                           </motion.div>
@@ -952,11 +973,11 @@ export default function App() {
                     currencySymbol={currencySymbol}
                   />
 
-                  <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
-                    <p className="text-[10px] text-zinc-500 tracking-widest font-medium mb-3">
+                  <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 sm:p-4">
+                    <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium mb-3">
                       VOLUME ({volUnit(chartData)})
                     </p>
-                    <div className="h-36">
+                    <div className="h-32 sm:h-36">
                       <VolumeChart data={chartData} days={days} />
                     </div>
                   </div>
@@ -1002,9 +1023,9 @@ export default function App() {
             initial="hidden"
             animate="show"
             exit="exit"
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
           >
-            <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-80 shadow-2xl">
+            <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-xl p-5 sm:p-6 w-full max-w-xs shadow-2xl">
               <h2 className="text-sm font-semibold text-zinc-100 mb-1">Remove {displayTicker(ticker)}?</h2>
               <p className="text-xs text-zinc-400 mb-5">
                 {displayTicker(ticker)} will be removed from your watchlist. You can add it back at any time.

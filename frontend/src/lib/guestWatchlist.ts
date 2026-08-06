@@ -5,8 +5,8 @@
  * blank tracker.
  */
 import type { WatchlistMap } from '../types'
-import { marketOf } from '../utils/market'
-import { resolveTickerName } from './guestApi'
+import { marketOf, type Exchange } from '../utils/market'
+import { resolveTickerName, resolveGuestTicker } from './guestApi'
 
 const STORAGE_KEY = 'stakeout-guest-watchlist'
 const DEFAULT_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'RELIANCE.NS', 'TCS.NS']
@@ -49,14 +49,14 @@ export async function getWatchlist(): Promise<WatchlistMap> {
   return state
 }
 
-export async function addTicker(ticker: string): Promise<{ exist: boolean; stocks: WatchlistMap }> {
-  ticker = ticker.toUpperCase().trim()
+export async function addTicker(ticker: string, exchange?: Exchange): Promise<{ exist: boolean; ticker: string; stocks: WatchlistMap }> {
   const state = loadState()
-  if (state[ticker]) return { exist: true, stocks: state }
+  ticker = await resolveGuestTicker(ticker, exchange, t => !!state[t])
+  if (state[ticker]) return { exist: true, ticker, stocks: state }
   const name = await resolveTickerName(ticker)
   state[ticker] = { name, market: marketOf(ticker) }
   saveState(state)
-  return { exist: false, stocks: state }
+  return { exist: false, ticker, stocks: state }
 }
 
 export async function removeTicker(ticker: string): Promise<void> {

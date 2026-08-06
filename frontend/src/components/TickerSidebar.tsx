@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import clsx from 'clsx'
-import { Search, ChevronDown, ChevronRight, BarChart2, PlusCircle } from 'lucide-react'
+import { Search, ChevronDown, ChevronRight, BarChart2, PlusCircle, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { fetchIndustryMap, fetchSectorMap, addStock } from '../api'
 import { usePrefs, type MarketFilter } from '../contexts/PrefsContext'
 import { AddTickerModal } from './AddTickerModal'
 import type { Exchange } from '../utils/market'
-import { applyExchange, displayTicker } from '../utils/market'
+import { displayTicker } from '../utils/market'
 import type { GroupedStocks, WatchlistMap, ComparisonGroup } from '../types'
 import { collapse, toastSlide, layoutSpring } from '../lib/motion'
 
@@ -25,6 +25,11 @@ interface Props {
   onCompare: (group: ComparisonGroup) => void
   onTickersUpdated: (tickers: WatchlistMap) => void
   onAdded?: (ticker: string) => void
+  /** Below `lg` the sidebar is an off-canvas drawer rather than a fixed column —
+   *  a 16rem rail plus a chart doesn't fit a phone. Ignored at `lg` and up,
+   *  where it's always a static column. */
+  open?: boolean
+  onClose?: () => void
 }
 
 function GroupSection({
@@ -57,15 +62,15 @@ function GroupSection({
             ? <ChevronDown size={11} className="shrink-0 text-zinc-500" />
             : <ChevronRight size={11} className="shrink-0 text-zinc-500" />
           }
-          <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider truncate ml-0.5">
+          <span className="text-[0.6875rem] font-semibold text-zinc-400 uppercase tracking-wider truncate ml-0.5">
             {name}
           </span>
-          <span className="ml-1.5 text-[10px] text-zinc-600 shrink-0">{tickers.length}</span>
+          <span className="ml-1.5 text-[0.625rem] text-zinc-600 shrink-0">{tickers.length}</span>
         </button>
         <button
           onClick={e => { e.stopPropagation(); onCompare({ name, tickers, type }) }}
           title={`Compare ${type}`}
-          className="opacity-0 group-hover:opacity-100 p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all shrink-0"
+          className="tap-target p-1.5 lg:p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all shrink-0 lg:opacity-0 lg:group-hover:opacity-100"
         >
           <BarChart2 size={12} />
         </button>
@@ -79,7 +84,7 @@ function GroupSection({
                 onClick={() => onSelect(ticker)}
                 title={tickerNames?.[ticker]?.name}
                 className={clsx(
-                  'w-full flex items-center pl-8 pr-3 py-2 text-left transition-colors',
+                  'w-full flex items-center pl-8 pr-3 py-3 lg:py-2 text-left transition-colors',
                   selected === ticker
                     ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
                     : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
@@ -95,7 +100,7 @@ function GroupSection({
   )
 }
 
-export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTickersUpdated, onAdded }: Props) {
+export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTickersUpdated, onAdded, open = false, onClose }: Props) {
   const { market, setMarket } = usePrefs()
   const [tab, setTab] = useState<SidebarTab>('general')
   const [search, setSearch] = useState('')
@@ -116,15 +121,14 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
   }, [tab, industryMap, sectorMap])
 
   async function submitAdd(rawTicker: string, exchange: Exchange) {
-    const ticker = applyExchange(rawTicker, exchange)
     const result = await addStock(rawTicker, exchange)
     onTickersUpdated(result.stocks)
-    onSelect(ticker)
+    onSelect(result.ticker)
     if (result.exist) {
       setExistNotice(true)
       setTimeout(() => setExistNotice(false), 3500)
     } else {
-      onAdded?.(ticker)
+      onAdded?.(result.ticker)
     }
   }
 
@@ -146,7 +150,42 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
   const activeMap = tab === 'industry' ? industryMap : tab === 'sector' ? sectorMap : null
 
   return (
-    <aside className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col">
+    <>
+    {/* Scrim — only ever rendered while the drawer is open below `lg`. */}
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          onClick={onClose}
+          className="lg:hidden fixed inset-0 z-40 bg-black/60"
+        />
+      )}
+    </AnimatePresence>
+
+    <aside className={clsx(
+      'shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col',
+      // Drawer below lg: off-canvas, slides in over the chart.
+      'fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] transition-transform duration-200 ease-out',
+      open ? 'translate-x-0 shadow-2xl' : '-translate-x-full',
+      // Static rail from lg up — the transform/position are reset so the
+      // drawer state has no effect on desktop.
+      'lg:static lg:z-auto lg:w-64 lg:max-w-none lg:translate-x-0 lg:shadow-none',
+    )}>
+      {/* Drawer chrome — the static rail needs no title bar or close button. */}
+      <div className="lg:hidden flex items-center justify-between px-3 py-2.5 border-b border-zinc-800 shrink-0">
+        <span className="text-[0.6875rem] font-semibold tracking-widest text-zinc-400 uppercase">Watchlist</span>
+        <button
+          onClick={onClose}
+          aria-label="Close watchlist"
+          className="tap-target p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 transition-colors"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
       <AnimatePresence>
         {existNotice && (
           <motion.div
@@ -167,7 +206,7 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
             key={value}
             onClick={() => setMarket(value)}
             className={clsx(
-              'relative flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors border',
+              'relative flex-1 py-3 lg:py-1.5 text-[0.6875rem] font-medium rounded-md transition-colors border',
               market === value
                 ? 'text-indigo-300 border-indigo-500/30'
                 : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 border-transparent',
@@ -192,7 +231,7 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
             key={t}
             onClick={() => setTab(t)}
             className={clsx(
-              'relative flex-1 py-2.5 text-[11px] font-medium transition-colors capitalize',
+              'relative flex-1 py-3 lg:py-2.5 text-[0.6875rem] font-medium transition-colors capitalize',
               tab === t
                 ? 'text-indigo-400 bg-indigo-500/5'
                 : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/50',
@@ -225,7 +264,8 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
         <button
           onClick={() => setAddOpen(true)}
           title="Add ticker"
-          className="p-1.5 rounded transition-colors shrink-0 text-zinc-500 hover:text-indigo-400 hover:bg-zinc-900"
+          aria-label="Add ticker"
+          className="tap-target p-2 lg:p-1.5 rounded transition-colors shrink-0 text-zinc-500 hover:text-indigo-400 hover:bg-zinc-900"
         >
           <PlusCircle size={14} />
         </button>
@@ -238,14 +278,14 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
             ? <p className="text-zinc-600 text-xs text-center py-4">No results</p>
             : <>
                 <div className="group flex items-center px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
-                  <span className="flex-1 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                  <span className="flex-1 text-[0.6875rem] font-semibold text-zinc-400 uppercase tracking-wider">
                     All Stocks
                   </span>
-                  <span className="text-[10px] text-zinc-600 mr-1.5">{filteredTickers.length}</span>
+                  <span className="text-[0.625rem] text-zinc-600 mr-1.5">{filteredTickers.length}</span>
                   <button
                     onClick={() => onCompare({ name: 'All Stocks', tickers: filteredTickers, type: 'all' })}
                     title="Compare all stocks"
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all shrink-0"
+                    className="tap-target p-1.5 lg:p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all shrink-0 lg:opacity-0 lg:group-hover:opacity-100"
                   >
                     <BarChart2 size={12} />
                   </button>
@@ -262,14 +302,14 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
                       onClick={() => onSelect(ticker)}
                       title={tickers[ticker]?.name}
                       className={clsx(
-                        'w-full flex items-center px-4 py-2.5 text-left transition-colors overflow-hidden',
+                        'w-full flex items-center px-4 py-3 lg:py-2.5 text-left transition-colors overflow-hidden',
                         selected === ticker
                           ? 'bg-indigo-500/10 text-indigo-300 border-r-2 border-indigo-500'
                           : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
                       )}
                     >
                       <span className="font-mono text-sm font-medium">{displayTicker(ticker)}</span>
-                      <span className="ml-auto text-[9px] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
+                      <span className="ml-auto text-[0.5625rem] font-mono text-zinc-600 border border-zinc-800 rounded px-1 py-px shrink-0">
                         {tickers[ticker]?.market ?? 'US'}
                       </span>
                     </motion.button>
@@ -303,12 +343,13 @@ export function TickerSidebar({ selected, tickers, onSelect, onCompare, onTicker
       <AnimatePresence>
         {addOpen && (
           <AddTickerModal
-            initialExchange={market === 'IN' ? 'NSE' : 'US'}
+            initialExchange={market === 'IN' ? 'IN' : 'US'}
             onClose={() => setAddOpen(false)}
             onSubmit={submitAdd}
           />
         )}
       </AnimatePresence>
     </aside>
+    </>
   )
 }

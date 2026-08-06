@@ -35,7 +35,7 @@ function latencyLabel(ms: number) {
 function StatCard({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-col gap-3">
-      <span className="text-[10px] text-zinc-500 tracking-widest font-medium">{label}</span>
+      <span className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">{label}</span>
       {children}
     </div>
   )
@@ -100,7 +100,7 @@ export function HealthDashboard({ status, latencyMs, lastChecked, history }: Pro
 
       {/* Latency history chart */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-        <p className="text-[10px] text-zinc-500 tracking-widest font-medium mb-4">
+        <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium mb-4">
           LATENCY HISTORY
         </p>
         {history.length < 2 ? (
@@ -160,7 +160,7 @@ export function HealthDashboard({ status, latencyMs, lastChecked, history }: Pro
             </ResponsiveContainer>
           </div>
         )}
-        <div className="flex items-center gap-5 mt-3 text-[11px] text-zinc-600">
+        <div className="flex items-center gap-5 mt-3 text-[0.6875rem] text-zinc-600">
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-5 border-t border-dashed border-emerald-500/40" />
             100 ms
@@ -176,7 +176,7 @@ export function HealthDashboard({ status, latencyMs, lastChecked, history }: Pro
       {history.length > 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
           <div className="px-5 py-3.5 border-b border-zinc-800">
-            <p className="text-[10px] text-zinc-500 tracking-widest font-medium">RECENT CHECKS</p>
+            <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">RECENT CHECKS</p>
           </div>
           <div className="divide-y divide-zinc-800/60">
             {[...history]

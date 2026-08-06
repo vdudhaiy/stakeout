@@ -96,14 +96,14 @@ export function AIInsightCard({ ticker }: Props) {
   const facts = explanation?.facts
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-      <div className="flex items-center gap-2 mb-3">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <Sparkles size={13} className="text-indigo-400 shrink-0" />
-        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">AI INSIGHT</p>
+        <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">AI INSIGHT</p>
         {explanation && (
           <span className="flex items-center gap-1.5 ml-1">
             <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', CONFIDENCE_STYLE[explanation.confidence])} />
-            <span className="text-[10px] text-zinc-500 capitalize">{explanation.confidence} confidence</span>
+            <span className="text-[0.625rem] text-zinc-500 capitalize">{explanation.confidence} confidence</span>
           </span>
         )}
         <button
@@ -130,7 +130,7 @@ export function AIInsightCard({ ticker }: Props) {
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className={clsx('h-3 rounded bg-zinc-800/60 animate-pulse', i === 2 && 'w-2/3')} />
           ))}
-          <p className="text-[10px] text-zinc-600 pt-1">Generating with a local AI model — this can take up to a minute.</p>
+          <p className="text-[0.625rem] text-zinc-600 pt-1">Generating with a local AI model — this can take up to a minute.</p>
         </div>
       ) : explanation ? (
         <>
@@ -138,7 +138,7 @@ export function AIInsightCard({ ticker }: Props) {
 
           <button
             onClick={() => setFactsOpen(v => !v)}
-            className="mt-3 flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+            className="mt-3 flex items-center gap-1 text-[0.6875rem] text-indigo-400 hover:text-indigo-300 transition-colors"
           >
             {factsOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
             {factsOpen ? 'Hide the numbers' : 'View the numbers'}
@@ -166,7 +166,7 @@ export function AIInsightCard({ ticker }: Props) {
             )}
           </AnimatePresence>
 
-          <p className="mt-3 pt-3 border-t border-zinc-800 text-[10px] text-zinc-600">
+          <p className="mt-3 pt-3 border-t border-zinc-800 text-[0.625rem] text-zinc-600">
             Generated {timeAgo(explanation.generated_at)} · {explanation.model} · AI-generated from computed indicators, not financial advice.
           </p>
         </>

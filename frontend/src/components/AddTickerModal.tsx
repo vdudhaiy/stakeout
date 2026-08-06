@@ -44,16 +44,16 @@ export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
       initial="hidden"
       animate="show"
       exit="exit"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <motion.div variants={scaleIn} className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 sm:p-6 w-full max-w-sm max-h-[85dvh] overflow-y-auto shadow-2xl">
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-sm font-semibold text-zinc-100">Add Ticker</h2>
             <p className="text-xs text-zinc-500 mt-0.5">Track a stock on your tracker.</p>
           </div>
-          <button onClick={onClose} className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors">
+          <button onClick={onClose} className="tap-target p-1.5 -m-1 text-zinc-600 hover:text-zinc-300 transition-colors">
             <X size={15} />
           </button>
         </div>
@@ -62,14 +62,14 @@ export function AddTickerModal({ initialExchange, onClose, onSubmit }: Props) {
           {/* Exchange first: it scopes the ticker search below, and keeping it
               above means the suggestion dropdown never has to cover it. */}
           <div>
-            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+            <label className="block text-[0.625rem] font-semibold tracking-widest text-zinc-500 mb-1.5">
               EXCHANGE
             </label>
             <ExchangeSelect value={exchange} onChange={setExchange} />
           </div>
 
           <div>
-            <label className="block text-[10px] font-semibold tracking-widest text-zinc-500 mb-1.5">
+            <label className="block text-[0.625rem] font-semibold tracking-widest text-zinc-500 mb-1.5">
               TICKER
             </label>
             <TickerAutocomplete

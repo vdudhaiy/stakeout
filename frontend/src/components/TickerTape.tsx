@@ -56,7 +56,7 @@ export function TickerTape({ tickers }: Props) {
     <div className="ticker-tape shrink-0 border-b border-zinc-800 bg-zinc-900/60" aria-hidden="true">
       <div className="ticker-tape-track py-1.5">
         {items.map((q, i) => (
-          <span key={`${q.ticker}-${i}`} className="flex items-center gap-2 px-5 text-[11px] font-mono">
+          <span key={`${q.ticker}-${i}`} className="flex items-center gap-2 px-5 text-[0.6875rem] font-mono">
             <span className={clsx('w-1 h-1 rounded-full', q.market === 'IN' ? 'bg-amber-400' : 'bg-indigo-400')} />
             <span className="text-zinc-400">{q.ticker}</span>
             <span className="text-zinc-200">

@@ -35,11 +35,11 @@ export function PasswordRecoveryModal() {
       initial="hidden"
       animate="show"
       exit="exit"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <motion.div
         variants={scaleIn}
-        className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-[22rem] shadow-2xl"
+        className="bg-zinc-900 border border-zinc-700 rounded-xl p-5 sm:p-6 w-full max-w-[22rem] shadow-2xl"
       >
         {done ? (
           <>
@@ -84,7 +84,7 @@ export function PasswordRecoveryModal() {
                 {sending ? <RefreshCw size={13} className="animate-spin" /> : <Lock size={13} />}
                 Update Password
               </button>
-              {error && <p className="text-[11px] text-red-400">{error}</p>}
+              {error && <p className="text-[0.6875rem] text-red-400">{error}</p>}
             </div>
           </>
         )}

@@ -19,7 +19,7 @@ export function StockInfoCard({ info }: Props) {
   const summaryLong = (summary?.length ?? 0) > 320
 
   return (
-    <div className="shrink-0 bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+    <div className="shrink-0 bg-zinc-900 border border-zinc-800 rounded-xl p-3 sm:p-4 space-y-3">
       {(sector || industry) && (
         <div className="flex items-center gap-2 flex-wrap">
           {sector && (

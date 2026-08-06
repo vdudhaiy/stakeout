@@ -13,23 +13,29 @@ export function displayTicker(ticker: string): string {
   return ticker.replace(/\.(NS|BO)$/i, '')
 }
 
-/** Exchange the user picks in the "add ticker" UI — drives which suffix gets appended. */
-export type Exchange = 'US' | 'NSE' | 'BSE'
+/** Exchange the user picks in the "add ticker" UI. NSE and BSE aren't a
+ * separate choice — India is one option that resolves to NSE by default and
+ * falls back to BSE server-side if NSE doesn't have the ticker. */
+export type Exchange = 'US' | 'IN'
 
 export const EXCHANGES: Array<{ value: Exchange; label: string; market: Market }> = [
-  { value: 'US',  label: 'US · NYSE/NASDAQ', market: 'US' },
-  { value: 'NSE', label: 'India · NSE',      market: 'IN' },
-  { value: 'BSE', label: 'India · BSE',      market: 'IN' },
+  { value: 'US', label: 'US · NYSE/NASDAQ', market: 'US' },
+  { value: 'IN', label: 'India · NSE/BSE',  market: 'IN' },
 ]
 
-const EXCHANGE_SUFFIX: Record<Exchange, string> = { US: '', NSE: '.NS', BSE: '.BO' }
+const EXCHANGE_SUFFIX: Record<Exchange, string> = { US: '', IN: '.NS' }
 
-/** Append the Yahoo Finance suffix for `exchange` to a bare ticker (idempotent). */
+/** Append the Yahoo Finance suffix for `exchange` to a bare ticker
+ * (idempotent). For "IN" this only ever produces the NSE suffix — it has no
+ * way to know whether the ticker actually exists on NSE, let alone BSE.
+ * Callers that need the NSE-then-BSE fallback for a brand-new Indian ticker
+ * should resolve that themselves (see guestApi.resolveGuestTicker) and use
+ * this only where the exchange is already unambiguous. */
 export function applyExchange(ticker: string, exchange: Exchange): string {
   const t = ticker.trim().toUpperCase()
+  if (t.endsWith('.NS') || t.endsWith('.BO')) return t
   const suffix = EXCHANGE_SUFFIX[exchange]
-  if (!suffix || t.endsWith(suffix) || t.endsWith('.NS') || t.endsWith('.BO')) return t
-  return `${t}${suffix}`
+  return suffix ? `${t}${suffix}` : t
 }
 
 /** Native currency traded on `exchange`. */

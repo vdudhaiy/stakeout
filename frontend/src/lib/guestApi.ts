@@ -9,6 +9,8 @@
  * from api/index.ts to avoid a circular import (that module imports the
  * guest engines to route into them).
  */
+import { applyExchange, type Exchange } from '../utils/market'
+
 const API_BASE = ((import.meta.env.VITE_API_URL as string | undefined) ?? '').replace(/\/$/, '')
 
 /** Ensures `ticker` is cached in the shared archive and returns a display name.
@@ -41,4 +43,41 @@ export async function fetchGuestPrice(ticker: string): Promise<number | null> {
   } catch {
     return null
   }
+}
+
+/** Resolves a bare ticker + exchange choice to the canonical suffixed
+ * ticker to use in guest mode, mirroring portfolio_service._resolve_ticker
+ * (and watchlist.py's own copy of the same logic) since guest mode has no
+ * server-side session to do this for it.
+ *
+ * "US" and an already-suffixed ticker pass through applyExchange unchanged.
+ * A bare Indian ticker is ambiguous — the user no longer picks NSE vs BSE —
+ * so this reuses whichever suffix `hasExisting` already recognizes (so
+ * "buy more"/re-adding doesn't fork into a second holding/watchlist entry),
+ * otherwise probes NSE then BSE via resolveTickerName and keeps whichever
+ * one actually exists. Throws if the ticker exists on neither exchange. */
+export async function resolveGuestTicker(
+  ticker: string, exchange: Exchange | undefined, hasExisting: (t: string) => boolean,
+): Promise<string> {
+  const t = ticker.trim().toUpperCase()
+  if (exchange !== 'IN' || t.endsWith('.NS') || t.endsWith('.BO')) {
+    return applyExchange(t, exchange ?? 'US')
+  }
+
+  for (const suffix of ['.NS', '.BO'] as const) {
+    if (hasExisting(`${t}${suffix}`)) return `${t}${suffix}`
+  }
+
+  let lastError: unknown
+  for (const suffix of ['.NS', '.BO'] as const) {
+    try {
+      await resolveTickerName(`${t}${suffix}`)
+      return `${t}${suffix}`
+    } catch (e) {
+      lastError = e
+    }
+  }
+  throw lastError instanceof Error
+    ? new Error(`Ticker '${t}' could not be found on NSE or BSE. Please check the symbol and try again.`)
+    : lastError
 }

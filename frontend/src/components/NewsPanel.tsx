@@ -105,7 +105,7 @@ function NewsCarousel({ articles }: { articles: NewsArticle[] }) {
       <div
         ref={scrollerRef}
         onScroll={updateArrows}
-        className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="no-scrollbar flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory"
       >
         {articles.map((a, i) => {
           const tag = a.layer ? LAYER_LABEL[a.layer] : a.region ? REGION_LABEL[a.region] : null
@@ -125,7 +125,7 @@ function NewsCarousel({ articles }: { articles: NewsArticle[] }) {
               <p className="text-xs text-zinc-200 group-hover:text-zinc-100 leading-snug line-clamp-4">
                 {a.title}
               </p>
-              <div className="flex items-center gap-1.5 mt-3 text-[10px] text-zinc-600 font-mono min-w-0">
+              <div className="flex items-center gap-1.5 mt-3 text-[0.625rem] text-zinc-600 font-mono min-w-0">
                 {tag && (
                   <span className={clsx('px-1.5 py-px rounded border shrink-0', tagStyle)}>{tag}</span>
                 )}
@@ -169,14 +169,14 @@ export function NewsPanel({ mode, limit = 10, compact = false, className }: Prop
   const isCarousel = mode.kind === 'stock'
 
   return (
-    <div className={clsx('bg-zinc-900 border border-zinc-800 rounded-xl', compact ? 'p-4' : 'p-5', className)}>
+    <div className={clsx('bg-zinc-900 border border-zinc-800 rounded-xl', compact ? 'p-3 sm:p-4' : 'p-4 sm:p-5', className)}>
       <div className="flex items-center gap-2 mb-3">
         <Newspaper size={13} className="text-indigo-400 shrink-0" />
-        <p className="text-[10px] text-zinc-500 tracking-widest font-medium">
+        <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">
           {mode.kind === 'market' ? 'MARKET HEADLINES' : `NEWS · ${mode.ticker}`}
         </p>
         {isCarousel && (
-          <p className="text-[10px] text-zinc-600 font-mono">company · industry · sector · market</p>
+          <p className="hidden sm:block text-[0.625rem] text-zinc-600 font-mono">company · industry · sector · market</p>
         )}
         {loading && <RefreshCw size={11} className="animate-spin text-zinc-600 ml-auto" />}
       </div>
@@ -222,10 +222,10 @@ export function NewsPanel({ mode, limit = 10, compact = false, className }: Prop
                   className="group flex items-start gap-2 py-2.5 hover:bg-zinc-800/40 -mx-2 px-2 rounded-md transition-colors"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className={clsx('text-zinc-200 group-hover:text-zinc-100 leading-snug', compact ? 'text-xs' : 'text-[13px]')}>
+                    <p className={clsx('text-zinc-200 group-hover:text-zinc-100 leading-snug', compact ? 'text-xs' : 'text-[0.8125rem]')}>
                       {a.title}
                     </p>
-                    <p className="flex items-center gap-1.5 mt-1 text-[10px] text-zinc-600 font-mono">
+                    <p className="flex items-center gap-1.5 mt-1 text-[0.625rem] text-zinc-600 font-mono">
                       {tag && (
                         <span className="px-1.5 py-px rounded border border-zinc-700 text-zinc-500">{tag}</span>
                       )}

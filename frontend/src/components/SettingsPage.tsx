@@ -26,14 +26,14 @@ function Section({
   children: React.ReactNode
 }) {
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5">
       <div className="flex items-center gap-2.5 mb-4">
         <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
           <Icon size={15} className="text-indigo-400" />
         </div>
         <div>
           <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
-          {subtitle && <p className="text-[11px] text-zinc-500">{subtitle}</p>}
+          {subtitle && <p className="text-[0.6875rem] text-zinc-500">{subtitle}</p>}
         </div>
       </div>
       <div className="space-y-4">{children}</div>
@@ -76,12 +76,12 @@ function Toggle({
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-6">
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-6">
       <div className="min-w-0">
         <p className="text-xs font-medium text-zinc-300">{label}</p>
-        {hint && <p className="text-[11px] text-zinc-500 mt-0.5 leading-relaxed">{hint}</p>}
+        {hint && <p className="text-[0.6875rem] text-zinc-500 mt-0.5 leading-relaxed">{hint}</p>}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="shrink-0 self-start sm:self-auto">{children}</div>
     </div>
   )
 }
@@ -163,8 +163,8 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-3xl mx-auto flex flex-col gap-5">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="max-w-3xl mx-auto flex flex-col gap-4 sm:gap-5">
 
         <div className="flex items-center gap-2.5">
           <SettingsIcon size={18} className="text-zinc-400" />
@@ -223,7 +223,7 @@ export function SettingsPage() {
                         </p>
                         <button
                           onClick={closeChangePassword}
-                          className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                          className="text-[0.6875rem] text-zinc-500 hover:text-zinc-300 transition-colors"
                         >
                           Done
                         </button>
@@ -247,7 +247,7 @@ export function SettingsPage() {
                           onKeyDown={e => e.key === 'Enter' && submitChangePassword()}
                           className="w-full bg-zinc-950 text-zinc-200 text-sm rounded-lg px-3 py-2 outline-none border border-zinc-700 focus:border-indigo-500 transition-colors placeholder-zinc-600"
                         />
-                        {pwError && <p className="text-[11px] text-red-400">{pwError}</p>}
+                        {pwError && <p className="text-[0.6875rem] text-red-400">{pwError}</p>}
                         <div className="flex items-center gap-2 pt-1">
                           <button
                             onClick={submitChangePassword}
@@ -368,14 +368,14 @@ export function SettingsPage() {
         </Section>
 
         {/* ── Danger zone ──────────────────────────────────────────────── */}
-        <div className="bg-zinc-900 border border-red-500/20 rounded-xl p-5">
+        <div className="bg-zinc-900 border border-red-500/20 rounded-xl p-4 sm:p-5">
           <div className="flex items-center gap-2.5 mb-4">
             <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-red-500/10 border border-red-500/20">
               <ShieldAlert size={15} className="text-red-400" />
             </div>
             <div>
               <h2 className="text-sm font-semibold text-zinc-100">Danger zone</h2>
-              <p className="text-[11px] text-zinc-500">Irreversible actions</p>
+              <p className="text-[0.6875rem] text-zinc-500">Irreversible actions</p>
             </div>
           </div>
           <Row
@@ -416,8 +416,8 @@ export function SettingsPage() {
                       auth provider. There is no undo.
                     </p>
                   </div>
-                  {deleteError && <p className="text-[11px] text-red-400 mt-2">{deleteError}</p>}
-                  <div className="flex items-center gap-2 mt-3">
+                  {deleteError && <p className="text-[0.6875rem] text-red-400 mt-2">{deleteError}</p>}
+                  <div className="flex flex-wrap items-center gap-2 mt-3">
                     <button
                       onClick={confirmDeleteAccount}
                       disabled={deleting}
@@ -440,7 +440,7 @@ export function SettingsPage() {
           </AnimatePresence>
         </div>
 
-        <p className="text-center text-[11px] text-zinc-600 pb-4">
+        <p className="text-center text-[0.6875rem] text-zinc-600 pb-4">
           More settings (display currency, notifications, refresh intervals) are on the roadmap.
         </p>
       </div>

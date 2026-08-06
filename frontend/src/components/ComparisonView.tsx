@@ -119,23 +119,23 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
   const typeLabel = group.type === 'industry' ? 'Industry' : group.type === 'sector' ? 'Sector' : 'All'
 
   return (
-    <main className="flex-1 overflow-y-auto p-6 min-w-0">
-      <div className="flex flex-col gap-5 max-w-6xl">
+    <main className="flex-1 overflow-y-auto p-4 sm:p-6 min-w-0">
+      <div className="flex flex-col gap-4 sm:gap-5 max-w-6xl">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3 lg:gap-4">
           <div className="flex items-center gap-3">
             <button
               onClick={onBack}
-              className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 transition-colors shrink-0"
+              className="tap-target p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 transition-colors shrink-0"
             >
               <ArrowLeft size={16} />
             </button>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">
+                <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">
                   {typeLabel}
                 </span>
-                <h1 className="text-xl font-bold tracking-tight">{group.name}</h1>
+                <h1 className="text-lg sm:text-xl font-bold tracking-tight">{group.name}</h1>
               </div>
               <p className="text-xs text-zinc-500 mt-0.5">
                 % change from period start · {group.tickers.length} stocks
@@ -143,14 +143,14 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="flex rounded-lg overflow-hidden border border-zinc-800">
+          <div className="flex items-center gap-2 min-w-0 lg:shrink-0">
+            <div className="flex rounded-lg overflow-x-auto no-scrollbar border border-zinc-800 min-w-0">
               {DAYS_OPTIONS.map(({ label, value }) => (
                 <button
                   key={value}
                   onClick={() => setDays(value)}
                   className={clsx(
-                    'px-3 py-1.5 text-xs font-medium transition-colors',
+                    'px-3.5 py-3 sm:px-3 sm:py-1.5 text-xs font-medium transition-colors shrink-0',
                     days === value
                       ? 'bg-indigo-600 text-white'
                       : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200',
@@ -164,7 +164,8 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
               onClick={loadAll}
               disabled={loading}
               title="Refresh"
-              className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 rounded-lg transition-colors"
+              aria-label="Refresh"
+              className="tap-target p-2 shrink-0 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 rounded-lg transition-colors"
             >
               <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -195,7 +196,7 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
                 disabled={!hasData}
                 title={!hasData ? 'No data available' : (tickerNames?.[t] ?? t)}
                 className={clsx(
-                  'px-3 py-1 rounded-full text-xs font-mono font-medium transition-all border',
+                  'px-3 py-1.5 sm:py-1 rounded-full text-xs font-mono font-medium transition-all border',
                   active && hasData ? 'opacity-100' : 'opacity-30 grayscale',
                   !hasData && 'cursor-not-allowed',
                 )}
@@ -214,14 +215,14 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
 
         {/* Chart area */}
         {loading && chartData.length === 0 ? (
-          <div className="flex items-center justify-center h-96 bg-zinc-900 border border-zinc-800 rounded-xl">
+          <div className="flex items-center justify-center h-64 sm:h-80 lg:h-96 bg-zinc-900 border border-zinc-800 rounded-xl">
             <div className="flex items-center gap-2 text-zinc-500 text-sm">
               <RefreshCw size={13} className="animate-spin" />
               Loading comparison...
             </div>
           </div>
         ) : error ? (
-          <div className="flex items-center justify-center h-96 bg-zinc-900 border border-zinc-800 rounded-xl">
+          <div className="flex items-center justify-center h-64 sm:h-80 lg:h-96 bg-zinc-900 border border-zinc-800 rounded-xl">
             <div className="text-center space-y-2">
               <p className="text-zinc-500 text-sm">{error}</p>
               <button
@@ -233,11 +234,11 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
             </div>
           </div>
         ) : chartData.length > 0 ? (
-          <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
-            <p className="text-[10px] text-zinc-500 tracking-widest font-medium mb-3">
+          <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 sm:p-4">
+            <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium mb-3">
               NORMALISED % CHANGE
             </p>
-            <div className="h-96">
+            <div className="h-64 sm:h-80 lg:h-96">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
@@ -284,7 +285,7 @@ export function ComparisonView({ group, onBack, marketOpen, tickerNames }: Props
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-96 bg-zinc-900 border border-zinc-800 rounded-xl">
+          <div className="flex items-center justify-center h-64 sm:h-80 lg:h-96 bg-zinc-900 border border-zinc-800 rounded-xl">
             <p className="text-zinc-500 text-sm">No data available for this group</p>
           </div>
         )}

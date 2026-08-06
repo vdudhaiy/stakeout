@@ -35,7 +35,7 @@ function fmtPct(n: number | null | undefined) {
 
 function SectionLabel({ children, tip }: { children: React.ReactNode; tip?: GlossaryKey }) {
   return (
-    <p className="flex items-center gap-1.5 text-[10px] text-zinc-500 tracking-widest font-medium">
+    <p className="flex items-center gap-1.5 text-[0.625rem] text-zinc-500 tracking-widest font-medium">
       {children}
       {tip && <InfoTip k={tip} />}
     </p>
@@ -70,7 +70,7 @@ function EstimatesTable({ rows, fmtValue, valueLabel }: EstimatesTableProps) {
               <th
                 key={h}
                 className={clsx(
-                  'pb-2 text-[10px] text-zinc-600 font-medium tracking-wider',
+                  'pb-2 text-[0.625rem] text-zinc-600 font-medium tracking-wider',
                   h === 'PERIOD' ? 'text-left' : 'text-right',
                 )}
               >
@@ -133,7 +133,7 @@ function PriceTargetsCard({ targets, currentPrice, format, currencySymbol }: Pri
       : null
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 space-y-4">
       <SectionLabel tip="price_target">ANALYST PRICE TARGETS</SectionLabel>
 
       {!hasRange ? (
@@ -178,7 +178,7 @@ function PriceTargetsCard({ targets, currentPrice, format, currencySymbol }: Pri
                 />
               )}
             </div>
-            <div className="flex justify-between text-[10px] font-mono text-zinc-500">
+            <div className="flex justify-between text-[0.625rem] font-mono text-zinc-500">
               <span>Low {money(low)}</span>
               <span>High {money(high)}</span>
             </div>
@@ -196,7 +196,7 @@ function PriceTargetsCard({ targets, currentPrice, format, currencySymbol }: Pri
               },
             ].map(({ label, value, colored }) => (
               <div key={label} className="space-y-0.5">
-                <p className="text-[10px] text-zinc-600">{label}</p>
+                <p className="text-[0.625rem] text-zinc-600">{label}</p>
                 <p
                   className={clsx(
                     'text-sm font-mono font-medium',
@@ -213,7 +213,7 @@ function PriceTargetsCard({ targets, currentPrice, format, currencySymbol }: Pri
             ))}
           </div>
 
-          <div className="flex items-center gap-4 text-[10px] text-zinc-500">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.625rem] text-zinc-500">
             <span className="flex items-center gap-1.5">
               <span className="inline-block w-px h-3 bg-zinc-300" /> Current
             </span>
@@ -250,7 +250,7 @@ function RecommendationsCard({ recommendations }: RecommendationsProps) {
     .filter(r => r.total > 0)
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 space-y-4">
       <SectionLabel tip="recommendations">ANALYST RECOMMENDATIONS</SectionLabel>
 
       {rows.length === 0 ? (
@@ -262,7 +262,7 @@ function RecommendationsCard({ recommendations }: RecommendationsProps) {
               <div key={i} className="space-y-1.5">
                 <div className="flex justify-between items-center text-xs">
                   <span className="font-mono text-zinc-400">{r.period ?? `Period ${i + 1}`}</span>
-                  <span className="text-zinc-600 text-[10px]">{r.total} analysts</span>
+                  <span className="text-zinc-600 text-[0.625rem]">{r.total} analysts</span>
                 </div>
                 <div className="flex h-2 rounded-full overflow-hidden gap-px">
                   {r.strongBuy > 0 && <div style={{ flex: r.strongBuy }} className="bg-emerald-500" title={`Strong Buy: ${r.strongBuy}`} />}
@@ -271,7 +271,7 @@ function RecommendationsCard({ recommendations }: RecommendationsProps) {
                   {r.sell > 0 && <div style={{ flex: r.sell }} className="bg-red-400/60" title={`Sell: ${r.sell}`} />}
                   {r.strongSell > 0 && <div style={{ flex: r.strongSell }} className="bg-red-500" title={`Strong Sell: ${r.strongSell}`} />}
                 </div>
-                <div className="flex justify-between text-[10px] font-mono text-zinc-600">
+                <div className="flex justify-between text-[0.625rem] font-mono text-zinc-600">
                   <span className="text-emerald-600">Buy {r.strongBuy + r.buy}</span>
                   <span>Hold {r.hold}</span>
                   <span className="text-red-600">Sell {r.sell + r.strongSell}</span>
@@ -288,7 +288,7 @@ function RecommendationsCard({ recommendations }: RecommendationsProps) {
               { color: 'bg-red-400/60', label: 'Sell' },
               { color: 'bg-red-500', label: 'Strong Sell' },
             ].map(({ color, label }) => (
-              <span key={label} className="flex items-center gap-1 text-[10px] text-zinc-500">
+              <span key={label} className="flex items-center gap-1 text-[0.625rem] text-zinc-500">
                 <span className={`inline-block w-2 h-2 rounded-sm ${color}`} />
                 {label}
               </span>
@@ -311,7 +311,7 @@ function EarningsEstimatesCard({ estimates, currencySymbol }: EarningsEstimatesP
   const rows = (estimates ?? []).filter(r => r.avg != null)
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 space-y-4">
       <SectionLabel tip="eps_estimate">EARNINGS ESTIMATES (EPS)</SectionLabel>
 
       {rows.length === 0 ? (
@@ -338,7 +338,7 @@ function RevenueEstimatesCard({ estimates, currencySymbol }: RevenueEstimatesPro
   const rows = (estimates ?? []).filter(r => r.avg != null)
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 space-y-4">
       <SectionLabel tip="revenue_estimate">REVENUE ESTIMATES</SectionLabel>
 
       {rows.length === 0 ? (
@@ -376,11 +376,14 @@ export function AnalystPanel({
   currencySymbol = '$',
 }: Props) {
   return (
-    <div className="shrink-0 grid grid-cols-1 md:grid-cols-2 gap-4">
+    // Two-up once the surrounding column is wide enough — see .panel-cq in index.css.
+    <div className="panel-cq shrink-0">
+    <div className="panel-cq-2col grid grid-cols-1 gap-4">
       <EarningsEstimatesCard estimates={earningsEstimates} currencySymbol={currencySymbol} />
       <RevenueEstimatesCard estimates={revenueEstimates} currencySymbol={currencySymbol} />
       <PriceTargetsCard targets={targets} currentPrice={currentPrice} format={format} currencySymbol={currencySymbol} />
       <RecommendationsCard recommendations={recommendations} />
+    </div>
     </div>
   )
 }

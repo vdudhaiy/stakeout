@@ -20,10 +20,11 @@ interface Props {
 
 /** Ticker/company-name autocomplete for the "add ticker" flows.
  *
- * Scoped to `exchange` server-side, so switching between US/NSE/BSE in the
+ * Scoped to `exchange` server-side, so switching between US/India in the
  * exchange picker re-searches automatically. Suggestions are bare tickers —
- * no .NS/.BO suffix — since applying that suffix is the exchange picker's
- * job, not this component's; selecting one just fills the plain symbol. */
+ * no .NS/.BO suffix — since which exchange (NSE vs BSE) to actually use is
+ * resolved later, not by this component; selecting one just fills the plain
+ * symbol. */
 export function TickerAutocomplete({ value, onChange, exchange, disabled, placeholder, inputRef }: Props) {
   const [suggestions, setSuggestions] = useState<TickerSuggestion[]>([])
   const [open, setOpen] = useState(false)
@@ -126,7 +127,7 @@ export function TickerAutocomplete({ value, onChange, exchange, disabled, placeh
                   <span className="font-mono text-sm text-zinc-100">{s.symbol}</span>
                   <span className="text-xs text-zinc-500 truncate">{s.name}</span>
                 </span>
-                <span className="text-[10px] text-zinc-600 shrink-0 whitespace-nowrap">{s.exchange}</span>
+                <span className="text-[0.625rem] text-zinc-600 shrink-0 whitespace-nowrap">{s.exchange}</span>
               </button>
             ))}
           </motion.div>

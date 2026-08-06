@@ -48,13 +48,17 @@ export function OHLCVStats({ open, high, low, close, volume, prevClose, format }
   ]
 
   return (
-    <div className="grid grid-cols-6 gap-px bg-zinc-800 rounded-xl overflow-hidden border border-zinc-800">
+    // Six numeric cells in one row need ~90px each; below that they fold into
+    // two or three columns rather than truncating the figures.
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-zinc-800 rounded-xl overflow-hidden border border-zinc-800">
       {stats.map(({ label, value, colored, isPositive: pos }) => (
-        <div key={label} className="bg-zinc-900 px-4 py-3 flex flex-col gap-1.5">
-          <span className="text-zinc-500 text-[10px] tracking-widest font-medium">{label}</span>
+        <div key={label} className="bg-zinc-900 px-3 sm:px-4 py-3 flex flex-col gap-1.5 min-w-0">
+          <span className="text-zinc-500 text-[0.625rem] tracking-widest font-medium">{label}</span>
           <span
             className={clsx(
-              'font-mono text-sm font-medium',
+              // CHANGE carries both an absolute and a percent figure — let it
+              // wrap in a narrow cell instead of spilling out of the card.
+              'font-mono text-sm font-medium break-words',
               colored
                 ? pos
                   ? 'text-emerald-400'

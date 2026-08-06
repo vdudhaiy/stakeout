@@ -86,7 +86,7 @@ export function InfoTip({ k, align = 'left' }: Props) {
         aria-label={`What is ${entry.title}?`}
         aria-expanded={open}
         onClick={toggle}
-        className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-zinc-600 text-zinc-500 text-[9px] leading-none font-semibold hover:border-indigo-400 hover:text-indigo-400 focus-visible:outline focus-visible:outline-1 focus-visible:outline-indigo-400 transition-colors select-none"
+        className="tap-target inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-zinc-600 text-zinc-500 text-[0.5625rem] leading-none font-semibold hover:border-indigo-400 hover:text-indigo-400 focus-visible:outline focus-visible:outline-1 focus-visible:outline-indigo-400 transition-colors select-none"
       >
         ?
       </button>
@@ -110,8 +110,8 @@ export function InfoTip({ k, align = 'left' }: Props) {
                 }}
                 className="z-50 w-60 rounded-lg border border-zinc-700 bg-zinc-950 p-3 shadow-2xl text-left normal-case tracking-normal whitespace-normal"
               >
-                <span className="block text-[11px] font-semibold text-zinc-100 mb-1">{entry.title}</span>
-                <span className="block text-[11px] leading-relaxed text-zinc-400 font-normal font-sans">{entry.body}</span>
+                <span className="block text-[0.6875rem] font-semibold text-zinc-100 mb-1">{entry.title}</span>
+                <span className="block text-[0.6875rem] leading-relaxed text-zinc-400 font-normal font-sans">{entry.body}</span>
               </motion.div>
             )}
           </AnimatePresence>

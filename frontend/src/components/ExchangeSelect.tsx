@@ -17,7 +17,7 @@ export function ExchangeSelect({ value, onChange }: Props) {
           type="button"
           onClick={() => onChange(v)}
           className={clsx(
-            'flex-1 px-2 py-1.5 text-xs font-medium transition-colors whitespace-nowrap',
+            'flex-1 px-2 py-2.5 sm:py-1.5 text-xs font-medium transition-colors whitespace-nowrap',
             value === v
               ? 'bg-indigo-600 text-white'
               : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200',

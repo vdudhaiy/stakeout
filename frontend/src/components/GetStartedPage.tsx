@@ -22,7 +22,7 @@ function CodeBlock({ code }: { code: string }) {
           setTimeout(() => setCopied(false), 1500)
         }}
         title="Copy commands"
-        className="absolute right-2 top-2 flex items-center gap-1 px-2 py-1 rounded-md border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500 transition-colors text-[10px]"
+        className="absolute right-2 top-2 flex items-center gap-1 px-2 py-1 rounded-md border border-zinc-700 text-zinc-500 hover:text-zinc-200 hover:border-zinc-500 transition-colors text-[0.625rem]"
       >
         {copied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
         {copied ? 'Copied' : 'Copy'}
@@ -48,11 +48,11 @@ export function GetStartedPage() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-12 space-y-10">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-8 sm:space-y-10">
 
         {/* ── Header ─────────────────────────────────────────────────── */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" custom={0} className="text-center">
-          <h1 className="font-display text-3xl font-bold tracking-tight text-zinc-100 mb-2">
+          <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-zinc-100 mb-2">
             Two ways to use Stakeout
           </h1>
           <p className="text-zinc-400 text-sm max-w-2xl mx-auto leading-relaxed">
@@ -68,17 +68,17 @@ export function GetStartedPage() {
           {/* Web platform */}
           <motion.div
             variants={fadeUp} initial="hidden" animate="show" custom={1}
-            className="flex flex-col bg-zinc-900 border border-indigo-500/25 rounded-xl p-6 space-y-4"
+            className="flex flex-col bg-zinc-900 border border-indigo-500/25 rounded-xl p-5 sm:p-6 space-y-4"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-indigo-500/10 border border-indigo-500/25">
                 <Cloud size={19} className="text-indigo-400" />
               </div>
               <div>
                 <h2 className="font-display text-zinc-100 font-semibold">Web platform</h2>
-                <p className="text-[11px] text-zinc-500">This website — zero setup</p>
+                <p className="text-[0.6875rem] text-zinc-500">This website — zero setup</p>
               </div>
-              <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300">
+              <span className="ml-auto text-[0.625rem] font-mono px-2 py-0.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300">
                 EASIEST
               </span>
             </div>
@@ -110,17 +110,17 @@ export function GetStartedPage() {
           {/* Local / self-hosted */}
           <motion.div
             variants={fadeUp} initial="hidden" animate="show" custom={2}
-            className="flex flex-col bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4"
+            className="flex flex-col bg-zinc-900 border border-zinc-800 rounded-xl p-5 sm:p-6 space-y-4"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
                 <HardDrive size={19} className="text-emerald-400" />
               </div>
               <div>
                 <h2 className="font-display text-zinc-100 font-semibold">Run it locally</h2>
-                <p className="text-[11px] text-zinc-500">For developers &amp; the privacy-minded</p>
+                <p className="text-[0.6875rem] text-zinc-500">For developers &amp; the privacy-minded</p>
               </div>
-              <span className="ml-auto flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+              <span className="ml-auto flex items-center gap-1 text-[0.625rem] font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
                 <Lock size={9} />
                 MOST PRIVATE
               </span>
@@ -134,11 +134,11 @@ export function GetStartedPage() {
             </p>
 
             <div className="space-y-2">
-              <p className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-zinc-500">
+              <p className="flex items-center gap-1.5 text-[0.625rem] font-semibold tracking-widest text-zinc-500">
                 <Terminal size={11} /> QUICK START — REQUIRES DOCKER
               </p>
               <CodeBlock code={DOCKER_CMDS} />
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[0.6875rem] text-zinc-500">
                 Then open <span className="font-mono text-zinc-300">http://localhost:3000</span>.
                 Prefer running without Docker? The README covers a plain Python + Node dev setup too.
               </p>
@@ -166,11 +166,15 @@ export function GetStartedPage() {
         </div>
 
         {/* ── Comparison ─────────────────────────────────────────────── */}
+        {/* A three-column comparison can't usefully collapse — each cell is a
+            sentence that only means something opposite its two siblings — so
+            it keeps its shape and scrolls sideways below ~40rem instead. */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" custom={3} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-          <div className="grid grid-cols-3 text-xs">
-            <div className="px-4 py-2.5 border-b border-zinc-800 text-[10px] font-semibold tracking-widest text-zinc-500">AT A GLANCE</div>
-            <div className="px-4 py-2.5 border-b border-zinc-800 text-[10px] font-semibold tracking-widest text-indigo-300">WEB PLATFORM</div>
-            <div className="px-4 py-2.5 border-b border-zinc-800 text-[10px] font-semibold tracking-widest text-emerald-300">LOCAL (DOCKER)</div>
+          <div className="overflow-x-auto">
+          <div className="grid grid-cols-3 text-xs min-w-[38rem]">
+            <div className="px-4 py-2.5 border-b border-zinc-800 text-[0.625rem] font-semibold tracking-widest text-zinc-500">AT A GLANCE</div>
+            <div className="px-4 py-2.5 border-b border-zinc-800 text-[0.625rem] font-semibold tracking-widest text-indigo-300">WEB PLATFORM</div>
+            <div className="px-4 py-2.5 border-b border-zinc-800 text-[0.625rem] font-semibold tracking-widest text-emerald-300">LOCAL (DOCKER)</div>
             {([
               ['Setup', 'None — just open the site', 'Clone repo + docker compose up'],
               ['Where your data lives', 'Managed cloud database (or your browser in Guest Mode)', 'Postgres on your own machine'],
@@ -185,9 +189,10 @@ export function GetStartedPage() {
               </div>
             ))}
           </div>
+          </div>
         </motion.div>
 
-        <p className="text-center text-[11px] text-zinc-600">
+        <p className="text-center text-[0.6875rem] text-zinc-600">
           Both modes are the same open-source codebase. The cloud deployment guide (Vercel + Render + Supabase) is in the README for anyone who wants to host their own public instance.
         </p>
       </div>

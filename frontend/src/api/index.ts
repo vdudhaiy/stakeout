@@ -1,5 +1,5 @@
-import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot } from '../types'
-import { applyExchange, type Exchange } from '../utils/market'
+import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot, ImportPreviewResult, ImportApplyRow, PortfolioImportResult } from '../types'
+import type { Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
 import { isGuestModeActive } from '../lib/guestMode'
@@ -86,8 +86,8 @@ export async function fetchIntradayStock(ticker: string): Promise<OHLCVResponse>
   return res.json()
 }
 
-export async function addStock(ticker: string, exchange?: Exchange): Promise<{ exist: boolean; stocks: WatchlistMap }> {
-  if (isGuestMode()) return guestWatchlist.addTicker(exchange ? applyExchange(ticker, exchange) : ticker)
+export async function addStock(ticker: string, exchange?: Exchange): Promise<{ exist: boolean; ticker: string; stocks: WatchlistMap }> {
+  if (isGuestMode()) return guestWatchlist.addTicker(ticker, exchange)
   const qs = exchange ? `?exchange=${exchange}` : ''
   const res = await apiFetch(`/watchlist/${encodeURIComponent(ticker)}${qs}`, { method: 'POST' })
   if (!res.ok) {
@@ -144,7 +144,7 @@ export async function fetchPortfolio(market?: 'US' | 'IN'): Promise<PortfolioRes
 }
 
 export async function logBuy(ticker: string, shares: number, bought_at: number, date: string, exchange?: Exchange): Promise<StockHolding> {
-  if (isGuestMode()) return guestPortfolio.buy(exchange ? applyExchange(ticker, exchange) : ticker, shares, bought_at, date)
+  if (isGuestMode()) return guestPortfolio.buy(ticker, shares, bought_at, date, exchange)
   const exchangeQs = exchange ? `&exchange=${exchange}` : ''
   const res = await apiFetch(
     `/portfolio/${encodeURIComponent(ticker)}/buy?shares=${shares}&bought_at=${bought_at}&date=${date}${exchangeQs}`,
@@ -158,7 +158,7 @@ export async function logBuy(ticker: string, shares: number, bought_at: number, 
 }
 
 export async function logBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange): Promise<StockHolding> {
-  if (isGuestMode()) return guestPortfolio.buyBulk(exchange ? applyExchange(ticker, exchange) : ticker, lots)
+  if (isGuestMode()) return guestPortfolio.buyBulk(ticker, lots, exchange)
   const exchangeQs = exchange ? `?exchange=${exchange}` : ''
   const res = await apiFetch(
     `/portfolio/${encodeURIComponent(ticker)}/buy/bulk${exchangeQs}`,
@@ -314,6 +314,34 @@ export async function downloadPortfolio(market?: 'US' | 'IN'): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
+export async function previewPortfolioImport(file: File): Promise<ImportPreviewResult> {
+  if (isGuestMode()) throw new Error('Sign in to import a portfolio file.')
+  const formData = new FormData()
+  formData.append('file', file)
+  // No Content-Type header — the browser sets multipart/form-data with the
+  // correct boundary itself when the body is a FormData instance.
+  const res = await apiFetch('/portfolio/import/preview', { method: 'POST', body: formData })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to read portfolio file')
+  }
+  return res.json()
+}
+
+export async function applyPortfolioImport(rows: ImportApplyRow[]): Promise<PortfolioImportResult> {
+  if (isGuestMode()) throw new Error('Sign in to import a portfolio file.')
+  const res = await apiFetch('/portfolio/import/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rows),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to import portfolio file')
+  }
+  return res.json()
+}
+
 export async function deletePortfolioHolding(ticker: string): Promise<void> {
   if (isGuestMode()) { await guestPortfolio.deleteHolding(ticker); return }
   const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}`, { method: 'DELETE' })
@@ -383,13 +411,14 @@ export async function fetchIndices(): Promise<IndicesResponse> {
 }
 
 /**
- * Ticker/company-name autocomplete, scoped to `exchange` ("US" | "NSE" | "BSE").
- * Indian results come back with their .NS/.BO suffix already stripped — the
- * exchange picker in the UI is what applies it, not this list. Best-effort:
- * fails silently to an empty list rather than throwing, since it only
- * powers suggestions and shouldn't block manual ticker entry.
+ * Ticker/company-name autocomplete, scoped to `exchange` ("US" | "IN").
+ * Indian results come back with their .NS/.BO suffix already stripped —
+ * which exchange to actually use is resolved later, at add/buy time, not by
+ * this list. Best-effort: fails silently to an empty list rather than
+ * throwing, since it only powers suggestions and shouldn't block manual
+ * ticker entry.
  */
-export async function searchTickers(query: string, exchange: 'US' | 'NSE' | 'BSE'): Promise<TickerSuggestion[]> {
+export async function searchTickers(query: string, exchange: Exchange): Promise<TickerSuggestion[]> {
   if (!query.trim()) return []
   try {
     const res = await apiFetch(`/stocks/search?q=${encodeURIComponent(query)}&exchange=${exchange}`)

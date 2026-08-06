@@ -59,9 +59,9 @@ export function HomePage() {
           })}
         </svg>
 
-        <div className="relative flex flex-col items-center text-center px-6 pt-16 pb-14">
+        <div className="relative flex flex-col items-center text-center px-4 sm:px-6 pt-10 sm:pt-16 pb-10 sm:pb-14">
           <motion.div variants={fadeUp} initial="hidden" animate="show" custom={0}>
-            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-[11px] font-mono tracking-wide mb-6">
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-[0.6875rem] font-mono tracking-wide mb-6">
               <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
               Free · Open source · US + India
             </span>
@@ -69,21 +69,21 @@ export function HomePage() {
 
           <motion.h1
             variants={fadeUp} initial="hidden" animate="show" custom={1}
-            className="font-display text-5xl font-bold tracking-tight text-zinc-100 mb-3"
+            className="font-display text-4xl sm:text-5xl font-bold tracking-tight text-zinc-100 mb-3"
           >
             Stakeout
           </motion.h1>
 
           <motion.p
             variants={fadeUp} initial="hidden" animate="show" custom={2}
-            className="font-mono text-sm tracking-[0.25em] uppercase text-indigo-400 mb-5"
+            className="font-mono text-xs sm:text-sm tracking-[0.2em] sm:tracking-[0.25em] uppercase text-indigo-400 mb-5"
           >
             Open markets, open source
           </motion.p>
 
           <motion.p
             variants={fadeUp} initial="hidden" animate="show" custom={3}
-            className="text-zinc-400 text-lg leading-relaxed max-w-xl mb-8"
+            className="text-zinc-400 text-base sm:text-lg leading-relaxed max-w-xl mb-8"
           >
             Keep watch on your stakes across NYSE, NASDAQ, NSE and BSE — charts,
             portfolios, analyst views and headlines, with no subscription and no
@@ -115,7 +115,7 @@ export function HomePage() {
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-6 pb-16 space-y-10">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-12 sm:pb-16 space-y-8 sm:space-y-10">
         {/* ── Major indices: US + India ────────────────────────────────────── */}
         <IndexStrip />
 
@@ -140,7 +140,7 @@ export function HomePage() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-40px' }}
               transition={{ delay: i * 0.07, duration: 0.4 }}
-              className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3 hover:border-zinc-700 transition-colors"
+              className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 space-y-3 hover:border-zinc-700 transition-colors"
             >
               <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
                 <Icon size={18} className="text-indigo-400" />
@@ -152,7 +152,7 @@ export function HomePage() {
         </div>
 
         {/* ── Open source / feedback ───────────────────────────────────────── */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-4 flex items-center justify-between gap-6">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 sm:px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 lg:gap-6">
           <div className="flex items-start gap-3">
             <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 shrink-0 mt-0.5">
               <Github size={15} className="text-indigo-400" />
@@ -166,7 +166,7 @@ export function HomePage() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <a
               href="https://github.com/vdudhaiy/stakeout"
               target="_blank"
@@ -189,7 +189,7 @@ export function HomePage() {
         </div>
 
         {/* ── Disclaimer ───────────────────────────────────────────────────── */}
-        <div className="border border-amber-500/20 bg-amber-500/5 rounded-xl px-5 py-4 text-xs text-zinc-500 leading-relaxed space-y-1">
+        <div className="border border-amber-500/20 bg-amber-500/5 rounded-xl px-4 sm:px-5 py-4 text-xs text-zinc-500 leading-relaxed space-y-1">
           <p>
             <span className="text-amber-400 font-semibold">Not financial advice.</span>{' '}
             Stakeout is for informational and educational purposes only. Nothing shown here
