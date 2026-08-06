@@ -50,3 +50,4 @@ dist-ssr/
 *.tsbuildinfo
 npm-debug.log*
 yarn-error.log*
+.playwright-mcp
