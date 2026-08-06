@@ -376,17 +376,17 @@ async def test_preview_never_flags_invalid_rows_as_duplicate(db_session, _mock_y
 
 # ── apply_import (integration) ─────────────────────────────────────────────
 
-async def test_apply_import_uses_the_given_date_not_today(db_session, _mock_yfinance):
+async def test_apply_import_uses_the_given_date_not_today(db_session, _mock_yfinance, pid):
     rows = [ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-15",
                             action="buy", shares=10, price=Decimal("150.00"), include=True)]
     result = await import_service.apply_import(db_session, USER_ID, rows)
 
     assert result.imported_rows == 1
-    holding = await import_service.portfolio_service.get_stock_holding(db_session, USER_ID, "AAPL", price=Decimal("100"))
+    holding = await import_service.portfolio_service.get_stock_holding(db_session, pid, "AAPL", price=Decimal("100"))
     assert holding.trade_history[0].date == "2024-01-15"
 
 
-async def test_apply_import_skips_rows_with_include_false(db_session, _mock_yfinance):
+async def test_apply_import_skips_rows_with_include_false(db_session, _mock_yfinance, pid):
     rows = [
         ImportApplyRow(row=2, market="US", ticker="AAPL", date=TODAY,
                        action="buy", shares=10, price=Decimal("150.00"), include=True),
@@ -401,11 +401,11 @@ async def test_apply_import_skips_rows_with_include_false(db_session, _mock_yfin
     skipped = next(r for r in result.rows if r.row == 3)
     assert skipped.status == "skipped"
 
-    holding = await import_service.portfolio_service.get_stock_holding(db_session, USER_ID, "AAPL", price=Decimal("100"))
+    holding = await import_service.portfolio_service.get_stock_holding(db_session, pid, "AAPL", price=Decimal("100"))
     assert holding.shares == 10  # only the included row landed
 
 
-async def test_apply_import_buy_then_sell_same_ticker(db_session, _mock_yfinance):
+async def test_apply_import_buy_then_sell_same_ticker(db_session, _mock_yfinance, pid):
     rows = [
         ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-01",
                        action="buy", shares=100, price=Decimal("150.00"), include=True),
@@ -415,7 +415,7 @@ async def test_apply_import_buy_then_sell_same_ticker(db_session, _mock_yfinance
     result = await import_service.apply_import(db_session, USER_ID, rows)
 
     assert result.imported_rows == 2
-    holding = await import_service.portfolio_service.get_stock_holding(db_session, USER_ID, "AAPL", price=Decimal("100"))
+    holding = await import_service.portfolio_service.get_stock_holding(db_session, pid, "AAPL", price=Decimal("100"))
     assert holding.shares == 60
     assert holding.sold_shares == 40
 
@@ -471,3 +471,121 @@ async def test_preview_and_apply_work_with_no_header_row(db_session, _mock_yfina
         for r in preview.rows
     ])
     assert result.imported_rows == 2
+
+
+# ── portfolio column ─────────────────────────────────────────────────────────
+#
+# Unlike every other kind of row error, a bad portfolio name blocks the whole
+# import: a transaction that can't be filed in the portfolio the user named
+# must not be quietly filed somewhere else. See import_service's docstring.
+
+_HEADER_P = ["market", "stock", "date", "number", "buy/sell", "price", "portfolio"]
+
+
+async def _make_portfolio(session, market: str, name: str):
+    from services import portfolio_admin_service
+    return await portfolio_admin_service.create(session, USER_ID, market, name)
+
+
+async def test_no_portfolio_column_sends_everything_to_the_default(db_session, _mock_yfinance, pid):
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+
+    assert preview.blocking_errors == []
+    assert preview.rows[0].portfolio is None
+    assert preview.rows[0].portfolio_id == pid
+
+
+async def test_named_portfolio_routes_the_row_there(db_session, _mock_yfinance):
+    zerodha = await _make_portfolio(db_session, "US", "Zerodha")
+    content = _csv([_HEADER_P, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Zerodha"]])
+
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+    assert preview.blocking_errors == []
+    assert preview.rows[0].portfolio_id == zerodha.id
+
+    result = await import_service.apply_import(db_session, USER_ID, [
+        ImportApplyRow(row=r.row, market=r.market, ticker=r.ticker, date=r.date,
+                       action=r.action, shares=r.shares, price=r.price,
+                       portfolio=r.portfolio, include=True)
+        for r in preview.rows
+    ])
+    assert result.imported_rows == 1
+    holding = await import_service.portfolio_service.get_stock_holding(
+        db_session, zerodha.id, "AAPL", price=Decimal("100"),
+    )
+    assert holding.shares == 10
+
+
+async def test_portfolio_name_matching_ignores_case_and_padding(db_session, _mock_yfinance):
+    zerodha = await _make_portfolio(db_session, "US", "Zerodha")
+    content = _csv([_HEADER_P, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "  zERODHA "]])
+
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+    assert preview.blocking_errors == []
+    assert preview.rows[0].portfolio_id == zerodha.id
+
+
+async def test_unknown_portfolio_blocks_the_import(db_session, _mock_yfinance, pid):
+    content = _csv([
+        _HEADER_P,
+        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Nope"],
+        ["US", "MSFT", "2024-01-15", "5", "buy", "300.00", "Nope"],
+    ])
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+
+    assert [e.row for e in preview.blocking_errors] == [2, 3]
+    assert "No portfolio named 'Nope'" in preview.blocking_errors[0].message
+
+
+async def test_blank_portfolio_cell_among_named_rows_blocks_the_import(db_session, _mock_yfinance):
+    await _make_portfolio(db_session, "US", "Zerodha")
+    content = _csv([
+        _HEADER_P,
+        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Zerodha"],
+        ["US", "MSFT", "2024-01-15", "5", "buy", "300.00", ""],
+    ])
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+
+    assert [e.row for e in preview.blocking_errors] == [3]
+    assert "blank" in preview.blocking_errors[0].message
+
+
+async def test_portfolio_from_the_other_market_says_so(db_session, _mock_yfinance):
+    await _make_portfolio(db_session, "US", "Zerodha")
+    content = _csv([_HEADER_P, ["IND", "RELIANCE", "2024-01-15", "5", "buy", "2500.00", "Zerodha"]])
+
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+    assert len(preview.blocking_errors) == 1
+    assert "is a US portfolio" in preview.blocking_errors[0].message
+
+
+async def test_apply_rejects_a_portfolio_name_that_does_not_resolve(db_session, _mock_yfinance, pid):
+    """The client's echo is never trusted — apply re-resolves names itself."""
+    rows = [
+        ImportApplyRow(row=2, market="US", ticker="AAPL", date=TODAY, action="buy",
+                       shares=10, price=Decimal("150.00"), portfolio="Ghost", include=True),
+    ]
+    with pytest.raises(ValueError, match="No portfolio named 'Ghost'"):
+        await import_service.apply_import(db_session, USER_ID, rows)
+
+
+async def test_duplicate_detection_is_per_portfolio(db_session, _mock_yfinance, pid):
+    """The same transaction in a different portfolio is not a duplicate."""
+    zerodha = await _make_portfolio(db_session, "US", "Zerodha")
+    await import_service.apply_import(db_session, USER_ID, [
+        ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-15", action="buy",
+                       shares=10, price=Decimal("150.00"), include=True),
+    ])
+
+    content = _csv([
+        _HEADER_P,
+        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "main"],
+        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Zerodha"],
+    ])
+    preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
+
+    assert preview.blocking_errors == []
+    by_portfolio = {r.portfolio_id: r.duplicate for r in preview.rows}
+    assert by_portfolio[pid] is True          # already in main
+    assert by_portfolio[zerodha.id] is False  # a different portfolio entirely

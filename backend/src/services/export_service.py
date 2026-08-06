@@ -1,11 +1,16 @@
 """Excel export for the portfolio.
 
-The "Transaction History" sheet's first six columns — market, stock, date,
-number, buy/sell, price — are deliberately the exact columns import_service
-expects (see its module docstring), so this file doubles as a ready-made
-backup: re-uploading it through Import lands every transaction again.
-Company/Remaining/P&L are extra, informational-only trailing columns the
-importer ignores.
+Covers every portfolio in the exported market. The "Transaction History"
+sheet's market, stock, date, number, buy/sell, price and portfolio columns
+are deliberately the exact columns import_service expects (see its module
+docstring), so this file doubles as a ready-made backup: re-uploading it
+through Import lands every transaction back in the portfolio it came from.
+Company/Remaining/P&L are extra, informational-only columns the importer
+ignores.
+
+Sheet 1 leads with the combined figures across the market, followed by one
+summary block per portfolio when there is more than one — mirroring the
+combined bar and per-portfolio stats rows in the UI.
 """
 
 import io
@@ -13,16 +18,20 @@ from datetime import date as dt_date
 
 import xlsxwriter
 
-from schemas.portfolio import PortfolioResponse, StockHolding, StockPurchaseHistory
+from schemas.portfolio import PortfolioResponse, PortfolioStats, StockHolding, StockPurchaseHistory
 
 # ── Layout constants (0-indexed rows) ─────────────────────────────────────────
 _S1_TITLE_ROW   = 0
 _S1_SUM_HDR_ROW = 2
 _S1_FIRST_SUM   = 3   # Portfolio Value row
-_S1_TABLE_ROW   = 10  # Holdings table header row
+_S1_SUM_ROWS    = 6   # rows per summary block
+_S1_MIN_TABLE_ROW = 10  # holdings table header row when there's one summary block
 
 _S2_TITLE_ROW   = 0
 _S2_TABLE_ROW   = 2   # Transactions table header row
+
+_S1_LAST_COL = 11  # Dividends — 12 columns counting Portfolio
+_S2_LAST_COL = 9   # P&L — 10 columns counting Portfolio
 
 
 def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
@@ -77,41 +86,62 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     ws1.hide_gridlines(2)
     ws1.set_row(_S1_TITLE_ROW, 24)
 
-    ws1.set_column('A:A', 10)   # Ticker
-    ws1.set_column('B:B', 26)   # Company
-    ws1.set_column('C:C', 10)   # Shares
-    ws1.set_column('D:D', 13)   # Avg Cost
-    ws1.set_column('E:E', 14)   # Current Price
-    ws1.set_column('F:F', 15)   # Market Value
-    ws1.set_column('G:G', 15)   # Cost Basis
-    ws1.set_column('H:H', 15)   # Unrealized P&L
-    ws1.set_column('I:I', 12)   # % Gain/Loss
-    ws1.set_column('J:J', 15)   # Realized Gains
-    ws1.set_column('K:K', 14)   # Dividends
+    ws1.set_column('A:A', 16)   # Portfolio
+    ws1.set_column('B:B', 10)   # Ticker
+    ws1.set_column('C:C', 26)   # Company
+    ws1.set_column('D:D', 10)   # Shares
+    ws1.set_column('E:E', 13)   # Avg Cost
+    ws1.set_column('F:F', 14)   # Current Price
+    ws1.set_column('G:G', 15)   # Market Value
+    ws1.set_column('H:H', 15)   # Cost Basis
+    ws1.set_column('I:I', 15)   # Unrealized P&L
+    ws1.set_column('J:J', 12)   # % Gain/Loss
+    ws1.set_column('K:K', 15)   # Realized Gains
+    ws1.set_column('L:L', 14)   # Dividends
 
-    ws1.merge_range(0, 0, 0, 10, f'Portfolio Snapshot — {dt_date.today().isoformat()}', title_fmt)
-    ws1.write(_S1_SUM_HDR_ROW, 0, 'PORTFOLIO SUMMARY', section_fmt)
+    ws1.merge_range(0, 0, 0, _S1_LAST_COL, f'Portfolio Snapshot — {dt_date.today().isoformat()}', title_fmt)
 
-    summary_rows = [
-        ('Portfolio Value', portfolio.portfolio_value, False),
-        ('Total Invested',  portfolio.total_invested,  False),
-        ('Unrealized P&L',  portfolio.total_return,    True),
-        ('Realized Gains',  portfolio.realized_gains,  True),
-        ('Dividends',       portfolio.total_dividends, True),
-        ('Net P&L',         portfolio.net_profit_loss, True),
-    ]
-    for i, (lbl, val, signed) in enumerate(summary_rows):
-        row = _S1_FIRST_SUM + i
-        val = float(val)   # xlsxwriter doesn't accept Decimal cell values
-        ws1.write(row, 0, lbl, lbl_fmt)
-        ws1.write(row, 1, val, _sum_fmt(val) if signed else sum_neu)
+    def _write_summary(row: int, heading: str, stats) -> int:
+        """Writes one heading + six figures. Returns the next free row."""
+        ws1.write(row, 0, heading, section_fmt)
+        rows = [
+            ('Portfolio Value', stats.portfolio_value, False),
+            ('Total Invested',  stats.total_invested,  False),
+            ('Unrealized P&L',  stats.total_return,    True),
+            ('Realized Gains',  stats.realized_gains,  True),
+            ('Dividends',       stats.total_dividends, True),
+            ('Net P&L',         stats.net_profit_loss, True),
+        ]
+        for i, (lbl, val, signed) in enumerate(rows):
+            val = float(val)   # xlsxwriter doesn't accept Decimal cell values
+            ws1.write(row + 1 + i, 0, lbl, lbl_fmt)
+            ws1.write(row + 1 + i, 1, val, _sum_fmt(val) if signed else sum_neu)
+        return row + 1 + len(rows)
+
+    breakdown: list[PortfolioStats] = portfolio.portfolios
+    multiple = len(breakdown) > 1
+
+    row = _write_summary(
+        _S1_SUM_HDR_ROW,
+        'ALL PORTFOLIOS' if multiple else 'PORTFOLIO SUMMARY',
+        portfolio,
+    )
+    if multiple:
+        for stats in breakdown:
+            row += 1  # blank spacer between blocks
+            row = _write_summary(row, stats.name.upper(), stats)
+
+    # One blank row between the last summary and the table — the same gap a
+    # single-portfolio export has always had.
+    T1 = max(row + 1, _S1_MIN_TABLE_ROW)
 
     # Holdings table
+    names = {p.id: p.name for p in breakdown}
     holdings = portfolio.holdings
     n = len(holdings)
-    T1 = _S1_TABLE_ROW
 
     h_cols = [
+        {'header': 'Portfolio'},
         {'header': 'Ticker'},
         {'header': 'Company'},
         {'header': 'Shares',         'format': int_fmt},
@@ -134,20 +164,21 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
         # reporting a fabricated $0 market value / -100% loss.
         priced = h.current_price is not None
         data1.append([
+            names.get(h.portfolio_id, ''),
             h.ticker,
             h.company_name,
             h.shares,
             float(h.average_cost),
             float(h.current_price) if priced else 'N/A',
-            f'=C{xl}*E{xl}' if priced else 'N/A',              # Market Value
+            f'=D{xl}*F{xl}' if priced else 'N/A',              # Market Value
             float(h.total_invested),                             # Cost Basis (FIFO, snapshot)
-            f'=F{xl}-G{xl}' if priced else 'N/A',               # Unrealized P&L
-            f'=IF(G{xl}>0,(F{xl}-G{xl})/G{xl},0)' if priced else 'N/A',  # % Gain/Loss
+            f'=G{xl}-H{xl}' if priced else 'N/A',               # Unrealized P&L
+            f'=IF(H{xl}>0,(G{xl}-H{xl})/H{xl},0)' if priced else 'N/A',  # % Gain/Loss
             float(h.total_earned),                               # Realized Gains
             float(h.total_dividends),                            # Dividends
         ])
 
-    ws1.add_table(T1, 0, T1 + n, 10, {
+    ws1.add_table(T1, 0, T1 + n, _S1_LAST_COL, {
         'name': 'Holdings',
         'style': 'Table Style Medium 2',
         'columns': h_cols,
@@ -155,14 +186,14 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     })
 
     if n > 0:
-        for col_idx in (7, 9):    # Unrealized P&L, Realized Gains
+        for col_idx in (8, 10):    # Unrealized P&L, Realized Gains
             ws1.conditional_format(T1 + 1, col_idx, T1 + n, col_idx,
                 {'type': 'cell', 'criteria': '>', 'value': 0, 'format': cf_pos})
             ws1.conditional_format(T1 + 1, col_idx, T1 + n, col_idx,
                 {'type': 'cell', 'criteria': '<', 'value': 0, 'format': cf_neg})
-        ws1.conditional_format(T1 + 1, 8, T1 + n, 8,   # % Gain/Loss
+        ws1.conditional_format(T1 + 1, 9, T1 + n, 9,   # % Gain/Loss
             {'type': 'cell', 'criteria': '>', 'value': 0, 'format': cf_pos})
-        ws1.conditional_format(T1 + 1, 8, T1 + n, 8,
+        ws1.conditional_format(T1 + 1, 9, T1 + n, 9,
             {'type': 'cell', 'criteria': '<', 'value': 0, 'format': cf_neg})
 
     ws1.freeze_panes(T1 + 1, 0)
@@ -173,22 +204,26 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     ws2.hide_gridlines(2)
     ws2.set_row(_S2_TITLE_ROW, 24)
 
-    ws2.set_column('A:A', 9)    # Market
-    ws2.set_column('B:B', 10)   # Stock
-    ws2.set_column('C:C', 13)   # Date
-    ws2.set_column('D:D', 10)   # Number
-    ws2.set_column('E:E', 9)    # Buy/Sell
-    ws2.set_column('F:F', 13)   # Price
-    ws2.set_column('G:G', 26)   # Company
-    ws2.set_column('H:H', 13)   # Remaining
-    ws2.set_column('I:I', 15)   # P&L
+    ws2.set_column('A:A', 16)   # Portfolio
+    ws2.set_column('B:B', 9)    # Market
+    ws2.set_column('C:C', 10)   # Stock
+    ws2.set_column('D:D', 13)   # Date
+    ws2.set_column('E:E', 10)   # Number
+    ws2.set_column('F:F', 9)    # Buy/Sell
+    ws2.set_column('G:G', 13)   # Price
+    ws2.set_column('H:H', 26)   # Company
+    ws2.set_column('I:I', 13)   # Remaining
+    ws2.set_column('J:J', 15)   # P&L
 
-    ws2.merge_range(0, 0, 0, 8, f'Transaction History — {dt_date.today().isoformat()}', title_fmt)
+    ws2.merge_range(0, 0, 0, _S2_LAST_COL, f'Transaction History — {dt_date.today().isoformat()}', title_fmt)
 
     # Header text matches import_service's recognized column aliases exactly
-    # (Market/Stock/Date/Number/Buy-Sell/Price) — Company/Remaining/P&L don't,
-    # so a re-import just ignores those three as harmless extras.
+    # (Portfolio/Market/Stock/Date/Number/Buy-Sell/Price) — Company/Remaining/
+    # P&L don't, so a re-import just ignores those three as harmless extras.
+    # The importer matches by header name, not position, so Portfolio leading
+    # the table doesn't affect round-tripping.
     t_cols = [
+        {'header': 'Portfolio'},
         {'header': 'Market'},
         {'header': 'Stock'},
         {'header': 'Date'},
@@ -216,6 +251,7 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
         price = txn.sold_at if txn.sale else txn.bought_at
         pnl = (txn.sold_at - txn.bought_at) * txn.shares if txn.sale else None
         data2.append([
+            names.get(holding.portfolio_id, ''),
             holding.market,
             stock,
             txn.date,
@@ -228,7 +264,7 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
         ])
 
     nt = len(data2)
-    ws2.add_table(T2, 0, T2 + nt, 8, {
+    ws2.add_table(T2, 0, T2 + nt, _S2_LAST_COL, {
         'name': 'Transactions',
         'style': 'Table Style Medium 2',
         'columns': t_cols,
@@ -236,13 +272,13 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     })
 
     if nt > 0:
-        ws2.conditional_format(T2 + 1, 4, T2 + nt, 4,   # Buy/Sell
+        ws2.conditional_format(T2 + 1, 5, T2 + nt, 5,   # Buy/Sell
             {'type': 'text', 'criteria': 'containing', 'value': 'BUY', 'format': cf_buy})
-        ws2.conditional_format(T2 + 1, 4, T2 + nt, 4,
+        ws2.conditional_format(T2 + 1, 5, T2 + nt, 5,
             {'type': 'text', 'criteria': 'containing', 'value': 'SELL', 'format': cf_sell})
-        ws2.conditional_format(T2 + 1, 8, T2 + nt, 8,   # P&L
+        ws2.conditional_format(T2 + 1, 9, T2 + nt, 9,   # P&L
             {'type': 'cell', 'criteria': '>', 'value': 0, 'format': cf_pos})
-        ws2.conditional_format(T2 + 1, 8, T2 + nt, 8,
+        ws2.conditional_format(T2 + 1, 9, T2 + nt, 9,
             {'type': 'cell', 'criteria': '<', 'value': 0, 'format': cf_neg})
 
     ws2.freeze_panes(T2 + 1, 0)

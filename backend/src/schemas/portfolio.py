@@ -56,11 +56,27 @@ class ImportPreviewRow(BaseModel):
     error: str | None = None
     duplicate: bool = False             # True if this exactly matches another transaction
     duplicate_reason: str | None = None  # e.g. "Matches an existing transaction..." or "Duplicate of row 4 in this file"
+    portfolio: str | None = None        # portfolio name as written in the file, if the column was present
+    portfolio_id: int | None = None     # resolved portfolio; None if the name didn't resolve
+
+
+class ImportBlockingError(BaseModel):
+    """A problem that stops the whole import rather than skipping one row.
+
+    Used for portfolio-column errors: a row naming a portfolio that doesn't
+    exist can't be silently redirected somewhere else without misfiling the
+    user's money, so the import refuses to run and the user fixes the file.
+    """
+    row: int         # 0 for a file-level problem that isn't tied to one row
+    message: str
 
 
 class ImportPreviewResult(BaseModel):
     total_rows: int                    # data rows found in the file (excludes the header)
     rows: list[ImportPreviewRow]        # one entry per data row, in file order
+    # Non-empty means nothing may be imported until the file is corrected —
+    # the frontend must not call /import/apply, and apply re-checks anyway.
+    blocking_errors: list[ImportBlockingError] = []
 
 
 class ImportApplyRow(BaseModel):
@@ -74,6 +90,11 @@ class ImportApplyRow(BaseModel):
     shares: int
     price: Decimal
     include: bool = True                # False = user chose to skip this one (usually a duplicate)
+    # Portfolio name from the file, re-resolved server-side on apply. The
+    # client never sends an id: a forged one would write into whatever
+    # portfolio it names, so apply resolves names against the caller's own
+    # portfolios and rejects the request if any fail.
+    portfolio: str | None = None
 
 
 class ImportRowResult(BaseModel):
@@ -109,6 +130,7 @@ class StockPurchaseHistory(BaseModel):
 
 class StockHolding(BaseModel):
     ticker: str
+    portfolio_id: int = 0                # which portfolio holds it; 0 in guest mode
     market: str = "US"                   # "US" | "IN" — exchange the asset trades on
     currency: str = "USD"                # native currency of all monetary fields below
     company_name: str = ""               # display name; empty string if lookup failed
@@ -154,6 +176,36 @@ class AuditEntrySummary(BaseModel):
     undone: bool
 
 
+class PortfolioMeta(BaseModel):
+    """A portfolio itself, without any position data — powers the tab bar."""
+
+    id: int
+    name: str
+    market: str          # "US" | "IN"
+    created_at: str      # ISO-8601 UTC timestamp
+
+
+class PortfolioStats(BaseModel):
+    """One portfolio's headline figures, in the same units as PortfolioResponse.
+
+    Returned alongside the market-wide totals so the frontend can render both
+    the per-portfolio stats row and the combined bar from a single fetch.
+    """
+
+    id: int
+    name: str
+    market: str = "US"
+    currency: str = "USD"
+    portfolio_value: Money
+    realized_gains: Money
+    total_shares: int
+    total_invested: Money
+    total_return: Money
+    return_percentage: Money
+    total_dividends: Money = Decimal(0)
+    net_profit_loss: Money
+
+
 class PortfolioResponse(BaseModel):
     market: str | None = None   # market filter applied ("US"/"IN"), or None for all
     currency: str = "USD"       # native currency of the aggregate figures below
@@ -170,3 +222,9 @@ class PortfolioResponse(BaseModel):
     total_dividends: Money = Decimal(0)  # cash dividend income across all holdings
     net_profit_loss: Money    # total_return + realized_gains + total_dividends
     holdings: list[StockHolding] # list of all holdings with detailed info
+    # Per-portfolio breakdown of the same figures, in tab order. The fields
+    # above are the combined totals across every entry here, so a client that
+    # predates multiple portfolios still reads exactly what it always did.
+    # Holdings are not nested — each StockHolding above carries its
+    # portfolio_id, so the frontend filters the flat list per tab.
+    portfolios: list[PortfolioStats] = []

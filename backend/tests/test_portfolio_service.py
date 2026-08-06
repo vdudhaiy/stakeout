@@ -24,9 +24,23 @@ from yfinance.exceptions import YFRateLimitError
 from cache import quote_cache
 from models.portfolio import Holding, Transaction, WatchlistEntry
 from schemas.portfolio import BulkPurchaseLot, BulkSaleLot
-from services import portfolio_service
+from services import portfolio_admin_service, portfolio_service
 
 USER_ID = "test-user"
+
+
+async def add_holding(session, ticker: str, market: str = "US", **fields) -> Holding:
+    """A Holding in the user's default portfolio for `market`.
+
+    Tests that build rows by hand still need a portfolio to hang them off —
+    this is the direct-construction equivalent of what a buy would do.
+    """
+    portfolio = await portfolio_admin_service.ensure_default(session, USER_ID, market)
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=portfolio.id, ticker=ticker, market=market, **fields,
+    )
+    session.add(holding)
+    return holding
 
 
 @pytest.fixture(autouse=True)
@@ -115,10 +129,10 @@ async def test_current_price_cache_is_scoped_per_ticker():
 # ── shared fixture: one AAPL holding with 100 shares @ $150 ──────────────────
 
 @pytest_asyncio.fixture
-async def aapl_session(db_session):
+async def aapl_session(db_session, pid):
     """db_session pre-loaded with AAPL: 100 shares bought at $150 on 2024-01-01."""
     holding = Holding(
-        user_id=USER_ID, ticker="AAPL", company_name="Apple Inc.",
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", company_name="Apple Inc.",
         shares=0, sold_shares=0, average_cost=Decimal(0),
     )
     db_session.add(holding)
@@ -136,14 +150,14 @@ async def aapl_session(db_session):
 
 # ── add_stock_purchase ────────────────────────────────────────────────────────
 
-async def test_add_purchase_creates_new_holding(db_session):
+async def test_add_purchase_creates_new_holding(db_session, pid):
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
         with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
                 result = await portfolio_service.add_stock_purchase(
-                    db_session, USER_ID, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
+                    db_session, USER_ID, pid, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
                 )
 
     assert result.ticker == "AAPL"
@@ -153,11 +167,11 @@ async def test_add_purchase_creates_new_holding(db_session):
     assert float(result.current_price) == pytest.approx(175.0)
 
 
-async def test_add_purchase_to_existing_holding(aapl_session):
+async def test_add_purchase_to_existing_holding(aapl_session, pid):
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("175.0")):
         result = await portfolio_service.add_stock_purchase(
-            aapl_session, USER_ID, "AAPL", shares=50, bought_at=Decimal("160.0"), date="2024-02-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=50, bought_at=Decimal("160.0"), date="2024-02-01"
         )
 
     assert result.shares == 150
@@ -165,16 +179,16 @@ async def test_add_purchase_to_existing_holding(aapl_session):
     assert float(result.average_cost) == pytest.approx(expected_avg, rel=1e-3)
 
 
-async def test_add_purchase_future_date_raises(db_session):
+async def test_add_purchase_future_date_raises(db_session, pid):
     import datetime
     future = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
     with pytest.raises(ValueError, match="future"):
-        await portfolio_service.add_stock_purchase(db_session, USER_ID, "AAPL", 10, Decimal("100.0"), date=future)
+        await portfolio_service.add_stock_purchase(db_session, USER_ID, pid, "AAPL", 10, Decimal("100.0"), date=future)
 
 
 # ── add_stock_purchases_bulk ──────────────────────────────────────────────────
 
-async def test_bulk_purchase_creates_new_holding_with_multiple_lots(db_session):
+async def test_bulk_purchase_creates_new_holding_with_multiple_lots(db_session, pid):
     lots = [
         BulkPurchaseLot(shares=100, bought_at=Decimal("150.0"), date="2024-01-01"),
         BulkPurchaseLot(shares=50, bought_at=Decimal("160.0"), date="2024-02-01"),
@@ -185,7 +199,7 @@ async def test_bulk_purchase_creates_new_holding_with_multiple_lots(db_session):
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
                 result = await portfolio_service.add_stock_purchases_bulk(
-                    db_session, USER_ID, "AAPL", lots,
+                    db_session, USER_ID, pid, "AAPL", lots,
                 )
 
     assert result.ticker == "AAPL"
@@ -195,7 +209,7 @@ async def test_bulk_purchase_creates_new_holding_with_multiple_lots(db_session):
     assert float(result.average_cost) == pytest.approx(expected_avg, rel=1e-3)
 
 
-async def test_bulk_purchase_to_existing_holding(aapl_session):
+async def test_bulk_purchase_to_existing_holding(aapl_session, pid):
     lots = [
         BulkPurchaseLot(shares=25, bought_at=Decimal("140.0"), date="2023-12-01"),
         BulkPurchaseLot(shares=25, bought_at=Decimal("160.0"), date="2024-02-01"),
@@ -203,19 +217,19 @@ async def test_bulk_purchase_to_existing_holding(aapl_session):
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("175.0")):
         result = await portfolio_service.add_stock_purchases_bulk(
-            aapl_session, USER_ID, "AAPL", lots,
+            aapl_session, USER_ID, pid, "AAPL", lots,
         )
 
     assert result.shares == 150
     assert len(result.trade_history) == 3
 
 
-async def test_bulk_purchase_empty_list_raises(db_session):
+async def test_bulk_purchase_empty_list_raises(db_session, pid):
     with pytest.raises(ValueError, match="At least one purchase"):
-        await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, "AAPL", [])
+        await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, pid, "AAPL", [])
 
 
-async def test_bulk_purchase_bad_date_rolls_back_entire_batch(db_session):
+async def test_bulk_purchase_bad_date_rolls_back_entire_batch(db_session, pid):
     import datetime
     future = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
     lots = [
@@ -225,7 +239,7 @@ async def test_bulk_purchase_bad_date_rolls_back_entire_batch(db_session):
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
         with pytest.raises(ValueError, match="future"):
-            await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, "AAPL", lots)
+            await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, pid, "AAPL", lots)
 
     # Nothing from the batch should have been committed — not even the first,
     # valid-looking lot, and not the holding itself.
@@ -233,7 +247,7 @@ async def test_bulk_purchase_bad_date_rolls_back_entire_batch(db_session):
     assert result.scalar_one_or_none() is None
 
 
-async def test_bulk_purchase_logs_one_audit_entry_per_lot(db_session):
+async def test_bulk_purchase_logs_one_audit_entry_per_lot(db_session, pid):
     from models.portfolio import AuditEntry
     lots = [
         BulkPurchaseLot(shares=10, bought_at=Decimal("100.0"), date="2024-01-01"),
@@ -245,7 +259,7 @@ async def test_bulk_purchase_logs_one_audit_entry_per_lot(db_session):
         with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
-                await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, "AAPL", lots)
+                await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, pid, "AAPL", lots)
 
     result = await db_session.execute(select(AuditEntry).where(AuditEntry.user_id == USER_ID))
     assert len(result.scalars().all()) == 3
@@ -311,11 +325,10 @@ async def test_resolve_ticker_reuses_existing_bse_holding_without_probing(db_ses
     """A user who already holds a ticker under BSE (e.g. from before this
     feature, or from an earlier BSE-only fallback) shouldn't get a second,
     duplicate NSE holding just because they bought more without a picker."""
-    holding = Holding(
-        user_id=USER_ID, ticker="RELIANCE.BO", company_name="Reliance Industries",
+    await add_holding(
+        db_session, "RELIANCE.BO", market="IN", company_name="Reliance Industries",
         shares=0, sold_shares=0, average_cost=Decimal(0),
     )
-    db_session.add(holding)
     await db_session.commit()
 
     with patch("services.portfolio_service._validate_and_fetch_name",
@@ -325,7 +338,7 @@ async def test_resolve_ticker_reuses_existing_bse_holding_without_probing(db_ses
     mock_validate.assert_not_called()
 
 
-async def test_add_purchase_falls_back_to_bse_for_bse_only_ticker(db_session):
+async def test_add_purchase_falls_back_to_bse_for_bse_only_ticker(db_session, pid):
     """End-to-end through add_stock_purchase: exchange='IN', NSE doesn't
     recognize the symbol, BSE does — the holding lands on the BSE ticker."""
     async def fake_validate(ticker):
@@ -339,7 +352,7 @@ async def test_add_purchase_falls_back_to_bse_for_bse_only_ticker(db_session):
                    new_callable=AsyncMock, return_value=Decimal("500.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
                 result = await portfolio_service.add_stock_purchase(
-                    db_session, USER_ID, "TMCV", shares=10, bought_at=Decimal("480.0"),
+                    db_session, USER_ID, pid, "TMCV", shares=10, bought_at=Decimal("480.0"),
                     date="2024-01-01", exchange="IN",
                 )
 
@@ -349,69 +362,69 @@ async def test_add_purchase_falls_back_to_bse_for_bse_only_ticker(db_session):
 
 # ── sell_stock_shares ─────────────────────────────────────────────────────────
 
-async def test_sell_reduces_shares(aapl_session):
+async def test_sell_reduces_shares(aapl_session, pid):
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         result = await portfolio_service.sell_stock_shares(
-            aapl_session, USER_ID, "AAPL", shares=40, sold_at=Decimal("200.0"), date="2024-02-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=40, sold_at=Decimal("200.0"), date="2024-02-01"
         )
 
     assert result.shares == 60
     assert result.sold_shares == 40
 
 
-async def test_sell_exceeds_available_raises(aapl_session):
+async def test_sell_exceeds_available_raises(aapl_session, pid):
     with pytest.raises(ValueError, match="cannot sell"):
         await portfolio_service.sell_stock_shares(
-            aapl_session, USER_ID, "AAPL", shares=999, sold_at=Decimal("200.0"), date="2024-02-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=999, sold_at=Decimal("200.0"), date="2024-02-01"
         )
 
 
-async def test_sell_before_earliest_buy_raises(aapl_session):
+async def test_sell_before_earliest_buy_raises(aapl_session, pid):
     with pytest.raises(ValueError, match="before the earliest purchase"):
         await portfolio_service.sell_stock_shares(
-            aapl_session, USER_ID, "AAPL", shares=10, sold_at=Decimal("200.0"), date="2023-12-31"
+            aapl_session, USER_ID, pid, "AAPL", shares=10, sold_at=Decimal("200.0"), date="2023-12-31"
         )
 
 
-async def test_sell_unknown_ticker_raises(db_session):
+async def test_sell_unknown_ticker_raises(db_session, pid):
     with pytest.raises(ValueError, match="No holding"):
         await portfolio_service.sell_stock_shares(
-            db_session, USER_ID, "NOTEXIST", shares=10, sold_at=Decimal("100.0")
+            db_session, USER_ID, pid, "NOTEXIST", shares=10, sold_at=Decimal("100.0")
         )
 
 
 # ── sell_stock_shares_bulk ────────────────────────────────────────────────────
 
-async def test_bulk_sell_reduces_shares_across_multiple_lots(aapl_session):
+async def test_bulk_sell_reduces_shares_across_multiple_lots(aapl_session, pid):
     lots = [
         BulkSaleLot(shares=20, sold_at=Decimal("200.0"), date="2024-02-01"),
         BulkSaleLot(shares=10, sold_at=Decimal("210.0"), date="2024-03-01"),
     ]
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("220.0")):
-        result = await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", lots)
+        result = await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, pid, "AAPL", lots)
 
     assert result.shares == 70
     assert result.sold_shares == 30
 
 
-async def test_bulk_sell_exceeds_available_raises(aapl_session):
+async def test_bulk_sell_exceeds_available_raises(aapl_session, pid):
     lots = [
         BulkSaleLot(shares=60, sold_at=Decimal("200.0"), date="2024-02-01"),
         BulkSaleLot(shares=60, sold_at=Decimal("200.0"), date="2024-03-01"),
     ]
     with pytest.raises(ValueError, match="cannot sell"):
-        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", lots)
+        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, pid, "AAPL", lots)
 
 
-async def test_bulk_sell_before_earliest_buy_rolls_back_entire_batch(aapl_session):
+async def test_bulk_sell_before_earliest_buy_rolls_back_entire_batch(aapl_session, pid):
     lots = [
         BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2024-02-01"),
         BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2023-12-31"),
     ]
     with pytest.raises(ValueError, match="before the earliest purchase"):
-        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", lots)
+        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, pid, "AAPL", lots)
 
     # Nothing from the batch should have landed — not even the first, valid-looking lot.
     holding = (await aapl_session.execute(
@@ -421,50 +434,49 @@ async def test_bulk_sell_before_earliest_buy_rolls_back_entire_batch(aapl_sessio
     assert len(txns) == 1  # only the original aapl_session buy
 
 
-async def test_bulk_sell_unknown_ticker_raises(db_session):
+async def test_bulk_sell_unknown_ticker_raises(db_session, pid):
     with pytest.raises(ValueError, match="No holding"):
         await portfolio_service.sell_stock_shares_bulk(
-            db_session, USER_ID, "NOTEXIST", [BulkSaleLot(shares=10, sold_at=Decimal("100.0"))]
+            db_session, USER_ID, pid, "NOTEXIST", [BulkSaleLot(shares=10, sold_at=Decimal("100.0"))]
         )
 
 
-async def test_bulk_sell_empty_list_raises(aapl_session):
+async def test_bulk_sell_empty_list_raises(aapl_session, pid):
     with pytest.raises(ValueError, match="At least one sale"):
-        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, "AAPL", [])
+        await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, pid, "AAPL", [])
 
 
 # ── get_stock_holding ─────────────────────────────────────────────────────────
 
-async def test_get_holding_returns_correct_data(aapl_session):
-    result = await portfolio_service.get_stock_holding(aapl_session, USER_ID, "AAPL", price=Decimal("175.0"))
+async def test_get_holding_returns_correct_data(aapl_session, pid):
+    result = await portfolio_service.get_stock_holding(aapl_session, pid, "AAPL", price=Decimal("175.0"))
     assert result.ticker == "AAPL"
     assert result.shares == 100
     assert float(result.current_price) == 175.0
     assert float(result.stock_value) == pytest.approx(17500.0)
 
 
-async def test_get_holding_not_found_raises(db_session):
+async def test_get_holding_not_found_raises(db_session, pid):
     with pytest.raises(ValueError, match="No holding"):
-        await portfolio_service.get_stock_holding(db_session, USER_ID, "NOTEXIST", price=Decimal("100.0"))
+        await portfolio_service.get_stock_holding(db_session, pid, "NOTEXIST", price=Decimal("100.0"))
 
 
 # ── delete_transaction ────────────────────────────────────────────────────────
 
-async def test_delete_last_transaction_removes_holding(aapl_session):
+async def test_delete_last_transaction_removes_holding(aapl_session, pid):
     result_row = await aapl_session.execute(
         select(Transaction).where(Transaction.sale == False)  # noqa: E712
     )
     txn = result_row.scalar_one()
 
-    ret = await portfolio_service.delete_transaction(aapl_session, USER_ID, "AAPL", txn.id)
+    ret = await portfolio_service.delete_transaction(aapl_session, USER_ID, pid, "AAPL", txn.id)
 
     assert ret is None  # holding was also deleted
 
 
-async def test_delete_one_of_two_transactions_rereplays_fifo(db_session):
+async def test_delete_one_of_two_transactions_rereplays_fifo(db_session, pid):
     """After deleting a buy transaction, FIFO is re-replayed on remaining transactions."""
-    holding = Holding(user_id=USER_ID, ticker="TSLA", company_name="Tesla", shares=0, sold_shares=0, average_cost=Decimal(0))
-    db_session.add(holding)
+    holding = await add_holding(db_session, "TSLA", company_name="Tesla", shares=0, sold_shares=0, average_cost=Decimal(0))
     await db_session.flush()
 
     b1 = Transaction(holding_id=holding.id, sale=False, date="2024-01-01",
@@ -481,28 +493,28 @@ async def test_delete_one_of_two_transactions_rereplays_fifo(db_session):
 
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("300.0")):
-        result = await portfolio_service.delete_transaction(db_session, USER_ID, "TSLA", b1.id)
+        result = await portfolio_service.delete_transaction(db_session, USER_ID, pid, "TSLA", b1.id)
 
     # Only b2 remains: 50 shares @ $250
     assert result.shares == 50
     assert float(result.average_cost) == pytest.approx(250.0)
 
 
-async def test_delete_nonexistent_transaction_raises(aapl_session):
+async def test_delete_nonexistent_transaction_raises(aapl_session, pid):
     with pytest.raises(ValueError, match="not found"):
-        await portfolio_service.delete_transaction(aapl_session, USER_ID, "AAPL", 999999)
+        await portfolio_service.delete_transaction(aapl_session, USER_ID, pid, "AAPL", 999999)
 
 
 # ── delete_stock_holding ──────────────────────────────────────────────────────
 
-async def test_delete_holding_removes_it(aapl_session):
-    result = await portfolio_service.delete_stock_holding(aapl_session, USER_ID, "AAPL")
+async def test_delete_holding_removes_it(aapl_session, pid):
+    result = await portfolio_service.delete_stock_holding(aapl_session, USER_ID, pid, "AAPL")
     assert "deleted" in result["message"].lower()
 
 
-async def test_delete_holding_not_found_raises(db_session):
+async def test_delete_holding_not_found_raises(db_session, pid):
     with pytest.raises(ValueError, match="No holding"):
-        await portfolio_service.delete_stock_holding(db_session, USER_ID, "NOTEXIST")
+        await portfolio_service.delete_stock_holding(db_session, USER_ID, pid, "NOTEXIST")
 
 
 # ── get_portfolio ─────────────────────────────────────────────────────────────
@@ -546,22 +558,22 @@ async def test_get_portfolio_excludes_holding_with_unavailable_price(aapl_sessio
 
 # ── get_position_as_of / get_portfolio_as_of ──────────────────────────────────
 
-async def test_get_position_as_of_before_purchase_is_empty(aapl_session):
-    pos = await portfolio_service.get_position_as_of(aapl_session, USER_ID, "AAPL", "2023-12-31")
+async def test_get_position_as_of_before_purchase_is_empty(aapl_session, pid):
+    pos = await portfolio_service.get_position_as_of(aapl_session, pid, "AAPL", "2023-12-31")
     assert pos.shares == 0
     assert pos.sold_shares == 0
 
 
-async def test_get_position_as_of_after_purchase_reflects_holding(aapl_session):
-    pos = await portfolio_service.get_position_as_of(aapl_session, USER_ID, "AAPL", "2024-01-01")
+async def test_get_position_as_of_after_purchase_reflects_holding(aapl_session, pid):
+    pos = await portfolio_service.get_position_as_of(aapl_session, pid, "AAPL", "2024-01-01")
     assert pos.shares == 100
     assert float(pos.average_cost) == pytest.approx(150.0)
     assert float(pos.cost_basis) == pytest.approx(100 * 150.0)
 
 
-async def test_get_position_as_of_unknown_ticker_raises(db_session):
+async def test_get_position_as_of_unknown_ticker_raises(db_session, pid):
     with pytest.raises(ValueError):
-        await portfolio_service.get_position_as_of(db_session, USER_ID, "MSFT", "2024-01-01")
+        await portfolio_service.get_position_as_of(db_session, pid, "MSFT", "2024-01-01")
 
 
 async def test_get_portfolio_as_of_omits_holdings_not_yet_bought(aapl_session):
@@ -587,14 +599,14 @@ async def test_get_portfolio_as_of_does_not_persist_changes(aapl_session):
 
 # ── audit log / undo ──────────────────────────────────────────────────────────
 
-async def test_buy_logs_an_insert_audit_entry(db_session):
+async def test_buy_logs_an_insert_audit_entry(db_session, pid):
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
         with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
                 await portfolio_service.add_stock_purchase(
-                    db_session, USER_ID, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
+                    db_session, USER_ID, pid, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
                 )
 
     entries = await portfolio_service.list_audit_log(db_session, USER_ID)
@@ -604,65 +616,65 @@ async def test_buy_logs_an_insert_audit_entry(db_session):
     assert entries[0].undone is False
 
 
-async def test_undo_last_buy_reverts_to_prior_state(aapl_session):
+async def test_undo_last_buy_reverts_to_prior_state(aapl_session, pid):
     """aapl_session already has 100 shares seeded outside the audit log; buying
     more and undoing it should land exactly back on that pre-existing state."""
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         await portfolio_service.add_stock_purchase(
-            aapl_session, USER_ID, "AAPL", shares=50, bought_at=Decimal("160.0"), date="2024-02-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=50, bought_at=Decimal("160.0"), date="2024-02-01"
         )
 
     result = await portfolio_service.undo_last_action(aapl_session, USER_ID)
     assert result.ticker == "AAPL"
     assert result.action == "insert"
 
-    holding = await portfolio_service.get_stock_holding(aapl_session, USER_ID, "AAPL", price=Decimal("200.0"))
+    holding = await portfolio_service.get_stock_holding(aapl_session, pid, "AAPL", price=Decimal("200.0"))
     assert holding.shares == 100
     assert float(holding.average_cost) == pytest.approx(150.0)
 
 
-async def test_undo_last_buy_that_created_the_holding_removes_it(db_session):
+async def test_undo_last_buy_that_created_the_holding_removes_it(db_session, pid):
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value="Apple Inc."):
         with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("175.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
                 await portfolio_service.add_stock_purchase(
-                    db_session, USER_ID, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
+                    db_session, USER_ID, pid, "AAPL", shares=100, bought_at=Decimal("150.0"), date="2024-01-01"
                 )
 
     await portfolio_service.undo_last_action(db_session, USER_ID)
 
     with pytest.raises(ValueError, match="No holding"):
-        await portfolio_service.get_stock_holding(db_session, USER_ID, "AAPL", price=Decimal("175.0"))
+        await portfolio_service.get_stock_holding(db_session, pid, "AAPL", price=Decimal("175.0"))
 
 
-async def test_undo_delete_of_last_transaction_restores_holding(aapl_session):
+async def test_undo_delete_of_last_transaction_restores_holding(aapl_session, pid):
     result_row = await aapl_session.execute(select(Transaction).where(Transaction.sale == False))  # noqa: E712
     txn = result_row.scalar_one()
-    await portfolio_service.delete_transaction(aapl_session, USER_ID, "AAPL", txn.id)
+    await portfolio_service.delete_transaction(aapl_session, USER_ID, pid, "AAPL", txn.id)
 
     result = await portfolio_service.undo_last_action(aapl_session, USER_ID)
     assert result.action == "delete"
 
-    holding = await portfolio_service.get_stock_holding(aapl_session, USER_ID, "AAPL", price=Decimal("175.0"))
+    holding = await portfolio_service.get_stock_holding(aapl_session, pid, "AAPL", price=Decimal("175.0"))
     assert holding.shares == 100
     assert float(holding.average_cost) == pytest.approx(150.0)
     assert holding.company_name == "Apple Inc."
 
 
-async def test_undo_delete_holding_restores_holding_and_transactions(aapl_session):
+async def test_undo_delete_holding_restores_holding_and_transactions(aapl_session, pid):
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         await portfolio_service.sell_stock_shares(
-            aapl_session, USER_ID, "AAPL", shares=40, sold_at=Decimal("200.0"), date="2024-02-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=40, sold_at=Decimal("200.0"), date="2024-02-01"
         )
 
-    await portfolio_service.delete_stock_holding(aapl_session, USER_ID, "AAPL")
+    await portfolio_service.delete_stock_holding(aapl_session, USER_ID, pid, "AAPL")
     await portfolio_service.undo_last_action(aapl_session, USER_ID)
 
-    holding = await portfolio_service.get_stock_holding(aapl_session, USER_ID, "AAPL", price=Decimal("200.0"))
+    holding = await portfolio_service.get_stock_holding(aapl_session, pid, "AAPL", price=Decimal("200.0"))
     assert holding.shares == 60
     assert holding.sold_shares == 40
     assert holding.company_name == "Apple Inc."
@@ -673,15 +685,15 @@ async def test_undo_with_nothing_to_undo_raises(db_session):
         await portfolio_service.undo_last_action(db_session, USER_ID)
 
 
-async def test_undo_is_lifo_and_marks_entries_undone(aapl_session):
+async def test_undo_is_lifo_and_marks_entries_undone(aapl_session, pid):
     """A second undo call reverses the next-most-recent action, not the same one again."""
     with patch("services.portfolio_service._current_price",
                new_callable=AsyncMock, return_value=Decimal("200.0")):
         await portfolio_service.add_stock_purchase(
-            aapl_session, USER_ID, "AAPL", shares=10, bought_at=Decimal("160.0"), date="2024-02-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=10, bought_at=Decimal("160.0"), date="2024-02-01"
         )
         await portfolio_service.sell_stock_shares(
-            aapl_session, USER_ID, "AAPL", shares=5, sold_at=Decimal("200.0"), date="2024-03-01"
+            aapl_session, USER_ID, pid, "AAPL", shares=5, sold_at=Decimal("200.0"), date="2024-03-01"
         )
 
     first = await portfolio_service.undo_last_action(aapl_session, USER_ID)  # reverses the sell
@@ -695,22 +707,22 @@ async def test_undo_is_lifo_and_marks_entries_undone(aapl_session):
     with pytest.raises(ValueError, match="Nothing to undo"):
         await portfolio_service.undo_last_action(aapl_session, USER_ID)
 
-    holding = await portfolio_service.get_stock_holding(aapl_session, USER_ID, "AAPL", price=Decimal("200.0"))
+    holding = await portfolio_service.get_stock_holding(aapl_session, pid, "AAPL", price=Decimal("200.0"))
     assert holding.shares == 100
     assert float(holding.average_cost) == pytest.approx(150.0)
 
 
-async def test_list_audit_log_returns_newest_first(db_session):
+async def test_list_audit_log_returns_newest_first(db_session, pid):
     with patch("services.portfolio_service._validate_and_fetch_name",
                new_callable=AsyncMock, return_value=""):
         with patch("services.portfolio_service._current_price",
                    new_callable=AsyncMock, return_value=Decimal("100.0")):
             with patch("services.portfolio_service.asyncio.create_task"):
                 await portfolio_service.add_stock_purchase(
-                    db_session, USER_ID, "AAPL", shares=10, bought_at=Decimal("100.0"), date="2024-01-01"
+                    db_session, USER_ID, pid, "AAPL", shares=10, bought_at=Decimal("100.0"), date="2024-01-01"
                 )
                 await portfolio_service.add_stock_purchase(
-                    db_session, USER_ID, "MSFT", shares=5, bought_at=Decimal("200.0"), date="2024-01-02"
+                    db_session, USER_ID, pid, "MSFT", shares=5, bought_at=Decimal("200.0"), date="2024-01-02"
                 )
 
     entries = await portfolio_service.list_audit_log(db_session, USER_ID)
@@ -740,14 +752,10 @@ async def repaired_db(db_engine):
 
 async def test_repair_backfills_missing_company_name(repaired_db):
     session, run = repaired_db
-    session.add(Holding(
-        user_id=USER_ID, ticker="AAPL", company_name="", market="US",
-        shares=10, sold_shares=0, average_cost=Decimal("150.0"),
-    ))
-    session.add(Holding(
-        user_id=USER_ID, ticker="MSFT", company_name="Microsoft Corp", market="US",
-        shares=5, sold_shares=0, average_cost=Decimal("300.0"),
-    ))
+    await add_holding(session, "AAPL", company_name="",
+                      shares=10, sold_shares=0, average_cost=Decimal("150.0"))
+    await add_holding(session, "MSFT", company_name="Microsoft Corp",
+                      shares=5, sold_shares=0, average_cost=Decimal("300.0"))
     await session.commit()
 
     with patch("services.portfolio_service._validate_and_fetch_name",
@@ -764,10 +772,8 @@ async def test_repair_backfills_missing_company_name(repaired_db):
 
 async def test_repair_backfills_watchlist_entry_that_fell_back_to_ticker(repaired_db):
     session, run = repaired_db
-    session.add(Holding(
-        user_id=USER_ID, ticker="AAPL", company_name="", market="US",
-        shares=10, sold_shares=0, average_cost=Decimal("150.0"),
-    ))
+    await add_holding(session, "AAPL", company_name="",
+                      shares=10, sold_shares=0, average_cost=Decimal("150.0"))
     session.add(WatchlistEntry(user_id=USER_ID, ticker="AAPL", market="US", company_name="AAPL"))
     await session.commit()
 
@@ -785,10 +791,8 @@ async def test_repair_backfills_watchlist_entry_that_fell_back_to_ticker(repaire
 
 async def test_repair_backfills_missing_archive_entry(repaired_db):
     session, run = repaired_db
-    session.add(Holding(
-        user_id=USER_ID, ticker="TSLA", company_name="Tesla, Inc.", market="US",
-        shares=3, sold_shares=0, average_cost=Decimal("200.0"),
-    ))
+    await add_holding(session, "TSLA", company_name="Tesla, Inc.",
+                      shares=3, sold_shares=0, average_cost=Decimal("200.0"))
     await session.commit()
 
     with patch("services.market_data_service.get_symbols",
@@ -801,10 +805,8 @@ async def test_repair_backfills_missing_archive_entry(repaired_db):
 
 async def test_repair_skips_ticker_that_no_longer_resolves(repaired_db):
     session, run = repaired_db
-    session.add(Holding(
-        user_id=USER_ID, ticker="DELISTED", company_name="", market="US",
-        shares=1, sold_shares=0, average_cost=Decimal("1.0"),
-    ))
+    await add_holding(session, "DELISTED", company_name="",
+                      shares=1, sold_shares=0, average_cost=Decimal("1.0"))
     await session.commit()
 
     with patch("services.portfolio_service._validate_and_fetch_name",
@@ -828,14 +830,10 @@ async def test_repair_no_holdings_is_a_noop(repaired_db):
 
 async def test_repair_spaces_out_calls_between_tickers(repaired_db):
     session, run = repaired_db
-    session.add(Holding(
-        user_id=USER_ID, ticker="AAPL", company_name="", market="US",
-        shares=1, sold_shares=0, average_cost=Decimal("1.0"),
-    ))
-    session.add(Holding(
-        user_id=USER_ID, ticker="MSFT", company_name="", market="US",
-        shares=1, sold_shares=0, average_cost=Decimal("1.0"),
-    ))
+    await add_holding(session, "AAPL", company_name="",
+                      shares=1, sold_shares=0, average_cost=Decimal("1.0"))
+    await add_holding(session, "MSFT", company_name="",
+                      shares=1, sold_shares=0, average_cost=Decimal("1.0"))
     await session.commit()
 
     with patch("services.portfolio_service._validate_and_fetch_name",

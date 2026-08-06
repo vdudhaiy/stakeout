@@ -159,20 +159,32 @@ async def add_stock(ticker: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/{ticker}")
-async def delete_stock(ticker: str):
-    '''
-    Delete stock data for a given ticker.
-    Args:
-        ticker (str): The stock ticker symbol.
-    Returns:
-        dict: A message indicating whether the deletion was successful.
-    '''
-    try:
-        await stock_service.delete_stock(ticker)
-        return {"message": f"Stock data for {ticker} deleted successfully."}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+# Temporarily disabled. market_data is a cache shared by every user, and this
+# route has no auth dependency — any unauthenticated caller could wipe a
+# symbol's entire OHLCV history out from under other users' holdings and
+# watchlists. Nothing in the frontend calls it (the dashboard's remove button
+# hits DELETE /watchlist/{ticker}; removing a holding hits DELETE
+# /portfolio/{ticker}), so disabling it costs nothing today.
+#
+# Before re-enabling: require auth AND only delete when no Holding or
+# WatchlistEntry in any user still references the symbol — i.e. make it a
+# garbage-collect of orphaned archive rows, not an unconditional wipe.
+# services.stock_service.delete_stock is left in place for that.
+#
+# @router.delete("/{ticker}")
+# async def delete_stock(ticker: str):
+#     '''
+#     Delete stock data for a given ticker.
+#     Args:
+#         ticker (str): The stock ticker symbol.
+#     Returns:
+#         dict: A message indicating whether the deletion was successful.
+#     '''
+#     try:
+#         await stock_service.delete_stock(ticker)
+#         return {"message": f"Stock data for {ticker} deleted successfully."}
+#     except ValueError as e:
+#         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{ticker}/details", response_model=StockDetailedResponse)

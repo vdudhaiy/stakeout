@@ -143,6 +143,8 @@ export interface DividendEntry {
 
 export interface StockHolding {
   ticker: string
+  /** Which portfolio holds it — the portfolio tabs filter on this. 0 in guest mode. */
+  portfolio_id: number
   market: Market
   currency: 'USD' | 'INR'
   company_name: string
@@ -162,8 +164,19 @@ export interface StockHolding {
   dividends: DividendEntry[]
 }
 
-export interface PortfolioResponse {
-  market?: Market | null
+/** A portfolio itself, without position data — powers the tab bar. */
+export interface PortfolioMeta {
+  id: number
+  name: string
+  market: Market
+  created_at: string
+}
+
+/** One portfolio's headline figures, in the same units as PortfolioResponse. */
+export interface PortfolioStats {
+  id: number
+  name: string
+  market: Market
   currency: 'USD' | 'INR'
   portfolio_value: number
   realized_gains: number
@@ -173,7 +186,25 @@ export interface PortfolioResponse {
   return_percentage: number
   total_dividends: number
   net_profit_loss: number
+}
+
+export interface PortfolioResponse {
+  market?: Market | null
+  currency: 'USD' | 'INR'
+  // These are the COMBINED totals across every portfolio in the market — what
+  // the bar above the tabs shows. Per-portfolio figures live in `portfolios`.
+  portfolio_value: number
+  realized_gains: number
+  total_shares: number
+  total_invested: number
+  total_return: number
+  return_percentage: number
+  total_dividends: number
+  net_profit_loss: number
+  /** Flat across all portfolios in the market; filter by `portfolio_id` per tab. */
   holdings: StockHolding[]
+  /** Per-portfolio breakdown, in tab (creation) order. */
+  portfolios: PortfolioStats[]
 }
 
 // One data row from an uploaded import file, parsed and duplicate-checked
@@ -190,11 +221,23 @@ export interface ImportPreviewRow {
   error: string | null
   duplicate: boolean               // true if this exactly matches another transaction
   duplicate_reason: string | null   // e.g. "Matches a transaction..." or "Duplicate of row 4 in this file"
+  portfolio: string | null          // portfolio name as written in the file, if the column was present
+  portfolio_id: number | null       // resolved portfolio; null if the name didn't resolve
+}
+
+// A problem that stops the whole import rather than skipping one row. Only
+// portfolio-name errors produce these: a row naming a portfolio that doesn't
+// exist can't be filed anywhere sensible, so the user fixes the file instead.
+export interface ImportBlockingError {
+  row: number       // 0 for a file-level problem not tied to one row
+  message: string
 }
 
 export interface ImportPreviewResult {
   total_rows: number
   rows: ImportPreviewRow[]
+  // Non-empty means nothing may be imported until the file is corrected.
+  blocking_errors: ImportBlockingError[]
 }
 
 // A previously-previewed row (must have been `valid`), echoed back with the
@@ -208,6 +251,9 @@ export interface ImportApplyRow {
   shares: number
   price: number
   include: boolean               // false = user chose to skip this one (usually a duplicate)
+  // Name only — never an id. The server re-resolves it against the caller's
+  // own portfolios, so a forged id can't redirect rows.
+  portfolio?: string | null
 }
 
 export interface ImportRowResult {

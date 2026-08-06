@@ -419,19 +419,11 @@ async def test_add_stock_when_already_exists(client):
     assert resp.json()["exist"] is True
 
 
-async def test_delete_stock_success(client):
-    with patch(
-        "routers.stocks.stock_service.delete_stock",
-        new_callable=AsyncMock, return_value={"message": "deleted"},
-    ):
-        resp = await client.delete("/stocks/AAPL")
-    assert resp.status_code == 200
-
-
-async def test_delete_stock_not_found_returns_404(client):
-    with patch(
-        "routers.stocks.stock_service.delete_stock",
-        new_callable=AsyncMock, side_effect=ValueError("No CSV data found for ticker: NOTEXIST"),
-    ):
-        resp = await client.delete("/stocks/NOTEXIST")
-    assert resp.status_code == 404
+async def test_delete_stock_route_is_disabled(client):
+    """DELETE /stocks/{ticker} is commented out in routers.stocks — it wiped the
+    shared market_data archive for every user with no auth check. If this starts
+    failing, the route came back: make sure it requires auth and only deletes
+    symbols no Holding or WatchlistEntry still references before deleting this test.
+    """
+    resp = await client.delete("/stocks/AAPL")
+    assert resp.status_code == 405

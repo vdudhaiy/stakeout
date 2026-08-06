@@ -10,7 +10,7 @@ import pytest
 from services.export_service import build_portfolio_xlsx
 from services import import_service
 from schemas.portfolio import (
-    PortfolioResponse, StockHolding, StockPurchaseHistory,
+    PortfolioResponse, PortfolioStats, StockHolding, StockPurchaseHistory,
 )
 
 
@@ -150,7 +150,12 @@ def _read_transaction_sheet(xlsx_bytes: bytes):
 def test_transaction_sheet_headers_match_import_format():
     p = _portfolio_with_holdings(_sample_holding())
     df = _read_transaction_sheet(build_portfolio_xlsx(p))
-    assert list(df.columns)[:6] == ["Market", "Stock", "Date", "Number", "Buy/Sell", "Price"]
+    # Portfolio leads, then the six columns the importer needs. Order doesn't
+    # actually matter to the importer (it matches by header name), but the
+    # round-trip depends on all seven being present and spelled this way.
+    assert list(df.columns)[:7] == [
+        "Portfolio", "Market", "Stock", "Date", "Number", "Buy/Sell", "Price",
+    ]
 
 
 def test_transaction_sheet_buy_row_matches_source_transaction():
@@ -217,3 +222,81 @@ def test_empty_portfolio_transaction_sheet_has_no_data_rows():
     sheets = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=None, engine="openpyxl")
     txn_df = sheets["Transaction History"]
     assert len(txn_df) == 0
+
+
+# ── multiple portfolios ──────────────────────────────────────────────────────
+
+def _multi_portfolio(*holdings):
+    """A PortfolioResponse spanning two portfolios, ids 1 ("main") and 2 ("Zerodha")."""
+    base = _portfolio_with_holdings(*holdings)
+    for pid, name in ((1, "main"), (2, "Zerodha")):
+        owned = [h for h in holdings if h.portfolio_id == pid]
+        base.portfolios.append(PortfolioStats(
+            id=pid, name=name,
+            portfolio_value=sum(h.stock_value for h in owned),
+            realized_gains=sum(h.total_earned for h in owned),
+            total_shares=sum(h.shares for h in owned),
+            total_invested=sum(h.total_invested for h in owned),
+            total_return=sum(h.stock_value - h.total_invested for h in owned),
+            return_percentage=0.0,
+            net_profit_loss=sum(h.stock_value - h.total_invested + h.total_earned for h in owned),
+        ))
+    return base
+
+
+def test_transaction_sheet_tags_each_row_with_its_portfolio():
+    aapl = _sample_holding()
+    aapl.portfolio_id = 1
+    msft = _sample_holding("MSFT", "Microsoft Corp.")
+    msft.portfolio_id = 2
+
+    df = _read_transaction_sheet(build_portfolio_xlsx(_multi_portfolio(aapl, msft)))
+    by_stock = dict(zip(df["Stock"], df["Portfolio"]))
+    assert by_stock["AAPL"] == "main"
+    assert by_stock["MSFT"] == "Zerodha"
+
+
+def test_export_round_trips_back_into_the_same_portfolios():
+    """The whole point of the Portfolio column: re-importing an export must
+    put every transaction back where it came from, not into the default."""
+    aapl = _sample_holding()
+    aapl.portfolio_id = 1
+    msft = _sample_holding("MSFT", "Microsoft Corp.")
+    msft.portfolio_id = 2
+
+    df = _read_transaction_sheet(build_portfolio_xlsx(_multi_portfolio(aapl, msft)))
+    parsed = import_service._parse_rows(df, had_header=True)
+
+    assert all(r["valid"] for r in parsed), [r["error"] for r in parsed if not r["valid"]]
+    names = {r["ticker"]: r["portfolio_label"] for r in parsed}
+    assert names["AAPL"] == "main"
+    assert names["MSFT"] == "Zerodha"
+
+
+def test_holdings_sheet_gains_a_portfolio_column():
+    aapl = _sample_holding()
+    aapl.portfolio_id = 1
+    xlsx = build_portfolio_xlsx(_multi_portfolio(aapl))
+    # The holdings sheet sits behind per-portfolio summary blocks now, so read
+    # it by name rather than assuming a fixed row offset.
+    frames = pd.read_excel(io.BytesIO(xlsx), sheet_name="Portfolio", header=None, dtype=str)
+    flat = frames.astype(str).values.ravel().tolist()
+    assert "Portfolio" in flat
+    assert "ALL PORTFOLIOS" in flat   # combined block appears when there's >1
+    assert "ZERODHA" in flat          # and one block per portfolio
+
+
+def test_single_portfolio_export_has_no_combined_block():
+    aapl = _sample_holding()
+    aapl.portfolio_id = 1
+    p = _portfolio_with_holdings(aapl)
+    p.portfolios.append(PortfolioStats(
+        id=1, name="main", portfolio_value=p.portfolio_value, realized_gains=p.realized_gains,
+        total_shares=p.total_shares, total_invested=p.total_invested,
+        total_return=p.total_return, return_percentage=p.return_percentage,
+        net_profit_loss=p.net_profit_loss,
+    ))
+    frames = pd.read_excel(io.BytesIO(build_portfolio_xlsx(p)), sheet_name="Portfolio", header=None, dtype=str)
+    flat = frames.astype(str).values.ravel().tolist()
+    assert "PORTFOLIO SUMMARY" in flat
+    assert "ALL PORTFOLIOS" not in flat

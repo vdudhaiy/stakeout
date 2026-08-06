@@ -7,6 +7,12 @@
  * so a guest sees the same math a signed-in account would.
  */
 import type { BuyLot, Market, PortfolioResponse, SellLot, StockHolding, StockPurchaseHistory } from '../types'
+
+// Guests get exactly one implicit portfolio per market — creating more needs
+// an account. This id tags every guest holding so the shared UI (which filters
+// holdings by portfolio) works unchanged; the tab bar hides itself when there
+// is only one portfolio, so guests never see it.
+export const GUEST_PORTFOLIO_ID = 0
 import { marketOf, type Exchange } from '../utils/market'
 import { resolveTickerName, resolveGuestTicker, fetchGuestPrice } from './guestApi'
 import * as guestWatchlist from './guestWatchlist'
@@ -123,6 +129,7 @@ function buildStockHolding(holding: GuestHoldingState, price: number | null): St
 
   return {
     ticker: holding.ticker,
+    portfolio_id: GUEST_PORTFOLIO_ID,
     market: holding.market,
     currency: holding.market === 'IN' ? 'INR' : 'USD',
     company_name: holding.companyName,
@@ -276,9 +283,10 @@ export async function getPortfolio(market?: Market): Promise<PortfolioResponse> 
   const returnPct = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0
   const netProfitLoss = totalReturn + realizedG
 
+  const currency = market === 'IN' ? 'INR' : 'USD'
   return {
     market: market ?? null,
-    currency: market === 'IN' ? 'INR' : 'USD',
+    currency,
     portfolio_value: portfolioValue,
     realized_gains: realizedG,
     total_shares: totalShares,
@@ -288,5 +296,22 @@ export async function getPortfolio(market?: Market): Promise<PortfolioResponse> 
     total_dividends: 0,
     net_profit_loss: netProfitLoss,
     holdings: built,
+    // A single entry, so the tab bar stays hidden and no combined bar renders
+    // — but the shape matches a signed-in response, so the page needs no
+    // guest-specific branch to read it.
+    portfolios: [{
+      id: GUEST_PORTFOLIO_ID,
+      name: 'main',
+      market: market ?? 'US',
+      currency,
+      portfolio_value: portfolioValue,
+      realized_gains: realizedG,
+      total_shares: totalShares,
+      total_invested: totalInvested,
+      total_return: totalReturn,
+      return_percentage: returnPct,
+      total_dividends: 0,
+      net_profit_loss: netProfitLoss,
+    }],
   }
 }

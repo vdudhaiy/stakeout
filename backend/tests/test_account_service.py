@@ -10,14 +10,15 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from models.local_auth import LocalSession, LocalUser
-from models.portfolio import AuditEntry, Holding, WatchlistEntry
-from services import account_service
+from models.portfolio import AuditEntry, Holding, Portfolio, WatchlistEntry
+from services import account_service, portfolio_admin_service
 
 USER_ID = "user-to-delete"
 
 
 async def _seed_owned_data(db_session, user_id=USER_ID):
-    holding = Holding(user_id=user_id, ticker="AAPL", shares=10)
+    portfolio = await portfolio_admin_service.ensure_default(db_session, user_id, "US")
+    holding = Holding(user_id=user_id, portfolio_id=portfolio.id, ticker="AAPL", shares=10)
     db_session.add(holding)
     db_session.add(WatchlistEntry(user_id=user_id, ticker="MSFT"))
     db_session.add(AuditEntry(

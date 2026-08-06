@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import local_auth_enabled, supabase_project_url
 from models.local_auth import LocalSession, LocalUser
-from models.portfolio import AuditEntry, Holding, WatchlistEntry
+from models.portfolio import AuditEntry, Holding, Portfolio, WatchlistEntry
 
 _ADMIN_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
@@ -49,9 +49,17 @@ async def delete_account(session: AsyncSession, user_id: str) -> None:
     else:
         await _delete_supabase_auth_user(user_id)
 
+    # Holdings first, then the portfolios that contained them: deleting the
+    # portfolio would cascade to its holdings anyway, but doing it explicitly
+    # keeps the order obvious and covers any holding whose portfolio is gone.
     holdings = (await session.execute(select(Holding).where(Holding.user_id == user_id))).scalars().all()
     for holding in holdings:
         await session.delete(holding)  # cascade="all, delete-orphan" removes transactions too
+    await session.flush()
+
+    portfolios = (await session.execute(select(Portfolio).where(Portfolio.user_id == user_id))).scalars().all()
+    for portfolio in portfolios:
+        await session.delete(portfolio)
 
     await session.execute(delete(WatchlistEntry).where(WatchlistEntry.user_id == user_id))
     await session.execute(delete(AuditEntry).where(AuditEntry.user_id == user_id))

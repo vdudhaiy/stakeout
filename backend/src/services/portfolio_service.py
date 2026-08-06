@@ -11,12 +11,12 @@ from yfinance.exceptions import YFRateLimitError
 
 from cache import dividend_sync_cache, quote_cache
 from markets import INDIAN_SUFFIXES, MARKET_META, apply_exchange, currency_of, market_of, normalize_market
-from models.portfolio import AuditEntry, Dividend, Holding, Transaction, WatchlistEntry
+from models.portfolio import AuditEntry, Dividend, Holding, Portfolio, Transaction, WatchlistEntry
 from schemas.portfolio import (
-    AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding,
-    StockPurchaseHistory, UndoResult,
+    AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PortfolioStats, PositionAsOf,
+    StockHolding, StockPurchaseHistory, UndoResult,
 )
-from . import market_data_service, sec_service
+from . import market_data_service, portfolio_admin_service, sec_service
 from .stock_service import fetch_current, get_market_status, add_stock
 
 logger = logging.getLogger(__name__)
@@ -131,9 +131,16 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
     return price
 
 
-async def _fetch_holding(session: AsyncSession, user_id: str, ticker: str) -> Holding | None:
+async def _fetch_holding(session: AsyncSession, portfolio_id: int, ticker: str) -> Holding | None:
+    """The holding for `ticker` in one portfolio.
+
+    Scoped to the portfolio, not the user: the same ticker can be held in
+    several of a user's portfolios, each with its own independent FIFO lot
+    queue. Callers get `portfolio_id` from portfolio_admin_service.resolve,
+    which is where the ownership check lives.
+    """
     result = await session.execute(
-        select(Holding).where(Holding.user_id == user_id, Holding.ticker == ticker)
+        select(Holding).where(Holding.portfolio_id == portfolio_id, Holding.ticker == ticker)
     )
     return result.scalar_one_or_none()
 
@@ -386,9 +393,11 @@ def _txn_snapshot(t: Transaction) -> dict:
     }
 
 
-def _log_audit(session: AsyncSession, user_id: str, ticker: str, action: str, payload: dict) -> None:
+def _log_audit(
+    session: AsyncSession, user_id: str, portfolio_id: int, ticker: str, action: str, payload: dict,
+) -> None:
     session.add(AuditEntry(
-        user_id=user_id, ticker=ticker, action=action, payload=payload,
+        user_id=user_id, portfolio_id=portfolio_id, ticker=ticker, action=action, payload=payload,
         performed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
     ))
 
@@ -447,6 +456,7 @@ def _build_stock_holding(
 
     return StockHolding(
         ticker=holding.ticker,
+        portfolio_id=holding.portfolio_id,
         market=holding.market or market_of(holding.ticker),
         currency=currency_of(holding.ticker),
         company_name=holding.company_name,
@@ -467,8 +477,10 @@ def _build_stock_holding(
 
 # ── Service functions ─────────────────────────────────────────────────────────
 
-async def get_stock_holding(session: AsyncSession, user_id: str, ticker: str, price: Decimal | None = None) -> StockHolding:
-    holding = await _fetch_holding(session, user_id, ticker)
+async def get_stock_holding(
+    session: AsyncSession, portfolio_id: int, ticker: str, price: Decimal | None = None,
+) -> StockHolding:
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     transactions = await _fetch_transactions(session, holding.id)
@@ -478,14 +490,14 @@ async def get_stock_holding(session: AsyncSession, user_id: str, ticker: str, pr
     )
 
 
-async def get_holding_transactions(session: AsyncSession, user_id: str, ticker: str) -> list[Transaction]:
+async def get_holding_transactions(session: AsyncSession, portfolio_id: int, ticker: str) -> list[Transaction]:
     """Raw transaction rows for `ticker`, or [] if there's no holding yet.
 
     Unlike get_stock_holding, this never fetches a live price — for callers
     (e.g. import_service's duplicate check) that only need the transaction
     log itself and shouldn't pay for a yfinance round trip just to check it.
     """
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         return []
     return await _fetch_transactions(session, holding.id)
@@ -516,13 +528,22 @@ async def _resolve_ticker(session: AsyncSession, user_id: str, ticker: str, exch
       2. Otherwise probes NSE first, then BSE, via _validate_and_fetch_name,
          and keeps whichever one actually exists.
     Raises ValueError if the ticker exists on neither exchange.
+
+    Step 1 deliberately looks across *all* the user's portfolios rather than
+    just the one being bought into: someone who holds RELIANCE.BO anywhere
+    means the same company when they type RELIANCE somewhere else.
     """
     ticker = ticker.upper().strip()
     if (exchange or "").upper() != "IN" or ticker.endswith((".NS", ".BO")):
         return apply_exchange(ticker, exchange)
 
     for suffix in INDIAN_SUFFIXES:
-        if await _fetch_holding(session, user_id, f"{ticker}{suffix}"):
+        held = await session.execute(
+            select(Holding.id).where(
+                Holding.user_id == user_id, Holding.ticker == f"{ticker}{suffix}"
+            ).limit(1)
+        )
+        if held.scalar_one_or_none() is not None:
             return f"{ticker}{suffix}"
 
     last_error: Exception | None = None
@@ -540,17 +561,17 @@ async def _resolve_ticker(session: AsyncSession, user_id: str, ticker: str, exch
 
 
 async def add_stock_purchase(
-    session: AsyncSession, user_id: str, ticker: str, shares: int, bought_at: Decimal,
+    session: AsyncSession, user_id: str, portfolio_id: int, ticker: str, shares: int, bought_at: Decimal,
     date: str | None = None, exchange: str | None = None,
 ) -> StockHolding:
     ticker = await _resolve_ticker(session, user_id, ticker, exchange)
     txn_date = _resolve_date(date)
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     is_new = holding is None
     if is_new:
         company_name = await _validate_and_fetch_name(ticker)
         holding = Holding(
-            user_id=user_id, ticker=ticker, market=market_of(ticker),
+            user_id=user_id, portfolio_id=portfolio_id, ticker=ticker, market=market_of(ticker),
             company_name=company_name, shares=0, sold_shares=0, average_cost=Decimal(0),
         )
         session.add(holding)
@@ -575,7 +596,7 @@ async def add_stock_purchase(
 
     session.add(new_txn)
     await session.flush()  # assign new_txn.id before logging it
-    _log_audit(session, user_id, ticker, "insert", {"transaction_id": new_txn.id})
+    _log_audit(session, user_id, portfolio_id, ticker, "insert", {"transaction_id": new_txn.id})
     await session.commit()
     await session.refresh(holding)
 
@@ -583,11 +604,11 @@ async def add_stock_purchase(
         asyncio.create_task(_ensure_in_dashboard(ticker))
         asyncio.create_task(_sync_dividends_background(ticker, holding.id))
 
-    return await get_stock_holding(session, user_id, ticker)
+    return await get_stock_holding(session, portfolio_id, ticker)
 
 
 async def add_stock_purchases_bulk(
-    session: AsyncSession, user_id: str, ticker: str, lots: list[BulkPurchaseLot],
+    session: AsyncSession, user_id: str, portfolio_id: int, ticker: str, lots: list[BulkPurchaseLot],
     exchange: str | None = None,
 ) -> StockHolding:
     """Records several buy lots (e.g. backfilled purchase history) as one atomic write.
@@ -605,12 +626,12 @@ async def add_stock_purchases_bulk(
     resolved_dates = [_resolve_date(lot.date) for lot in lots]
 
     ticker = await _resolve_ticker(session, user_id, ticker, exchange)
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     is_new = holding is None
     if is_new:
         company_name = await _validate_and_fetch_name(ticker)
         holding = Holding(
-            user_id=user_id, ticker=ticker, market=market_of(ticker),
+            user_id=user_id, portfolio_id=portfolio_id, ticker=ticker, market=market_of(ticker),
             company_name=company_name, shares=0, sold_shares=0, average_cost=Decimal(0),
         )
         session.add(holding)
@@ -636,7 +657,7 @@ async def add_stock_purchases_bulk(
     session.add_all(new_txns)
     await session.flush()  # assign new_txn.id before logging it
     for txn in new_txns:
-        _log_audit(session, user_id, ticker, "insert", {"transaction_id": txn.id})
+        _log_audit(session, user_id, portfolio_id, ticker, "insert", {"transaction_id": txn.id})
     await session.commit()
     await session.refresh(holding)
 
@@ -644,11 +665,11 @@ async def add_stock_purchases_bulk(
         asyncio.create_task(_ensure_in_dashboard(ticker))
         asyncio.create_task(_sync_dividends_background(ticker, holding.id))
 
-    return await get_stock_holding(session, user_id, ticker)
+    return await get_stock_holding(session, portfolio_id, ticker)
 
 
 async def sell_stock_shares_bulk(
-    session: AsyncSession, user_id: str, ticker: str, lots: list[BulkSaleLot],
+    session: AsyncSession, user_id: str, portfolio_id: int, ticker: str, lots: list[BulkSaleLot],
 ) -> StockHolding:
     """Records several sell lots (different dates/prices) as one atomic write.
 
@@ -663,7 +684,7 @@ async def sell_stock_shares_bulk(
     # before anything is written.
     resolved_dates = [_resolve_date(lot.date) for lot in lots]
 
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -703,18 +724,18 @@ async def sell_stock_shares_bulk(
     session.add_all(new_txns)
     await session.flush()  # assign new_txn.id before logging it
     for txn in new_txns:
-        _log_audit(session, user_id, ticker, "insert", {"transaction_id": txn.id})
+        _log_audit(session, user_id, portfolio_id, ticker, "insert", {"transaction_id": txn.id})
     await session.commit()
     await session.refresh(holding)
-    return await get_stock_holding(session, user_id, ticker)
+    return await get_stock_holding(session, portfolio_id, ticker)
 
 
 async def sell_stock_shares(
-    session: AsyncSession, user_id: str, ticker: str, shares: int, sold_at: Decimal,
+    session: AsyncSession, user_id: str, portfolio_id: int, ticker: str, shares: int, sold_at: Decimal,
     date: str | None = None,
 ) -> StockHolding:
     txn_date = _resolve_date(date)
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -748,14 +769,16 @@ async def sell_stock_shares(
 
     session.add(new_txn)
     await session.flush()  # assign new_txn.id before logging it
-    _log_audit(session, user_id, ticker, "insert", {"transaction_id": new_txn.id})
+    _log_audit(session, user_id, portfolio_id, ticker, "insert", {"transaction_id": new_txn.id})
     await session.commit()
     await session.refresh(holding)
-    return await get_stock_holding(session, user_id, ticker)
+    return await get_stock_holding(session, portfolio_id, ticker)
 
 
-async def delete_transaction(session: AsyncSession, user_id: str, ticker: str, transaction_id: int) -> StockHolding:
-    holding = await _fetch_holding(session, user_id, ticker)
+async def delete_transaction(
+    session: AsyncSession, user_id: str, portfolio_id: int, ticker: str, transaction_id: int,
+) -> StockHolding:
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -776,9 +799,12 @@ async def delete_transaction(session: AsyncSession, user_id: str, ticker: str, t
     remaining = await _fetch_transactions(session, holding.id)
 
     if not remaining:
-        holding_snapshot = {"company_name": holding.company_name, "market": holding.market}
+        holding_snapshot = {
+            "company_name": holding.company_name, "market": holding.market,
+            "portfolio_id": holding.portfolio_id,
+        }
         await session.delete(holding)
-        _log_audit(session, user_id, ticker, "delete",
+        _log_audit(session, user_id, portfolio_id, ticker, "delete",
                    {"holding": holding_snapshot, "transactions": [txn_snapshot]})
         await session.commit()
         # Note: the on-disk price archive is a shared cache in multi-user mode,
@@ -786,21 +812,25 @@ async def delete_transaction(session: AsyncSession, user_id: str, ticker: str, t
         return None
 
     _replay_fifo(holding, remaining)
-    _log_audit(session, user_id, ticker, "delete", {"holding": None, "transactions": [txn_snapshot]})
+    _log_audit(session, user_id, portfolio_id, ticker, "delete",
+               {"holding": None, "transactions": [txn_snapshot]})
     await session.commit()
     await session.refresh(holding)
-    return await get_stock_holding(session, user_id, ticker)
+    return await get_stock_holding(session, portfolio_id, ticker)
 
 
-async def delete_stock_holding(session: AsyncSession, user_id: str, ticker: str):
-    holding = await _fetch_holding(session, user_id, ticker)
+async def delete_stock_holding(session: AsyncSession, user_id: str, portfolio_id: int, ticker: str):
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     transactions = await _fetch_transactions(session, holding.id)
-    holding_snapshot = {"company_name": holding.company_name, "market": holding.market}
+    holding_snapshot = {
+        "company_name": holding.company_name, "market": holding.market,
+        "portfolio_id": holding.portfolio_id,
+    }
     txn_snapshots = [_txn_snapshot(t) for t in transactions]
     await session.delete(holding)  # cascade="all, delete-orphan" removes transactions too
-    _log_audit(session, user_id, ticker, "delete",
+    _log_audit(session, user_id, portfolio_id, ticker, "delete",
                {"holding": holding_snapshot, "transactions": txn_snapshots})
     await session.commit()
     return {"message": f"Holding for {ticker} deleted successfully."}
@@ -904,67 +934,120 @@ async def repair_stock_metadata() -> None:
             logger.warning("repair_stock_metadata: failed to backfill archive for %s: %r", ticker, e)
 
 
+def _rollup(holdings: list[StockHolding]) -> dict:
+    """Sums a set of positions into the six headline portfolio figures.
+
+    Positions whose live quote was unavailable contribute nothing to
+    portfolio_value rather than being counted as worthless — see
+    _build_stock_holding.
+    """
+    portfolio_value = sum(h.stock_value for h in holdings if h.stock_value is not None)
+    realized_gains = sum(h.total_earned for h in holdings)
+    total_invested = sum(h.total_invested for h in holdings)
+    total_dividends = sum(h.total_dividends for h in holdings)
+    total_return = portfolio_value - total_invested
+    return {
+        "portfolio_value": portfolio_value,
+        "realized_gains": realized_gains,
+        "total_shares": sum(h.shares for h in holdings),
+        "total_invested": total_invested,
+        "total_return": total_return,
+        "return_percentage": (total_return / total_invested * 100) if total_invested > 0 else 0,
+        "total_dividends": total_dividends,
+        "net_profit_loss": total_return + realized_gains + total_dividends,
+    }
+
+
 async def get_portfolio(
     session: AsyncSession, user_id: str, market: str | None = None,
     prices: dict[str, Decimal | None] | None = None,
+    portfolio_id: int | None = None,
 ) -> PortfolioResponse:
+    """Positions and aggregates for one market.
+
+    With no `portfolio_id`, covers every portfolio in the market: the top-level
+    figures are the combined totals, `holdings` is the flat list across all of
+    them (each tagged with its `portfolio_id`), and `portfolios` carries the
+    per-portfolio breakdown. The frontend fetches this once and filters
+    client-side per tab; existing callers that only read the top-level fields
+    (the AI chat's portfolio context) are unaffected.
+
+    With a `portfolio_id`, narrows to that one portfolio — the caller is
+    responsible for having resolved it through portfolio_admin_service.resolve,
+    which is where ownership is checked.
+    """
     query = select(Holding).where(Holding.user_id == user_id)
     if market is not None:
         query = query.where(Holding.market == normalize_market(market))
+    if portfolio_id is not None:
+        query = query.where(Holding.portfolio_id == portfolio_id)
     result = await session.execute(query)
-    holdings = result.scalars().all()
+    holdings = list(result.scalars().all())
 
     if not prices:
-        # One market-status call per exchange; all price fetches run in parallel
+        # One market-status call per exchange; all price fetches run in parallel.
+        # Deduped by ticker — the same stock held in two portfolios is one quote.
         open_by_market = {
             m: await get_market_status(m)
             for m in {h.market or market_of(h.ticker) for h in holdings}
         }
+        unique = {h.ticker: h for h in holdings}
         fetched = await asyncio.gather(
-            *[_current_price(h.ticker, open_by_market.get(h.market or market_of(h.ticker))) for h in holdings]
+            *[_current_price(h.ticker, open_by_market.get(h.market or market_of(h.ticker)))
+              for h in unique.values()]
         )
-        prices = {h.ticker: p for h, p in zip(holdings, fetched)}
+        prices = dict(zip(unique.keys(), fetched))
 
     portfolio_holdings: list[StockHolding] = []
-    portfolio_value = 0
-    realized_gains = 0
-    total_shares = 0
-    total_invested = 0
-    total_dividends = 0
+    by_portfolio: dict[int, list[StockHolding]] = {}
 
     for holding in holdings:
         transactions = await _fetch_transactions(session, holding.id)
         dividends = await _fetch_dividends(session, holding.id)
-        # prices.get(...) may be None (quote unavailable) — _build_stock_holding
-        # propagates that as an explicit "unavailable" state rather than $0, and
-        # holdings with no price are excluded below rather than counted as worthless.
         stock_holding = _build_stock_holding(holding, transactions, prices.get(holding.ticker), dividends)
         portfolio_holdings.append(stock_holding)
+        by_portfolio.setdefault(holding.portfolio_id, []).append(stock_holding)
 
-        if stock_holding.stock_value is not None:
-            portfolio_value += stock_holding.stock_value
-        realized_gains += stock_holding.total_earned
-        total_shares += stock_holding.shares
-        total_invested += stock_holding.total_invested
-        total_dividends += stock_holding.total_dividends
+    # Every portfolio in scope gets an entry, including empty ones — a
+    # freshly-created portfolio still needs a tab and a zeroed stats row.
+    portfolio_query = select(Portfolio).where(Portfolio.user_id == user_id)
+    if market is not None:
+        portfolio_query = portfolio_query.where(Portfolio.market == normalize_market(market))
+    if portfolio_id is not None:
+        portfolio_query = portfolio_query.where(Portfolio.id == portfolio_id)
+    rows = (await session.execute(portfolio_query.order_by(Portfolio.id))).scalars().all()
 
-    total_return = portfolio_value - total_invested
-    return_percentage = (total_return / total_invested * 100) if total_invested > 0 else 0
-    net_profit_loss = total_return + realized_gains + total_dividends
+    breakdown = [
+        PortfolioStats(
+            id=p.id, name=p.name, market=p.market,
+            currency=MARKET_META[p.market]["currency"],
+            **_rollup(by_portfolio.get(p.id, [])),
+        )
+        for p in rows
+    ]
 
     return PortfolioResponse(
         market=normalize_market(market) if market is not None else None,
         currency=MARKET_META[normalize_market(market)]["currency"] if market is not None else "USD",
-        portfolio_value=portfolio_value,
-        realized_gains=realized_gains,
-        total_shares=total_shares,
-        total_invested=total_invested,
-        total_return=total_return,
-        return_percentage=return_percentage,
-        total_dividends=total_dividends,
-        net_profit_loss=net_profit_loss,
         holdings=portfolio_holdings,
+        portfolios=breakdown,
+        **_rollup(portfolio_holdings),
     )
+
+
+async def _entry_portfolio_id(session: AsyncSession, user_id: str, entry: AuditEntry) -> int:
+    """Which portfolio an audit entry refers to.
+
+    `portfolio_id` is NULL only on rows written before portfolios existed. The
+    009 migration put every holding that existed then into its market's default
+    portfolio, so that is exactly where such an entry's holding now lives.
+    """
+    if entry.portfolio_id is not None:
+        return entry.portfolio_id
+    snapshot = entry.payload.get("holding") if isinstance(entry.payload, dict) else None
+    market = (snapshot or {}).get("market") or market_of(entry.ticker)
+    default = await portfolio_admin_service.ensure_default(session, user_id, market)
+    return default.id
 
 
 async def _undo_insert(session: AsyncSession, user_id: str, entry: AuditEntry) -> None:
@@ -974,7 +1057,8 @@ async def _undo_insert(session: AsyncSession, user_id: str, entry: AuditEntry) -
     if txn is None:
         return  # already gone (e.g. this holding was since deleted) — nothing to reverse
 
-    holding = await _fetch_holding(session, user_id, entry.ticker)
+    portfolio_id = await _entry_portfolio_id(session, user_id, entry)
+    holding = await _fetch_holding(session, portfolio_id, entry.ticker)
     await session.delete(txn)
     await session.flush()
 
@@ -986,7 +1070,8 @@ async def _undo_insert(session: AsyncSession, user_id: str, entry: AuditEntry) -
 
 
 async def _undo_delete(session: AsyncSession, user_id: str, entry: AuditEntry) -> None:
-    holding = await _fetch_holding(session, user_id, entry.ticker)
+    portfolio_id = await _entry_portfolio_id(session, user_id, entry)
+    holding = await _fetch_holding(session, portfolio_id, entry.ticker)
     if holding is None:
         holding_snapshot = entry.payload["holding"]
         if holding_snapshot is None:
@@ -995,7 +1080,11 @@ async def _undo_delete(session: AsyncSession, user_id: str, entry: AuditEntry) -
                 "no snapshot was recorded to recreate it."
             )
         holding = Holding(
-            user_id=user_id, ticker=entry.ticker,
+            user_id=user_id,
+            # Snapshots written before portfolios existed carry no portfolio_id;
+            # _entry_portfolio_id resolved the market default for those.
+            portfolio_id=holding_snapshot.get("portfolio_id") or portfolio_id,
+            ticker=entry.ticker,
             market=holding_snapshot["market"], company_name=holding_snapshot["company_name"],
             shares=0, sold_shares=0, average_cost=Decimal(0),
         )
@@ -1054,10 +1143,10 @@ async def list_audit_log(session: AsyncSession, user_id: str, limit: int = 20) -
     ]
 
 
-async def get_position_as_of(session: AsyncSession, user_id: str, ticker: str, date: str) -> PositionAsOf:
+async def get_position_as_of(session: AsyncSession, portfolio_id: int, ticker: str, date: str) -> PositionAsOf:
     """FIFO position for one ticker as of `date`, derived purely from the transaction log."""
     date = _resolve_date(date)
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     transactions = await _fetch_transactions(session, holding.id)
@@ -1066,6 +1155,7 @@ async def get_position_as_of(session: AsyncSession, user_id: str, ticker: str, d
 
 async def get_portfolio_as_of(
     session: AsyncSession, user_id: str, date: str, market: str | None = None,
+    portfolio_id: int | None = None,
 ) -> list[PositionAsOf]:
     """FIFO position for every holding as of `date`, derived purely from the transaction log.
 
@@ -1076,6 +1166,8 @@ async def get_portfolio_as_of(
     query = select(Holding).where(Holding.user_id == user_id)
     if market is not None:
         query = query.where(Holding.market == normalize_market(market))
+    if portfolio_id is not None:
+        query = query.where(Holding.portfolio_id == portfolio_id)
     result = await session.execute(query)
     holdings = result.scalars().all()
 
@@ -1106,26 +1198,30 @@ def _parse_dividend_date(date: str) -> str:
         raise ValueError(f"Invalid date '{date}'. Expected yyyy-mm-dd.")
 
 
-async def get_dividends(session: AsyncSession, user_id: str, ticker: str) -> list[DividendEntry]:
-    holding = await _fetch_holding(session, user_id, ticker)
+async def get_dividends(session: AsyncSession, portfolio_id: int, ticker: str) -> list[DividendEntry]:
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
     dividends = await _fetch_dividends(session, holding.id)
     return [_dividend_to_schema(d, ticker) for d in dividends]
 
 
-async def sync_dividends(session: AsyncSession, user_id: str, ticker: str) -> list[DividendEntry]:
-    """Explicit re-sync from yfinance, throttled to at most once per day per (user, ticker).
+async def sync_dividends(session: AsyncSession, user_id: str, portfolio_id: int, ticker: str) -> list[DividendEntry]:
+    """Explicit re-sync from yfinance, throttled to once per day per (user, portfolio, ticker).
+
+    The throttle key includes the portfolio: the same ticker held in two of
+    them has two independent dividend records, and syncing one must not lock
+    the other out for the rest of the day.
 
     Returns the full current dividend list regardless of whether the throttle
     skipped a fresh fetch — the "Sync" button always shows the latest known
     state, it just won't hammer yfinance on repeated clicks.
     """
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
-    cache_key = f"{user_id}:{ticker}"
+    cache_key = f"{user_id}:{portfolio_id}:{ticker}"
     if dividend_sync_cache.get(cache_key) is None:
         transactions = await _fetch_transactions(session, holding.id)
         await _sync_dividends(session, holding, transactions)
@@ -1137,10 +1233,10 @@ async def sync_dividends(session: AsyncSession, user_id: str, ticker: str) -> li
 
 
 async def add_dividend(
-    session: AsyncSession, user_id: str, ticker: str, date: str,
+    session: AsyncSession, portfolio_id: int, ticker: str, date: str,
     amount_per_share: Decimal, shares_held: int | None = None,
 ) -> DividendEntry:
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -1169,10 +1265,10 @@ async def add_dividend(
 
 
 async def update_dividend(
-    session: AsyncSession, user_id: str, ticker: str, dividend_id: int,
+    session: AsyncSession, portfolio_id: int, ticker: str, dividend_id: int,
     date: str | None = None, amount_per_share: Decimal | None = None, shares_held: int | None = None,
 ) -> DividendEntry:
-    holding = await _fetch_holding(session, user_id, ticker)
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 
@@ -1206,8 +1302,8 @@ async def update_dividend(
     return _dividend_to_schema(entry, ticker)
 
 
-async def delete_dividend(session: AsyncSession, user_id: str, ticker: str, dividend_id: int) -> None:
-    holding = await _fetch_holding(session, user_id, ticker)
+async def delete_dividend(session: AsyncSession, portfolio_id: int, ticker: str, dividend_id: int) -> None:
+    holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
 

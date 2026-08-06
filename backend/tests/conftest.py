@@ -56,6 +56,19 @@ async def db_session(db_engine):
 
 
 @pytest_asyncio.fixture
+async def pid(db_session):
+    """Id of the test user's default US portfolio.
+
+    Every holding belongs to a portfolio, and service functions take its id,
+    so tests that touch positions need one. This is the same lazily-created
+    "main" the app gives a real account on its first request.
+    """
+    from services import portfolio_admin_service
+    portfolio = await portfolio_admin_service.ensure_default(db_session, TEST_USER_ID, "US")
+    return portfolio.id
+
+
+@pytest_asyncio.fixture
 async def client(db_engine):
     """HTTP test client with get_session overridden to use the per-test DB.
 

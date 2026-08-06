@@ -24,6 +24,11 @@ export default defineConfig({
     proxy: {
       '/stocks': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/health': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      // Listed explicitly and before '/portfolio'. Vite matches these keys by
+      // prefix, so '/portfolio' would happen to swallow '/portfolios' too —
+      // but nginx's equivalent regex anchors on (/|$) and does not, so
+      // relying on that overlap makes dev and Docker disagree.
+      '/portfolios': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/portfolio': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/indicators': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/watchlist': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },

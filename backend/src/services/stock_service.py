@@ -427,8 +427,12 @@ async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
     Indian results have their .NS/.BO suffix stripped before returning —
     ticker resolution (which of NSE/BSE to actually use) happens later, at
     add/buy time, not in this list — so the autocomplete list should never
-    show the suffix. If the same company appears under both suffixes, only
-    the first one encountered is kept.
+    show the suffix. Yahoo's search returns NSE and BSE as separate quotes
+    with no guaranteed ordering between them, so a company listed on both
+    is deduped by base symbol and the NSE listing always wins (the app
+    defaults to NSE), regardless of which one Yahoo happened to return
+    first. A company listed only on BSE still surfaces under its BSE
+    listing rather than being dropped.
 
     Cached 5 minutes per (exchange, query). Best-effort: any yfinance/Yahoo
     failure degrades to an empty list rather than a 5xx, since this only
@@ -456,30 +460,49 @@ async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
         return []
 
     results: list[dict] = []
-    seen: set[str] = set()
 
-    for q in quotes:
-        symbol = q.get("symbol") or ""
-        if q.get("quoteType") not in _SEARCH_QUOTE_TYPES or not symbol:
-            continue
-        is_indian = symbol.endswith((".NS", ".BO"))
-        if exchange == "IN":
-            if not is_indian:
+    if exchange == "IN":
+        # Keyed by base symbol (suffix stripped) so a dual-listed company
+        # collapses to one entry. Dict insertion order tracks first-seen
+        # relevance order from Yahoo; re-assigning an existing key's value
+        # (the NSE upgrade below) doesn't change its position.
+        by_symbol: dict[str, dict] = {}
+        for q in quotes:
+            symbol = q.get("symbol") or ""
+            if q.get("quoteType") not in _SEARCH_QUOTE_TYPES or not symbol:
                 continue
-            symbol = symbol[:-3]  # strip ".NS" or ".BO" — both 3 characters
-        elif is_indian:
-            continue  # "US" exchange — skip Indian-listed matches
-
-        if symbol in seen:
-            continue
-        seen.add(symbol)
-        results.append({
-            "symbol": symbol,
-            "name": q.get("shortname") or q.get("longname") or symbol,
-            "exchange": q.get("exchDisp") or q.get("exchange") or "",
-        })
-        if len(results) >= 8:
-            break
+            is_nse = symbol.endswith(".NS")
+            if not is_nse and not symbol.endswith(".BO"):
+                continue
+            base = symbol[:-3]  # strip ".NS" or ".BO" — both 3 characters
+            existing = by_symbol.get(base)
+            if existing is None or (is_nse and not existing["_nse"]):
+                by_symbol[base] = {
+                    "symbol": base,
+                    "name": q.get("shortname") or q.get("longname") or base,
+                    "exchange": q.get("exchDisp") or q.get("exchange") or "",
+                    "_nse": is_nse,
+                }
+        for entry in by_symbol.values():
+            results.append({"symbol": entry["symbol"], "name": entry["name"], "exchange": entry["exchange"]})
+            if len(results) >= 8:
+                break
+    else:
+        seen: set[str] = set()
+        for q in quotes:
+            symbol = q.get("symbol") or ""
+            if q.get("quoteType") not in _SEARCH_QUOTE_TYPES or not symbol or symbol.endswith((".NS", ".BO")):
+                continue  # "US" exchange — skip Indian-listed matches
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            results.append({
+                "symbol": symbol,
+                "name": q.get("shortname") or q.get("longname") or symbol,
+                "exchange": q.get("exchDisp") or q.get("exchange") or "",
+            })
+            if len(results) >= 8:
+                break
 
     search_cache.set(cache_key, results)
     return results

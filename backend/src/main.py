@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from auth import local_auth_enabled
 from database import init_db
-from routers import account, ai, fx, health, indicators, news, portfolio, stocks, watchlist
+from routers import account, ai, fx, health, indicators, news, portfolio, portfolios, stocks, watchlist
 from services.portfolio_service import repair_all_fifo, repair_stock_metadata
 
 
@@ -48,6 +48,7 @@ if _cors_origins:
 app.include_router(stocks.router)
 app.include_router(health.router)
 app.include_router(portfolio.router)
+app.include_router(portfolios.router)
 app.include_router(indicators.router)
 app.include_router(watchlist.router)
 app.include_router(news.router)

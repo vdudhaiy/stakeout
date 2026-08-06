@@ -8,13 +8,25 @@ accepted — see _COLUMN_ALIASES):
   number    share count (whole number)
   buy/sell  "buy" | "sell"
   price     price paid/received per share
+  portfolio optional — name of the portfolio the row belongs to, within that
+            row's market. Omit the column entirely and every row goes to its
+            market's default portfolio.
+
+Portfolio names are matched case-insensitively against portfolios the user
+has already created; this never creates one. Because a row that names a
+portfolio which doesn't exist cannot be filed anywhere sensible, portfolio
+problems are *blocking*: they stop the whole import with a per-row message
+(see _resolve_portfolios) rather than skipping the offending rows, and the
+user corrects the file and re-uploads. That is deliberately stricter than
+the per-row handling of every other kind of error.
 
 The header row is optional. _read_table looks at the first row: if it reads
 like column labels (see _looks_like_header), it's consumed as a header and
 columns are matched by name (any order). Otherwise every row — including
 the first — is treated as data, and columns are assigned by position in
 _DEFAULT_COLUMN_ORDER, so a header-less file must list exactly those six
-columns in that order.
+columns in that order — a header-less file therefore cannot use the portfolio
+column, and a stray seventh column is ignored as it always was.
 
 For .xlsx specifically, a file can have multiple sheets — export_service's
 own portfolio export does (a holdings summary before the transaction log) —
@@ -57,12 +69,13 @@ from decimal import Decimal, InvalidOperation
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from markets import apply_exchange
+from markets import apply_exchange, market_of
+from models.portfolio import portfolio_name_key
 from schemas.portfolio import (
-    BulkPurchaseLot, BulkSaleLot, ImportApplyRow, ImportPreviewResult, ImportPreviewRow, ImportRowResult,
-    PortfolioImportResult,
+    BulkPurchaseLot, BulkSaleLot, ImportApplyRow, ImportBlockingError, ImportPreviewResult, ImportPreviewRow,
+    ImportRowResult, PortfolioImportResult,
 )
-from . import portfolio_service
+from . import portfolio_admin_service, portfolio_service
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +92,7 @@ _COLUMN_ALIASES = {
     "number": "shares", "shares": "shares", "qty": "shares", "quantity": "shares",
     "buy/sell": "action", "action": "action", "type": "action", "side": "action",
     "price": "price", "rate": "price",
+    "portfolio": "portfolio", "portfolio name": "portfolio",
 }
 _REQUIRED_FIELDS = {"market", "ticker", "date", "shares", "action", "price"}
 # Positional fallback when the file has no header row — our internal field
@@ -233,6 +247,9 @@ def _parse_rows(df: pd.DataFrame, had_header: bool) -> list[dict]:
         action_raw = str(raw[column_for["action"]]).strip().upper()
         shares_raw = str(raw[column_for["shares"]]).strip()
         price_raw = str(raw[column_for["price"]]).strip()
+        portfolio_raw = (
+            str(raw[column_for["portfolio"]]).strip() if "portfolio" in column_for else None
+        )
 
         if not any((market_raw, ticker_raw, date_raw, action_raw, shares_raw, price_raw)):
             continue  # a fully blank row (e.g. a trailing line) — not a data row at all
@@ -284,41 +301,128 @@ def _parse_rows(df: pd.DataFrame, had_header: bool) -> list[dict]:
             "error": "; ".join(errors) if errors else None,
             "duplicate": False,
             "duplicate_reason": None,
+            # None means the file had no portfolio column at all — distinct
+            # from "" (a blank cell in a file that does), which is an error.
+            "portfolio_label": portfolio_raw,
+            "portfolio_id": None,
         })
     return rows
 
 
-async def _flag_duplicates(session: AsyncSession, user_id: str, rows: list[dict]) -> None:
+async def _resolve_portfolios(
+    session: AsyncSession, user_id: str, rows: list[dict],
+) -> list[ImportBlockingError]:
+    """Assign each row a portfolio_id, or report why the file can't be imported.
+
+    With no portfolio column, every row goes to its market's default. With
+    one, names are matched case-insensitively within the row's own market and
+    must already exist — see the module docstring for why these errors block
+    the whole file instead of skipping rows.
+    """
+    has_column = any(r["portfolio_label"] is not None for r in rows)
+
+    defaults: dict[str, int] = {}
+
+    async def default_for(market: str) -> int:
+        if market not in defaults:
+            defaults[market] = (await portfolio_admin_service.ensure_default(session, user_id, market)).id
+        return defaults[market]
+
+    if not has_column:
+        for r in rows:
+            if r["valid"]:
+                r["portfolio_id"] = await default_for(market_of(r["ticker"]))
+        return []
+
+    owned = await portfolio_admin_service.list_for_user(session, user_id)
+    by_market_name: dict[tuple[str, str], int] = {(p.market, p.name_key): p.id for p in owned}
+    names_by_market: dict[str, list[str]] = {}
+    for p in owned:
+        names_by_market.setdefault(p.market, []).append(p.name)
+
+    errors: list[ImportBlockingError] = []
+    for r in rows:
+        if not r["valid"]:
+            continue  # already failing for another reason; don't pile on
+        market = market_of(r["ticker"])
+        label = (r["portfolio_label"] or "").strip()
+
+        if not label:
+            errors.append(ImportBlockingError(
+                row=r["row_num"],
+                message=(
+                    "Portfolio is blank. Other rows name one, so this row is ambiguous — "
+                    "give it a portfolio name, or remove the column entirely to send "
+                    "everything to your default portfolios."
+                ),
+            ))
+            continue
+
+        key = portfolio_name_key(label)
+        found = by_market_name.get((market, key))
+        if found is not None:
+            r["portfolio_id"] = found
+            continue
+
+        # Naming a portfolio from the other market is the likeliest mistake,
+        # so say that rather than "no such portfolio".
+        other = next((m for m in names_by_market if m != market and (m, key) in by_market_name), None)
+        if other is not None:
+            errors.append(ImportBlockingError(
+                row=r["row_num"],
+                message=(
+                    f"'{label}' is a {other} portfolio, but this row's market is "
+                    f"{r['market_label'] or market}."
+                ),
+            ))
+        else:
+            available = ", ".join(sorted(names_by_market.get(market, []))) or "none yet"
+            errors.append(ImportBlockingError(
+                row=r["row_num"],
+                message=(
+                    f"No portfolio named '{label}' in your {market} portfolios "
+                    f"(you have: {available}). Create it first, then re-upload."
+                ),
+            ))
+
+    return errors
+
+
+async def _flag_duplicates(session: AsyncSession, rows: list[dict]) -> None:
     """Mutates each valid row in place: sets duplicate/duplicate_reason for
     anything that exactly matches (date, action, shares, price) against
     either an existing transaction already recorded for that ticker, or an
     earlier row for the same ticker in this same file.
-    """
-    valid_rows = [r for r in rows if r["valid"]]
-    tickers = sorted({r["ticker"] for r in valid_rows})
 
-    existing_by_ticker: dict[str, set[tuple]] = {}
-    for ticker in tickers:
-        txns = await portfolio_service.get_holding_transactions(session, user_id, ticker)
-        existing_by_ticker[ticker] = {
+    Scoped per (portfolio, ticker): the same stock held in two portfolios has
+    two separate transaction logs, so a row destined for one of them is not a
+    duplicate of an identical transaction sitting in the other.
+    """
+    valid_rows = [r for r in rows if r["valid"] and r["portfolio_id"] is not None]
+    keys = sorted({(r["portfolio_id"], r["ticker"]) for r in valid_rows})
+
+    existing: dict[tuple[int, str], set[tuple]] = {}
+    for portfolio_id, ticker in keys:
+        txns = await portfolio_service.get_holding_transactions(session, portfolio_id, ticker)
+        existing[(portfolio_id, ticker)] = {
             (t.date, "sell" if t.sale else "buy", t.shares, Decimal(t.sold_at if t.sale else t.bought_at))
             for t in txns
         }
 
-    seen_in_file: dict[str, dict[tuple, int]] = {}  # ticker -> {signature: first row_num it appeared on}
+    seen_in_file: dict[tuple[int, str], dict[tuple, int]] = {}  # -> {signature: first row_num}
     for r in valid_rows:
-        ticker = r["ticker"]
+        key = (r["portfolio_id"], r["ticker"])
         sig = (r["date"], r["action"], r["shares"], r["price"])
 
-        if sig in existing_by_ticker.get(ticker, ()):
+        if sig in existing.get(key, ()):
             r["duplicate"] = True
             r["duplicate_reason"] = (
-                f"Matches a transaction you already have — {r['action']} {r['shares']} {ticker} "
+                f"Matches a transaction you already have — {r['action']} {r['shares']} {r['ticker']} "
                 f"@ {r['price']} on {r['date']}."
             )
             continue
 
-        file_sigs = seen_in_file.setdefault(ticker, {})
+        file_sigs = seen_in_file.setdefault(key, {})
         if sig in file_sigs:
             r["duplicate"] = True
             r["duplicate_reason"] = f"Duplicate of row {file_sigs[sig]} in this file."
@@ -331,6 +435,7 @@ def _to_preview_row(r: dict) -> ImportPreviewRow:
         row=r["row_num"], market=r["market_label"], ticker=r["ticker"], date=r["date"],
         action=r["action"], shares=r["shares"], price=r["price"], valid=r["valid"],
         error=r["error"], duplicate=r["duplicate"], duplicate_reason=r["duplicate_reason"],
+        portfolio=r["portfolio_label"], portfolio_id=r["portfolio_id"],
     )
 
 
@@ -339,17 +444,25 @@ async def preview_import(
 ) -> ImportPreviewResult:
     df, had_header = _read_table(filename, content)
     rows = _parse_rows(df, had_header)
-    await _flag_duplicates(session, user_id, rows)
+    blocking = await _resolve_portfolios(session, user_id, rows)
+    # Skip the duplicate scan when the file is already unusable — the rows
+    # would be checked against the wrong portfolios anyway.
+    if not blocking:
+        await _flag_duplicates(session, rows)
     return ImportPreviewResult(
         total_rows=len(rows),
         rows=[_to_preview_row(r) for r in rows],
+        blocking_errors=blocking,
     )
 
 
 async def _apply_rows(session: AsyncSession, user_id: str, rows: list[dict]) -> list[ImportRowResult]:
-    by_ticker: dict[str, list[dict]] = {}
+    # Grouped per (portfolio, ticker), not per ticker: the same stock bought
+    # into two portfolios is two independent positions and must be applied as
+    # two separate bulk writes.
+    by_position: dict[tuple[int, str], list[dict]] = {}
     for r in rows:
-        by_ticker.setdefault(r["ticker"], []).append(r)
+        by_position.setdefault((r["portfolio_id"], r["ticker"]), []).append(r)
 
     def _result(r: dict, status: str, error: str | None = None) -> ImportRowResult:
         return ImportRowResult(
@@ -358,14 +471,14 @@ async def _apply_rows(session: AsyncSession, user_id: str, rows: list[dict]) -> 
         )
 
     results: list[ImportRowResult] = []
-    for ticker, ticker_rows in by_ticker.items():
-        buys = [r for r in ticker_rows if r["action"] == "buy"]
-        sells = [r for r in ticker_rows if r["action"] == "sell"]
+    for (portfolio_id, ticker), position_rows in by_position.items():
+        buys = [r for r in position_rows if r["action"] == "buy"]
+        sells = [r for r in position_rows if r["action"] == "sell"]
 
         if buys:
             try:
                 await portfolio_service.add_stock_purchases_bulk(
-                    session, user_id, ticker,
+                    session, user_id, portfolio_id, ticker,
                     [BulkPurchaseLot(shares=r["shares"], bought_at=r["price"], date=r["date"]) for r in buys],
                 )
                 results.extend(_result(r, "imported") for r in buys)
@@ -376,7 +489,7 @@ async def _apply_rows(session: AsyncSession, user_id: str, rows: list[dict]) -> 
         if sells:
             try:
                 await portfolio_service.sell_stock_shares_bulk(
-                    session, user_id, ticker,
+                    session, user_id, portfolio_id, ticker,
                     [BulkSaleLot(shares=r["shares"], sold_at=r["price"], date=r["date"]) for r in sells],
                 )
                 results.extend(_result(r, "imported") for r in sells)
@@ -394,9 +507,20 @@ async def apply_import(
         {
             "row_num": r.row, "market_label": r.market, "ticker": r.ticker,
             "action": r.action, "shares": r.shares, "price": r.price, "date": r.date,
+            "portfolio_label": r.portfolio, "portfolio_id": None, "valid": True,
         }
         for r in apply_rows if r.include
     ]
+    # Names are re-resolved here rather than trusting anything the client
+    # echoed back — the preview's decisions are advisory, and a request that
+    # names a portfolio the caller doesn't own must fail, not misfile rows.
+    blocking = await _resolve_portfolios(session, user_id, included)
+    if blocking:
+        raise ValueError(
+            "This file can't be imported yet:\n"
+            + "\n".join(f"Row {e.row}: {e.message}" for e in blocking)
+        )
+
     applied = await _apply_rows(session, user_id, included)
     skipped = [
         ImportRowResult(

@@ -85,6 +85,39 @@ async def init_db() -> None:
                     WHERE ticker LIKE '%.NS' OR ticker LIKE '%.BO'"""
             ))
 
+        if "portfolio_id" not in holdings_cols:
+            # Mirrors alembic 009. Two SQLite-only caveats, both dev-path only
+            # (deployments are Postgres and go through Alembic):
+            #  - the column stays nullable; SQLite can't add a NOT NULL column
+            #    with no default to a populated table. Harmless — the model
+            #    declares it NOT NULL and create_all gets fresh DBs right.
+            #  - the old uq_holdings_user_ticker index can't be dropped without
+            #    rebuilding the table, so an existing portfolio.db will still
+            #    refuse the same ticker in two portfolios. Delete portfolio.db
+            #    (or run against Postgres) to exercise that locally.
+            await conn.execute(text("ALTER TABLE holdings ADD COLUMN portfolio_id INTEGER"))
+            await conn.execute(text(
+                """INSERT INTO portfolios (user_id, market, name, name_key, created_at)
+                   SELECT DISTINCT user_id, market, 'main', 'main',
+                          strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+                     FROM holdings"""
+            ))
+            await conn.execute(text(
+                """UPDATE holdings SET portfolio_id = (
+                       SELECT p.id FROM portfolios p
+                        WHERE p.user_id = holdings.user_id
+                          AND p.market = holdings.market
+                          AND p.name_key = 'main'
+                   )"""
+            ))
+
+        result = await conn.execute(text("PRAGMA table_info(audit_log)"))
+        audit_cols = {row[1] for row in result.fetchall()}
+        if audit_cols and "portfolio_id" not in audit_cols:
+            # NULL means "written before portfolios existed" — undo falls back
+            # to the market's default, where the backfill above put everything.
+            await conn.execute(text("ALTER TABLE audit_log ADD COLUMN portfolio_id INTEGER"))
+
         result = await conn.execute(text("PRAGMA table_info(transactions)"))
         txn_cols = {row[1] for row in result.fetchall()}
         if "shares_remaining" not in txn_cols:

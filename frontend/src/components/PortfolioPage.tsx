@@ -7,14 +7,20 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { PieChart, Pie, Cell, Tooltip as ChartTooltip, ResponsiveContainer } from 'recharts'
-import type { BuyLot, ClassificationMap, DividendEntry, ImportApplyRow, ImportPreviewRow, ImportRowResult, Market, PortfolioImportResult, PortfolioResponse, SellLot, StockHolding, StockPurchaseHistory } from '../types'
+import type { BuyLot, ClassificationMap, DividendEntry, ImportApplyRow, ImportBlockingError, ImportPreviewRow, ImportRowResult, Market, PortfolioImportResult, PortfolioResponse, PortfolioStats, SellLot, StockHolding, StockPurchaseHistory } from '../types'
 import {
   fetchPortfolio, fetchClassification, logBuyBulk, logSellBulk, deletePortfolioHolding, deleteTransaction, downloadPortfolio,
   previewPortfolioImport, applyPortfolioImport, syncDividends, addDividend, updateDividend, deleteDividend,
+  createPortfolio, renamePortfolio, deletePortfolio,
 } from '../api'
+import { PortfolioTabs } from './portfolio/PortfolioTabs'
+import { CombinedStatsBar } from './portfolio/CombinedStatsBar'
+import { PortfolioNameModal } from './portfolio/PortfolioNameModal'
+import { DeletePortfolioModal } from './portfolio/DeletePortfolioModal'
+import { isGuestModeActive } from '../lib/guestMode'
 import { usePrefs } from '../contexts/PrefsContext'
 import { CURRENCY_SYMBOL, formatMoney, type Currency } from '../utils/currency'
-import { marketOf, currencyOfExchange, type Exchange } from '../utils/market'
+import { marketOf, currencyOfExchange, displayTicker, type Exchange } from '../utils/market'
 import { ExchangeSelect } from './ExchangeSelect'
 import { TickerAutocomplete } from './TickerAutocomplete'
 import { InfoTip } from './InfoTip'
@@ -900,6 +906,10 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
   const [loading, setLoading] = useState(false)   // preview fetch in flight
   const [applying, setApplying] = useState(false)  // apply call in flight
   const [error, setError] = useState<string | null>(null)
+  // Portfolio-name problems stop the whole file rather than skipping rows —
+  // a transaction that can't be filed where the user said must not be
+  // quietly filed elsewhere. The user fixes the file and re-uploads.
+  const [blocking, setBlocking] = useState<ImportBlockingError[]>([])
 
   const [previewRows, setPreviewRows] = useState<ImportPreviewRow[] | null>(null)
   // row -> include decision. Non-duplicate valid rows are seeded true;
@@ -926,6 +936,9 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
         .map(r => ({
           row: r.row, market: r.market, ticker: r.ticker, date: r.date,
           action: r.action as 'buy' | 'sell', shares: r.shares, price: r.price,
+          // Name, not id — the server re-resolves it against the caller's own
+          // portfolios, so this can't redirect rows anywhere they don't own.
+          portfolio: r.portfolio,
           include: finalDecisions.get(r.row) ?? false,
         }))
       const applyResult = await applyPortfolioImport(applyRows)
@@ -958,8 +971,13 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
     if (!file) return
     setLoading(true)
     setError(null)
+    setBlocking([])
     try {
       const preview = await previewPortfolioImport(file)
+      if (preview.blocking_errors.length > 0) {
+        setBlocking(preview.blocking_errors)
+        return
+      }
       const initial = new Map<number, boolean>()
       for (const r of preview.rows) {
         if (r.valid && !r.duplicate) initial.set(r.row, true)  // auto-include non-duplicates
@@ -1071,6 +1089,42 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
             <RefreshCw size={20} className="text-indigo-400 animate-spin" />
             <p className="text-xs text-zinc-500">Importing…</p>
           </div>
+        ) : blocking.length > 0 ? (
+          <div className="space-y-3 mt-4">
+            <div className="flex items-start gap-3 bg-amber-500/8 border border-amber-500/25 rounded-xl px-4 py-3">
+              <AlertTriangle size={15} className="text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-amber-400">
+                  Nothing was imported
+                </p>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  {blocking.length} row{blocking.length !== 1 ? 's' : ''} name a portfolio
+                  that couldn't be matched. Fix the file and upload it again — importing
+                  the rest would file those transactions in the wrong place.
+                </p>
+              </div>
+            </div>
+
+            <div className="border border-zinc-800 rounded-lg overflow-hidden">
+              <div className="max-h-56 overflow-y-auto divide-y divide-zinc-800/60">
+                {blocking.map(e => (
+                  <div key={e.row} className="px-3 py-2 text-xs">
+                    <span className="text-zinc-500 font-mono whitespace-nowrap">
+                      {e.row > 0 ? `Row ${e.row}` : 'File'}
+                    </span>
+                    <p className="text-amber-300/90 mt-0.5 leading-relaxed">{e.message}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={() => { setBlocking([]); setFile(null) }}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold transition-colors bg-zinc-800 hover:bg-zinc-700 text-zinc-200"
+            >
+              Choose another file
+            </button>
+          </div>
         ) : reviewingRow ? (
           <div className="space-y-4 mt-4">
             <div className="flex items-center justify-between">
@@ -1141,9 +1195,15 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
                 <li><span className="text-zinc-400 font-mono">number</span> — share count</li>
                 <li><span className="text-zinc-400 font-mono">buy/sell</span> — transaction type</li>
                 <li><span className="text-zinc-400 font-mono">price</span> — price per share</li>
+                <li>
+                  <span className="text-zinc-400 font-mono">portfolio</span> — optional; the
+                  portfolio's name, which must already exist in that market. Leave the
+                  column out to send everything to your default portfolios.
+                </li>
               </ul>
               <p className="mt-2 text-zinc-600">
-                A header row is optional — without one, columns must be in exactly this order.
+                A header row is optional — without one, columns must be in exactly the first
+                six positions above, and the portfolio column can't be used.
               </p>
               <p className="mt-1.5 text-zinc-600">
                 Uploading the same rows again is safe — exact duplicates (same ticker, date, action,
@@ -1405,16 +1465,16 @@ function HoldingRow({
               'px-2 py-1 rounded-md text-[0.6875rem] font-bold font-mono shrink-0 whitespace-nowrap',
               !hasPrice ? 'bg-zinc-700/30 text-zinc-400' : pl! >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400',
             )}>
-              {holding.ticker}
+              {displayTicker(holding.ticker)}
             </span>
             <div
               className="min-w-0"
-              title={holding.company_name ? `${holding.company_name} (${holding.ticker})` : holding.ticker}
+              title={holding.company_name ? `${holding.company_name} (${displayTicker(holding.ticker)})` : displayTicker(holding.ticker)}
             >
               <div className="text-sm font-medium text-zinc-100 truncate">
                 {holding.company_name
-                  ? <>{holding.company_name} <span className="text-zinc-500 font-normal text-xs">({holding.ticker})</span></>
-                  : holding.ticker}
+                  ? <>{holding.company_name} <span className="text-zinc-500 font-normal text-xs">({displayTicker(holding.ticker)})</span></>
+                  : displayTicker(holding.ticker)}
               </div>
               {holding.sold_shares > 0 && (
                 <div className="text-[0.625rem] text-zinc-600 leading-none mt-0.5">
@@ -1428,8 +1488,8 @@ function HoldingRow({
           <div className="flex items-center justify-center shrink-0 lg:order-8">
             <button
               onClick={e => { e.stopPropagation(); onViewTicker() }}
-              title={`View ${holding.ticker} on the tracker`}
-              aria-label={`View ${holding.ticker} on the tracker`}
+              title={`View ${displayTicker(holding.ticker)} on the tracker`}
+              aria-label={`View ${displayTicker(holding.ticker)} on the tracker`}
               className="tap-target p-2 lg:p-1 text-zinc-600 hover:text-indigo-400 hover:bg-indigo-500/10 rounded transition-colors"
             >
               <BarChart2 size={13} />
@@ -1629,6 +1689,15 @@ export function PortfolioPage({
   const [dividendDeleteLoading, setDividendDeleteLoading] = useState(false)
   const [dividendDeleteError, setDividendDeleteError] = useState<string | null>(null)
 
+  // Which portfolio tab is open, remembered per market so switching US <-> India
+  // and back returns you where you were. Persisted ids are validated against the
+  // fetched list below — a portfolio can be deleted, or belong to another account.
+  const [activeUs, setActiveUs] = usePersistedState<number | null>('active-portfolio-US', null)
+  const [activeIn, setActiveIn] = usePersistedState<number | null>('active-portfolio-IN', null)
+  const [nameModal, setNameModal] = useState<{ mode: 'create' | 'rename'; portfolio?: PortfolioStats } | null>(null)
+  const [portfolioDeleteTarget, setPortfolioDeleteTarget] = useState<PortfolioStats | null>(null)
+  const isGuest = isGuestModeActive()
+
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false
     // The background poll (PORTFOLIO_REFRESH_MS) fetches quietly — no skeleton,
@@ -1671,13 +1740,13 @@ export function PortfolioPage({
   }, [load])
 
   async function submitBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange) {
-    await logBuyBulk(ticker, lots, exchange)
+    await logBuyBulk(ticker, lots, exchange, activeId)
     await load()
     onTickerAdded?.()
   }
 
   async function submitSellBulk(ticker: string, lots: SellLot[]) {
-    await logSellBulk(ticker, lots)
+    await logSellBulk(ticker, lots, activeId)
     await load()
   }
 
@@ -1689,7 +1758,7 @@ export function PortfolioPage({
   async function handleSyncDividends(ticker: string) {
     setSyncingTicker(ticker)
     try {
-      await syncDividends(ticker)
+      await syncDividends(ticker, activeId)
       await load()
     } catch {
       // Best-effort — the "Sync" button just stays available to retry.
@@ -1701,9 +1770,9 @@ export function PortfolioPage({
   async function submitDividend(date: string, amountPerShare: number, sharesHeld?: number) {
     if (!dividendModal) return
     if (dividendModal.mode === 'edit' && dividendModal.entry) {
-      await updateDividend(dividendModal.ticker, dividendModal.entry.id, { date, amountPerShare, sharesHeld })
+      await updateDividend(dividendModal.ticker, dividendModal.entry.id, { date, amountPerShare, sharesHeld }, activeId)
     } else {
-      await addDividend(dividendModal.ticker, date, amountPerShare, sharesHeld)
+      await addDividend(dividendModal.ticker, date, amountPerShare, sharesHeld, activeId)
     }
     await load()
   }
@@ -1718,7 +1787,7 @@ export function PortfolioPage({
     setDividendDeleteLoading(true)
     setDividendDeleteError(null)
     try {
-      await deleteDividend(dividendDeleteTarget.ticker, dividendDeleteTarget.id)
+      await deleteDividend(dividendDeleteTarget.ticker, dividendDeleteTarget.id, activeId)
       setDividendDeleteTarget(null)
       await load()
     } catch (e) {
@@ -1735,7 +1804,7 @@ export function PortfolioPage({
     try {
       const removedTicker = txnDeleteTarget.ticker
       const wasLast = txnDeleteTarget.isLast
-      await deleteTransaction(removedTicker, txnDeleteTarget.txnId)
+      await deleteTransaction(removedTicker, txnDeleteTarget.txnId, activeId)
       if (wasLast && expanded === removedTicker) setExpanded(null)
       setTxnDeleteTarget(null)
       await load()
@@ -1752,7 +1821,7 @@ export function PortfolioPage({
     setDeleteLoading(true)
     const removedTicker = deleteTarget
     try {
-      await deletePortfolioHolding(removedTicker)
+      await deletePortfolioHolding(removedTicker, activeId)
       if (expanded === removedTicker) setExpanded(null)
       setDeleteTarget(null)
       await load()
@@ -1764,11 +1833,49 @@ export function PortfolioPage({
     }
   }
 
+  const portfolios = portfolio?.portfolios ?? []
+  const storedActive = tab === 'IN' ? activeIn : activeUs
+  const setStoredActive = tab === 'IN' ? setActiveIn : setActiveUs
+  // Fall back to the first tab whenever the remembered id isn't in this
+  // market's list — covers a deleted portfolio, a different account, and the
+  // very first visit.
+  const activePortfolio = portfolios.find(p => p.id === storedActive) ?? portfolios[0] ?? null
+  const activeId = activePortfolio?.id ?? null
+
+  // One fetch covers the whole market; the tabs are a client-side filter over
+  // it, so switching tabs is instant and never refetches.
+  const allHoldings = portfolio?.holdings ?? []
+  const scoped = activeId == null ? allHoldings : allHoldings.filter(h => h.portfolio_id === activeId)
+
   // Always alphabetical by ticker, regardless of the order the API returns —
   // makes a given position easy to find without depending on backend order.
-  const holdings  = [...(portfolio?.holdings ?? [])].sort((a, b) => a.ticker.localeCompare(b.ticker))
-  const netPl     = portfolio?.net_profit_loss ?? 0
-  const totalRet  = portfolio?.total_return ?? 0
+  const holdings  = [...scoped].sort((a, b) => a.ticker.localeCompare(b.ticker))
+  const netPl     = activePortfolio?.net_profit_loss ?? 0
+  const totalRet  = activePortfolio?.total_return ?? 0
+  const showCombined = portfolios.length > 1
+
+  async function handleCreatePortfolio(name: string) {
+    const created = await createPortfolio(tab, name)
+    setStoredActive(created.id)
+    await load()
+  }
+
+  async function handleRenamePortfolio(name: string) {
+    if (!nameModal?.portfolio) return
+    await renamePortfolio(nameModal.portfolio.id, name)
+    await load()
+  }
+
+  async function handleDeletePortfolio() {
+    if (!portfolioDeleteTarget) return
+    await deletePortfolio(portfolioDeleteTarget.id)
+    // Let the fallback above pick the next tab rather than guessing here.
+    // The watchlist is per-user and untouched by this, so the dashboard's
+    // ticker list needs no refresh.
+    setStoredActive(null)
+    setExpanded(null)
+    await load()
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-w-0">
@@ -1874,38 +1981,56 @@ export function PortfolioPage({
           </div>
         ) : portfolio && (
           <>
-            {/* ── Summary stats ──────────────────────────────────────── */}
+            {/* ── Combined totals across the market's portfolios ──────── */}
+            {/* Only meaningful with more than one — otherwise it would just
+                repeat the single portfolio's own stats row below it. */}
+            {showCombined && (
+              <CombinedStatsBar portfolio={portfolio} money={money} count={portfolios.length} />
+            )}
+
+            {/* ── Portfolio tabs ─────────────────────────────────────── */}
+            <PortfolioTabs
+              portfolios={portfolios}
+              activeId={activeId}
+              onSelect={setStoredActive}
+              onCreate={() => setNameModal({ mode: 'create' })}
+              onRename={p => setNameModal({ mode: 'rename', portfolio: p })}
+              onDelete={setPortfolioDeleteTarget}
+              disabledReason={isGuest ? 'Sign in to create more portfolios' : undefined}
+            />
+
+            {/* ── Summary stats for the open portfolio ───────────────── */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               <StatCard
                 label="PORTFOLIO VALUE"
                 tip="portfolio_value"
-                value={money(portfolio.portfolio_value)}
+                value={money(activePortfolio?.portfolio_value ?? 0)}
                 accent
               />
               <StatCard
                 label="COST BASIS"
                 tip="total_invested"
-                value={money(portfolio.total_invested)}
+                value={money(activePortfolio?.total_invested ?? 0)}
               />
               <StatCard
                 label="UNREALIZED RETURN"
                 tip="total_return"
                 value={money(totalRet, { sign: true })}
                 valueColor={gainText(totalRet)}
-                sub={fmtPct(portfolio.return_percentage)}
+                sub={fmtPct(activePortfolio?.return_percentage ?? 0)}
                 subColor={gainText(totalRet)}
               />
               <StatCard
                 label="REALIZED GAINS"
                 tip="realized_gains"
-                value={money(portfolio.realized_gains)}
-                valueColor={portfolio.realized_gains > 0 ? gainText(1) : undefined}
+                value={money(activePortfolio?.realized_gains ?? 0)}
+                valueColor={(activePortfolio?.realized_gains ?? 0) > 0 ? gainText(1) : undefined}
               />
               <StatCard
                 label="DIVIDENDS"
                 tip="dividends"
-                value={money(portfolio.total_dividends)}
-                valueColor={portfolio.total_dividends > 0 ? gainText(1) : undefined}
+                value={money(activePortfolio?.total_dividends ?? 0)}
+                valueColor={(activePortfolio?.total_dividends ?? 0) > 0 ? gainText(1) : undefined}
               />
               <StatCard
                 label="NET P&L"
@@ -1968,7 +2093,7 @@ export function PortfolioPage({
                 {/* Table footer */}
                 <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-2.5 border-t border-zinc-800 bg-zinc-950/40">
                   <span className="text-[0.625rem] text-zinc-600">
-                    {holdings.length} position{holdings.length !== 1 ? 's' : ''} · {portfolio.total_shares} shares held
+                    {holdings.length} position{holdings.length !== 1 ? 's' : ''} · {activePortfolio?.total_shares ?? 0} shares held
                   </span>
                   <span className={clsx('text-xs font-mono font-semibold', gainText(netPl))}>
                     Net {money(netPl, { sign: true })}
@@ -1981,6 +2106,32 @@ export function PortfolioPage({
       </div>
 
       {/* ── Modals ───────────────────────────────────────────────────────── */}
+
+      <AnimatePresence>
+        {nameModal && (
+          <PortfolioNameModal
+            key="portfolio-name"
+            mode={nameModal.mode}
+            market={tab}
+            initialName={nameModal.portfolio?.name ?? ''}
+            onClose={() => setNameModal(null)}
+            onSubmit={nameModal.mode === 'create' ? handleCreatePortfolio : handleRenamePortfolio}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {portfolioDeleteTarget && (
+          <DeletePortfolioModal
+            key="portfolio-delete"
+            portfolio={portfolioDeleteTarget}
+            holdings={allHoldings.filter(h => h.portfolio_id === portfolioDeleteTarget.id)}
+            money={money}
+            onClose={() => setPortfolioDeleteTarget(null)}
+            onConfirm={handleDeletePortfolio}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {addOpen && (

@@ -11,21 +11,66 @@ from database import Base
 Money = Numeric(20, 8)
 
 
-class Holding(Base):
-    """One row per (user, ticker) the user has ever bought.
+def portfolio_name_key(name: str) -> str:
+    """Normalized form of a portfolio name, used for uniqueness and for
+    matching names typed into an import file. Trimmed and case-folded, so
+    "Zerodha", "zerodha " and "ZERODHA" are all the same portfolio."""
+    return name.strip().casefold()
 
-    ``market`` is derived from the ticker suffix at creation time (``.NS`` /
-    ``.BO`` -> IN, otherwise US) and is what the portfolio market switcher
-    filters on. Monetary columns are stored in the asset's *native* currency
-    (USD for US stocks, INR for Indian stocks); display conversion happens
-    client-side against the /fx rate.
+
+class Portfolio(Base):
+    """A named portfolio holding positions for one market.
+
+    A user has one per (market, name) — e.g. a "main" and a "Zerodha" on the
+    Indian side. Each is an independent FIFO universe: the same ticker held in
+    two portfolios has two separate lot queues, which is the entire point (a
+    sale from one broker must not consume another broker's oldest lot).
+
+    Tabs are ordered by ``id``, i.e. creation order, and the first one is the
+    market's default — the one used when no portfolio is named explicitly
+    (fresh accounts, imports without a portfolio column, legacy audit rows).
+    Deleting the first portfolio promotes the next one automatically.
     """
 
-    __tablename__ = "holdings"
-    __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_holdings_user_ticker"),)
+    __tablename__ = "portfolios"
+    __table_args__ = (
+        UniqueConstraint("user_id", "market", "name_key", name="uq_portfolios_user_market_name"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(String, default="local", index=True)
+    market: Mapped[str] = mapped_column(String, default="US", index=True)  # "US" | "IN"
+    name: Mapped[str] = mapped_column(String)       # as typed by the user
+    name_key: Mapped[str] = mapped_column(String)   # portfolio_name_key(name)
+    created_at: Mapped[str] = mapped_column(String)  # ISO-8601 UTC timestamp
+
+    holdings: Mapped[list["Holding"]] = relationship(
+        back_populates="portfolio",
+        cascade="all, delete-orphan",
+        order_by="Holding.ticker",
+    )
+
+
+class Holding(Base):
+    """One row per (portfolio, ticker) the user has ever bought.
+
+    ``market`` is derived from the ticker suffix at creation time (``.NS`` /
+    ``.BO`` -> IN, otherwise US) and is what the portfolio market switcher
+    filters on; it always matches the owning portfolio's market. Monetary
+    columns are stored in the asset's *native* currency (USD for US stocks,
+    INR for Indian stocks); display conversion happens client-side against the
+    /fx rate.
+
+    ``user_id`` is kept denormalized alongside ``portfolio_id`` so account
+    deletion and the startup repair jobs can filter by user without a join.
+    """
+
+    __tablename__ = "holdings"
+    __table_args__ = (UniqueConstraint("portfolio_id", "ticker", name="uq_holdings_portfolio_ticker"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, default="local", index=True)
+    portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id"), index=True)
     ticker: Mapped[str] = mapped_column(String, index=True)
     market: Mapped[str] = mapped_column(String, default="US", index=True)  # "US" | "IN"
     company_name: Mapped[str] = mapped_column(String, default="")    # display name fetched once on first buy
@@ -33,6 +78,7 @@ class Holding(Base):
     sold_shares: Mapped[int] = mapped_column(Integer, default=0)     # total shares ever sold
     average_cost: Mapped[Decimal] = mapped_column(Money, default=Decimal(0))  # weighted avg cost of held shares
 
+    portfolio: Mapped["Portfolio"] = relationship(back_populates="holdings")
     transactions: Mapped[list["Transaction"]] = relationship(
         back_populates="holding",
         cascade="all, delete-orphan",
@@ -51,7 +97,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    holding_id: Mapped[int] = mapped_column(ForeignKey("holdings.id"))
+    holding_id: Mapped[int] = mapped_column(ForeignKey("holdings.id"), index=True)
     sale: Mapped[bool] = mapped_column(Boolean, default=False)  # False = buy, True = sell
     date: Mapped[str] = mapped_column(String)                   # ISO-8601 date string, e.g. "2024-03-15"
     shares: Mapped[int] = mapped_column(Integer)
@@ -104,12 +150,17 @@ class AuditEntry(Base):
         `holding` is set only when the holding itself was deleted (either
         directly, or because this removed its last remaining transaction) —
         undo needs its metadata to recreate the row.
+
+    `portfolio_id` is NULL only on rows written before multiple portfolios
+    existed; undo resolves those against the market's default portfolio, which
+    is exactly where the migration put every pre-existing holding.
     """
 
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(String, index=True)
+    portfolio_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     ticker: Mapped[str] = mapped_column(String, index=True)
     action: Mapped[str] = mapped_column(String)  # "insert" | "delete"
     payload: Mapped[dict] = mapped_column(JSON)

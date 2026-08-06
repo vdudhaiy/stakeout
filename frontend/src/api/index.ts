@@ -1,4 +1,4 @@
-import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot, ImportPreviewResult, ImportApplyRow, PortfolioImportResult } from '../types'
+import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, PortfolioMeta, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot, ImportPreviewResult, ImportApplyRow, PortfolioImportResult } from '../types'
 import type { Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
@@ -133,6 +133,9 @@ export async function fetchStockDashboard(ticker: string, days: number): Promise
   return res.json()
 }
 
+// One fetch per market covers every portfolio in it: the top-level figures
+// are the combined totals, `portfolios` drives the tabs, and `holdings` is
+// filtered client-side per tab — so switching tabs never refetches.
 export async function fetchPortfolio(market?: 'US' | 'IN'): Promise<PortfolioResponse> {
   if (isGuestMode()) return guestPortfolio.getPortfolio(market as Market | undefined)
   const res = await apiFetch(`/portfolio/${market ? `?market=${market}` : ''}`)
@@ -141,6 +144,65 @@ export async function fetchPortfolio(market?: 'US' | 'IN'): Promise<PortfolioRes
     throw new Error(err.detail ?? 'Failed to load portfolio')
   }
   return res.json()
+}
+
+// ── Portfolios (the containers, not their contents) ───────────────────────
+// Guest mode has exactly one implicit portfolio per market and no way to
+// manage them — the tab bar hides itself at length 1, and create/rename/
+// delete are gated behind signing in.
+
+export async function fetchPortfolios(market?: Market): Promise<PortfolioMeta[]> {
+  if (isGuestMode()) return []
+  const res = await apiFetch(`/portfolios/${market ? `?market=${market}` : ''}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to load portfolios')
+  }
+  return res.json()
+}
+
+export async function createPortfolio(market: Market, name: string): Promise<PortfolioMeta> {
+  if (isGuestMode()) throw new Error('Sign in to create more portfolios.')
+  const res = await apiFetch('/portfolios/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ market, name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to create portfolio')
+  }
+  return res.json()
+}
+
+export async function renamePortfolio(portfolioId: number, name: string): Promise<PortfolioMeta> {
+  if (isGuestMode()) throw new Error('Sign in to manage portfolios.')
+  const res = await apiFetch(`/portfolios/${portfolioId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to rename portfolio')
+  }
+  return res.json()
+}
+
+export async function deletePortfolio(portfolioId: number): Promise<void> {
+  if (isGuestMode()) throw new Error('Sign in to manage portfolios.')
+  const res = await apiFetch(`/portfolios/${portfolioId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to delete portfolio')
+  }
+}
+
+// Appended to every request that reads or writes inside one portfolio.
+// Omitted in guest mode and whenever no tab is selected yet, where the
+// backend falls back to the market's default.
+function pq(portfolioId?: number | null, leading: '?' | '&' = '?'): string {
+  return portfolioId == null ? '' : `${leading}portfolio_id=${portfolioId}`
 }
 
 export async function logBuy(ticker: string, shares: number, bought_at: number, date: string, exchange?: Exchange): Promise<StockHolding> {
@@ -157,11 +219,11 @@ export async function logBuy(ticker: string, shares: number, bought_at: number, 
   return res.json()
 }
 
-export async function logBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange): Promise<StockHolding> {
+export async function logBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exchange, portfolioId?: number | null): Promise<StockHolding> {
   if (isGuestMode()) return guestPortfolio.buyBulk(ticker, lots, exchange)
   const exchangeQs = exchange ? `?exchange=${exchange}` : ''
   const res = await apiFetch(
-    `/portfolio/${encodeURIComponent(ticker)}/buy/bulk${exchangeQs}`,
+    `/portfolio/${encodeURIComponent(ticker)}/buy/bulk${exchangeQs}${pq(portfolioId, exchangeQs ? '&' : '?')}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -175,10 +237,10 @@ export async function logBuyBulk(ticker: string, lots: BuyLot[], exchange?: Exch
   return res.json()
 }
 
-export async function logSellBulk(ticker: string, lots: SellLot[]): Promise<StockHolding> {
+export async function logSellBulk(ticker: string, lots: SellLot[], portfolioId?: number | null): Promise<StockHolding> {
   if (isGuestMode()) return guestPortfolio.sellBulk(ticker, lots)
   const res = await apiFetch(
-    `/portfolio/${encodeURIComponent(ticker)}/sell/bulk`,
+    `/portfolio/${encodeURIComponent(ticker)}/sell/bulk${pq(portfolioId)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -192,10 +254,10 @@ export async function logSellBulk(ticker: string, lots: SellLot[]): Promise<Stoc
   return res.json()
 }
 
-export async function deleteTransaction(ticker: string, transactionId: number): Promise<void> {
+export async function deleteTransaction(ticker: string, transactionId: number, portfolioId?: number | null): Promise<void> {
   if (isGuestMode()) { await guestPortfolio.deleteTransactionGuest(ticker, transactionId); return }
   const res = await apiFetch(
-    `/portfolio/${encodeURIComponent(ticker)}/transactions/${transactionId}`,
+    `/portfolio/${encodeURIComponent(ticker)}/transactions/${transactionId}${pq(portfolioId)}`,
     { method: 'DELETE' },
   )
   if (!res.ok) {
@@ -218,9 +280,11 @@ export async function fetchDividends(ticker: string): Promise<DividendEntry[]> {
   return res.json()
 }
 
-export async function syncDividends(ticker: string): Promise<DividendEntry[]> {
+export async function syncDividends(ticker: string, portfolioId?: number | null): Promise<DividendEntry[]> {
   if (isGuestMode()) throw new Error('Sign in to sync dividends.')
-  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}/dividends/sync`, { method: 'POST' })
+  const res = await apiFetch(
+    `/portfolio/${encodeURIComponent(ticker)}/dividends/sync${pq(portfolioId)}`, { method: 'POST' },
+  )
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to sync dividends for ${ticker}`)
@@ -229,12 +293,12 @@ export async function syncDividends(ticker: string): Promise<DividendEntry[]> {
 }
 
 export async function addDividend(
-  ticker: string, date: string, amountPerShare: number, sharesHeld?: number,
+  ticker: string, date: string, amountPerShare: number, sharesHeld?: number, portfolioId?: number | null,
 ): Promise<DividendEntry> {
   if (isGuestMode()) throw new Error('Sign in to track dividends.')
   const sharesQs = sharesHeld != null ? `&shares_held=${sharesHeld}` : ''
   const res = await apiFetch(
-    `/portfolio/${encodeURIComponent(ticker)}/dividends?date=${date}&amount_per_share=${amountPerShare}${sharesQs}`,
+    `/portfolio/${encodeURIComponent(ticker)}/dividends?date=${date}&amount_per_share=${amountPerShare}${sharesQs}${pq(portfolioId, '&')}`,
     { method: 'POST' },
   )
   if (!res.ok) {
@@ -247,12 +311,14 @@ export async function addDividend(
 export async function updateDividend(
   ticker: string, dividendId: number,
   fields: { date?: string; amountPerShare?: number; sharesHeld?: number },
+  portfolioId?: number | null,
 ): Promise<DividendEntry> {
   if (isGuestMode()) throw new Error('Sign in to track dividends.')
   const params = new URLSearchParams()
   if (fields.date != null) params.set('date', fields.date)
   if (fields.amountPerShare != null) params.set('amount_per_share', String(fields.amountPerShare))
   if (fields.sharesHeld != null) params.set('shares_held', String(fields.sharesHeld))
+  if (portfolioId != null) params.set('portfolio_id', String(portfolioId))
   const res = await apiFetch(
     `/portfolio/${encodeURIComponent(ticker)}/dividends/${dividendId}?${params.toString()}`,
     { method: 'PUT' },
@@ -264,9 +330,11 @@ export async function updateDividend(
   return res.json()
 }
 
-export async function deleteDividend(ticker: string, dividendId: number): Promise<void> {
+export async function deleteDividend(ticker: string, dividendId: number, portfolioId?: number | null): Promise<void> {
   if (isGuestMode()) throw new Error('Sign in to track dividends.')
-  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}/dividends/${dividendId}`, { method: 'DELETE' })
+  const res = await apiFetch(
+    `/portfolio/${encodeURIComponent(ticker)}/dividends/${dividendId}${pq(portfolioId)}`, { method: 'DELETE' },
+  )
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? 'Failed to delete dividend')
@@ -342,9 +410,9 @@ export async function applyPortfolioImport(rows: ImportApplyRow[]): Promise<Port
   return res.json()
 }
 
-export async function deletePortfolioHolding(ticker: string): Promise<void> {
+export async function deletePortfolioHolding(ticker: string, portfolioId?: number | null): Promise<void> {
   if (isGuestMode()) { await guestPortfolio.deleteHolding(ticker); return }
-  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}`, { method: 'DELETE' })
+  const res = await apiFetch(`/portfolio/${encodeURIComponent(ticker)}${pq(portfolioId)}`, { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to remove ${ticker}`)
