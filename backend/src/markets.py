@@ -5,6 +5,12 @@ Tickers are classified by their Yahoo Finance suffix:
 - ``.BO`` → BSE (Bombay Stock Exchange)
 - anything else → US (NYSE / NASDAQ)
 
+NSE and BSE aren't exposed as separate choices anywhere — the user only ever
+picks "India". A bare Indian ticker resolves to NSE by default and falls
+back to BSE only if NSE doesn't recognize the symbol (see INDIAN_SUFFIXES
+and the resolvers in portfolio_service/watchlist that use it); once a
+holding exists it stays on whichever suffix it was created with.
+
 Each market carries its own trading calendar, session hours, timezone and
 native currency. Everything downstream (market-status pill, "last completed
 trading day", portfolio grouping) keys off this module so adding a third
@@ -68,8 +74,18 @@ def currency_of(ticker: str) -> str:
 
 
 # Exchange the user picks in the "add ticker" UI -> Yahoo Finance suffix.
-# "US" carries no suffix, so it's intentionally absent from this map.
-EXCHANGE_SUFFIXES = {"NSE": ".NS", "BSE": ".BO"}
+# "US" carries no suffix, so it's intentionally absent from this map. India
+# is a single combined choice now — the user never picks NSE vs BSE — but a
+# bare Indian ticker still needs *some* suffix appended before a first-pass
+# existence check, so this maps it to NSE by default.
+EXCHANGE_SUFFIXES = {"IN": ".NS"}
+
+# Both Indian exchanges, in the order they're tried when resolving a bare
+# ticker: NSE has by far the deeper Yahoo Finance coverage, so it goes first;
+# BSE is only probed if NSE doesn't recognize the symbol. Callers that need
+# this fallback (portfolio_service, the watchlist router) probe live via
+# their own existence check — this module only owns the suffix strings.
+INDIAN_SUFFIXES = (".NS", ".BO")
 
 
 def apply_exchange(ticker: str, exchange: str | None) -> str:
@@ -78,7 +94,11 @@ def apply_exchange(ticker: str, exchange: str | None) -> str:
     Lets the frontend collect "ticker" and "exchange" as separate fields
     instead of requiring the user to type ".NS"/".BO" themselves. Idempotent:
     a ticker that already carries a market suffix, or an unset/US exchange,
-    passes through unchanged.
+    passes through unchanged. For "IN" this only ever produces the NSE
+    suffix — it has no knowledge of whether the ticker actually exists on
+    NSE, let alone BSE. Callers that need the NSE-then-BSE fallback (an
+    Indian ticker that's ambiguous or new) should resolve that themselves
+    and call this only for the unambiguous cases.
     """
     ticker = ticker.upper().strip()
     if not exchange:

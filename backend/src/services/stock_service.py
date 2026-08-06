@@ -414,19 +414,21 @@ async def get_classification(tickers: list[str]) -> dict:
 
 
 _SEARCH_QUOTE_TYPES = {"EQUITY", "ETF"}
-_SEARCH_INDIAN_SUFFIXES = {"NSE": ".NS", "BSE": ".BO"}
 
 
 async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
     '''
     Ticker/company-name autocomplete for the "add ticker" UI, backed by
     Yahoo Finance's search endpoint (yf.Search). Scoped to `exchange`
-    ("US" | "NSE" | "BSE", defaults to "US") so a search made while the user
-    has India/NSE selected only returns NSE-listed matches, etc.
+    ("US" | "IN", defaults to "US") so a search made while the user has
+    India selected only returns Indian-listed matches (NSE and BSE both —
+    the two exchanges aren't a separate choice), and "US" excludes them.
 
     Indian results have their .NS/.BO suffix stripped before returning —
-    the frontend's exchange picker is what decides which suffix to append,
-    so the autocomplete list should never show it twice.
+    ticker resolution (which of NSE/BSE to actually use) happens later, at
+    add/buy time, not in this list — so the autocomplete list should never
+    show the suffix. If the same company appears under both suffixes, only
+    the first one encountered is kept.
 
     Cached 5 minutes per (exchange, query). Best-effort: any yfinance/Yahoo
     failure degrades to an empty list rather than a 5xx, since this only
@@ -453,7 +455,6 @@ async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
         logger.warning("Ticker search failed for query %r: %r", query, e)
         return []
 
-    wanted_suffix = _SEARCH_INDIAN_SUFFIXES.get(exchange)  # None for "US"
     results: list[dict] = []
     seen: set[str] = set()
 
@@ -462,10 +463,10 @@ async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
         if q.get("quoteType") not in _SEARCH_QUOTE_TYPES or not symbol:
             continue
         is_indian = symbol.endswith((".NS", ".BO"))
-        if wanted_suffix is not None:
-            if not symbol.endswith(wanted_suffix):
+        if exchange == "IN":
+            if not is_indian:
                 continue
-            symbol = symbol[: -len(wanted_suffix)]
+            symbol = symbol[:-3]  # strip ".NS" or ".BO" — both 3 characters
         elif is_indian:
             continue  # "US" exchange — skip Indian-listed matches
 

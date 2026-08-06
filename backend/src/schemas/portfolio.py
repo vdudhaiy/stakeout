@@ -3,7 +3,7 @@ Schema for Portfolio data in the Market Lens Dashboard.
 '''
 
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, PlainSerializer
 
@@ -36,6 +36,64 @@ class BulkSaleLot(BaseModel):
     shares: int
     sold_at: Decimal
     date: str | None = None    # defaults to today, same as the single-sale endpoint
+
+
+class ImportPreviewRow(BaseModel):
+    """One data row from an uploaded file, parsed and duplicate-checked but
+    not yet applied. POST /portfolio/import/preview returns these; the
+    frontend resolves any flagged duplicates with the user, then echoes
+    valid rows back (as ImportApplyRow, with a per-row include/skip
+    decision) to POST /portfolio/import/apply.
+    """
+    row: int                            # 1-indexed spreadsheet row (header is row 1)
+    market: str                         # market cell as given in the file (e.g. "US", "IND")
+    ticker: str                         # resolved ticker, exchange suffix applied (e.g. "RELIANCE.NS")
+    date: str | None = None             # None if the date itself failed to parse
+    action: Literal["buy", "sell", ""]  # "" only when the row failed before the action could be parsed
+    shares: int
+    price: Money
+    valid: bool                         # False if the row failed to parse — see `error`
+    error: str | None = None
+    duplicate: bool = False             # True if this exactly matches another transaction
+    duplicate_reason: str | None = None  # e.g. "Matches an existing transaction..." or "Duplicate of row 4 in this file"
+
+
+class ImportPreviewResult(BaseModel):
+    total_rows: int                    # data rows found in the file (excludes the header)
+    rows: list[ImportPreviewRow]        # one entry per data row, in file order
+
+
+class ImportApplyRow(BaseModel):
+    """A previously-previewed row (must have been `valid` in the preview),
+    echoed back with the user's include/skip decision."""
+    row: int
+    market: str
+    ticker: str
+    date: str
+    action: Literal["buy", "sell"]
+    shares: int
+    price: Decimal
+    include: bool = True                # False = user chose to skip this one (usually a duplicate)
+
+
+class ImportRowResult(BaseModel):
+    row: int
+    market: str
+    ticker: str
+    date: str
+    action: Literal["buy", "sell"]
+    shares: int
+    price: Money
+    status: Literal["imported", "failed", "skipped"]
+    error: str | None = None            # reason, when status == "failed"
+
+
+class PortfolioImportResult(BaseModel):
+    total_rows: int             # rows included in the apply request
+    imported_rows: int
+    failed_rows: int
+    skipped_rows: int           # user chose not to include these (see ImportApplyRow.include)
+    rows: list[ImportRowResult]  # one entry per row, in file order
 
 
 class StockPurchaseHistory(BaseModel):

@@ -1,16 +1,16 @@
 import datetime
 from decimal import Decimal
 
-from fastapi import Depends, HTTPException, APIRouter, Response
+from fastapi import Depends, HTTPException, APIRouter, Response, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_session
 from schemas.portfolio import (
-    AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding,
-    UndoResult,
+    AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, ImportApplyRow, ImportPreviewResult,
+    PortfolioImportResult, PortfolioResponse, PositionAsOf, StockHolding, UndoResult,
 )
-from services import portfolio_service
+from services import import_service, portfolio_service
 from services.export_service import build_portfolio_xlsx
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
@@ -47,6 +47,41 @@ async def download_portfolio(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/import/preview", response_model=ImportPreviewResult)
+async def preview_portfolio_import(
+    file: UploadFile,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Parses an uploaded .csv or .xlsx file (columns: market, stock, date,
+    number, buy/sell, price — see import_service's module docstring for the
+    exact format) and flags rows that exactly duplicate an existing
+    transaction or an earlier row in the same file. Nothing is written yet —
+    the frontend resolves flagged duplicates with the user, then calls
+    /import/apply with each row's include/skip decision.
+    """
+    content = await file.read()
+    try:
+        return await import_service.preview_import(session, user_id, file.filename or "upload", content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/import/apply", response_model=PortfolioImportResult)
+async def apply_portfolio_import(
+    rows: list[ImportApplyRow],
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+):
+    """Applies rows previously returned by /import/preview. Best-effort per
+    row: a malformed row, an unknown ticker, or an oversell is reported in
+    the response instead of failing the whole batch; rows with
+    include=False (the user skipped them, usually a duplicate) are reported
+    as "skipped" rather than applied.
+    """
+    return await import_service.apply_import(session, user_id, rows)
 
 
 @router.get("/audit", response_model=list[AuditEntrySummary])

@@ -14,6 +14,8 @@ dependencies = [
     "lxml",
     "pandas_market_calendars",
     "xlsxwriter",
+    "openpyxl",
+    "python-multipart",
     "asyncpg",
     "alembic",
     "httpx",

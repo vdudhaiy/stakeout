@@ -10,13 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yfinance.exceptions import YFRateLimitError
 
 from cache import dividend_sync_cache, quote_cache
-from markets import MARKET_META, apply_exchange, currency_of, market_of, normalize_market
+from markets import INDIAN_SUFFIXES, MARKET_META, apply_exchange, currency_of, market_of, normalize_market
 from models.portfolio import AuditEntry, Dividend, Holding, Transaction, WatchlistEntry
 from schemas.portfolio import (
     AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PositionAsOf, StockHolding,
     StockPurchaseHistory, UndoResult,
 )
-from . import market_data_service
+from . import market_data_service, sec_service
 from .stock_service import fetch_current, get_market_status, add_stock
 
 logger = logging.getLogger(__name__)
@@ -36,14 +36,18 @@ async def _validate_and_fetch_name(ticker: str) -> str:
     """Confirms the ticker exists on yfinance and returns a display name.
 
     Raises ValueError if yfinance returns no history (unknown ticker) — that's
-    a real "this ticker doesn't exist" and retrying won't help. A rate limit
-    isn't worth retrying immediately either — the window hasn't cleared a
-    moment later, so a second attempt is guaranteed to fail too and just adds
-    to the block. Any other (genuinely transient) error gets one retry before
-    giving up and returning an empty string so the holding can still be
-    created without a display name. A holding that ends up unnamed here is
-    picked up later by repair_stock_metadata, which backfills it once the
-    lookup succeeds.
+    a real "this ticker doesn't exist" and no fallback should override it. A
+    rate limit isn't worth retrying immediately either — the window hasn't
+    cleared a moment later, so a second attempt is guaranteed to fail too and
+    just adds to the block. Any other (genuinely transient) error gets one
+    retry.
+
+    If yfinance never produces a name — `.info` (the flakier of its two
+    calls) fails, is rate-limited, or is simply missing shortName/longName —
+    falls back to the SEC's free public ticker registry (sec_service): no
+    rate limit to worry about, but US-listed tickers only, so an Indian
+    ticker (or a genuine miss on both sources) still ends up unnamed here,
+    picked up later by repair_stock_metadata, which retries both sources too.
     """
     def _fetch() -> str:
         stock = yf.Ticker(ticker)
@@ -59,13 +63,21 @@ async def _validate_and_fetch_name(ticker: str) -> str:
     last_error: Exception | None = None
     for _attempt in range(2):
         try:
-            return await asyncio.to_thread(_fetch)
+            name = await asyncio.to_thread(_fetch)
+            if name:
+                return name
+            break  # a valid ticker, just no name on yfinance — try SEC below
         except ValueError:
             raise
         except Exception as e:  # noqa: BLE001
             last_error = e
             if _is_rate_limited(e):
                 break
+
+    sec_name = await sec_service.company_name(ticker)
+    if sec_name:
+        return sec_name
+
     logger.warning("Name lookup failed for %s; creating holding unnamed: %r", ticker, last_error)
     return ""
 
@@ -466,6 +478,19 @@ async def get_stock_holding(session: AsyncSession, user_id: str, ticker: str, pr
     )
 
 
+async def get_holding_transactions(session: AsyncSession, user_id: str, ticker: str) -> list[Transaction]:
+    """Raw transaction rows for `ticker`, or [] if there's no holding yet.
+
+    Unlike get_stock_holding, this never fetches a live price — for callers
+    (e.g. import_service's duplicate check) that only need the transaction
+    log itself and shouldn't pay for a yfinance round trip just to check it.
+    """
+    holding = await _fetch_holding(session, user_id, ticker)
+    if not holding:
+        return []
+    return await _fetch_transactions(session, holding.id)
+
+
 def _resolve_date(date: str | None) -> str:
     today = datetime.date.today()
     if date is None:
@@ -479,11 +504,46 @@ def _resolve_date(date: str | None) -> str:
     return date
 
 
+async def _resolve_ticker(session: AsyncSession, user_id: str, ticker: str, exchange: str | None) -> str:
+    """Resolves a bare ticker + exchange choice to the canonical suffixed
+    ticker to store, for buy flows.
+
+    "US" and an already-suffixed ticker (manual ".NS"/".BO" entry) pass
+    through apply_exchange unchanged, same as before. A bare Indian ticker
+    ("IN") is ambiguous — the user no longer picks NSE vs BSE — so this:
+      1. Reuses whichever suffix the user already holds this ticker under,
+         so a "buy more" doesn't fork the position into a second holding.
+      2. Otherwise probes NSE first, then BSE, via _validate_and_fetch_name,
+         and keeps whichever one actually exists.
+    Raises ValueError if the ticker exists on neither exchange.
+    """
+    ticker = ticker.upper().strip()
+    if (exchange or "").upper() != "IN" or ticker.endswith((".NS", ".BO")):
+        return apply_exchange(ticker, exchange)
+
+    for suffix in INDIAN_SUFFIXES:
+        if await _fetch_holding(session, user_id, f"{ticker}{suffix}"):
+            return f"{ticker}{suffix}"
+
+    last_error: Exception | None = None
+    for suffix in INDIAN_SUFFIXES:
+        candidate = f"{ticker}{suffix}"
+        try:
+            await _validate_and_fetch_name(candidate)
+            return candidate
+        except ValueError as e:
+            last_error = e
+
+    raise ValueError(
+        f"Ticker '{ticker}' could not be found on NSE or BSE. Please check the symbol and try again."
+    ) from last_error
+
+
 async def add_stock_purchase(
     session: AsyncSession, user_id: str, ticker: str, shares: int, bought_at: Decimal,
     date: str | None = None, exchange: str | None = None,
 ) -> StockHolding:
-    ticker = apply_exchange(ticker, exchange)
+    ticker = await _resolve_ticker(session, user_id, ticker, exchange)
     txn_date = _resolve_date(date)
     holding = await _fetch_holding(session, user_id, ticker)
     is_new = holding is None
@@ -544,7 +604,7 @@ async def add_stock_purchases_bulk(
     # flushed — rather than leaving earlier rows dangling in the session.
     resolved_dates = [_resolve_date(lot.date) for lot in lots]
 
-    ticker = apply_exchange(ticker, exchange)
+    ticker = await _resolve_ticker(session, user_id, ticker, exchange)
     holding = await _fetch_holding(session, user_id, ticker)
     is_new = holding is None
     if is_new:

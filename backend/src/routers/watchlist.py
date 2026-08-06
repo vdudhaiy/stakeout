@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_session
-from markets import apply_exchange, market_of, normalize_market
+from markets import INDIAN_SUFFIXES, apply_exchange, market_of, normalize_market
 from models.portfolio import WatchlistEntry
 from services import stock_service
 
@@ -50,6 +50,43 @@ async def get_watchlist(
     return _serialize(entries)
 
 
+async def _resolve_ticker(session: AsyncSession, user_id: str, ticker: str, exchange: str | None) -> str:
+    """Resolves a bare ticker + exchange choice to the canonical suffixed
+    ticker, mirroring portfolio_service._resolve_ticker: "US" and an
+    already-suffixed ticker pass through unchanged; a bare Indian ticker
+    reuses whichever suffix the user already has on their watchlist, else
+    probes NSE then BSE (via stock_service.add_stock, same existence check
+    the plain-add path below uses) and keeps whichever exists.
+    """
+    ticker = ticker.upper().strip()
+    if (exchange or "").upper() != "IN" or ticker.endswith((".NS", ".BO")):
+        return apply_exchange(ticker, exchange)
+
+    for suffix in INDIAN_SUFFIXES:
+        existing = await session.execute(
+            select(WatchlistEntry).where(
+                WatchlistEntry.user_id == user_id, WatchlistEntry.ticker == f"{ticker}{suffix}"
+            )
+        )
+        if existing.scalar_one_or_none():
+            return f"{ticker}{suffix}"
+
+    last_error: Exception | None = None
+    for suffix in INDIAN_SUFFIXES:
+        candidate = f"{ticker}{suffix}"
+        try:
+            archive = await stock_service.get_all_stocks()
+            if candidate not in archive:
+                await stock_service.add_stock(candidate)
+            return candidate
+        except ValueError as e:
+            last_error = e
+
+    raise ValueError(
+        f"Ticker '{ticker}' could not be found on NSE or BSE. Please check the symbol and try again."
+    ) from last_error
+
+
 @router.post("/{ticker}")
 async def add_to_watchlist(
     ticker: str,
@@ -57,7 +94,11 @@ async def add_to_watchlist(
     session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_user),
 ):
-    ticker = apply_exchange(ticker, exchange)
+    try:
+        ticker = await _resolve_ticker(session, user_id, ticker, exchange)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     existing = await session.execute(
         select(WatchlistEntry).where(
             WatchlistEntry.user_id == user_id, WatchlistEntry.ticker == ticker
@@ -65,7 +106,7 @@ async def add_to_watchlist(
     )
     if existing.scalar_one_or_none():
         entries = await _entries(session, user_id)
-        return {"exist": True, **_serialize(entries)}
+        return {"exist": True, "ticker": ticker, **_serialize(entries)}
 
     # Ensure the shared archive has data (validates the ticker as a side effect)
     try:
@@ -82,7 +123,7 @@ async def add_to_watchlist(
     ))
     await session.commit()
     entries = await _entries(session, user_id)
-    return {"exist": False, **_serialize(entries)}
+    return {"exist": False, "ticker": ticker, **_serialize(entries)}
 
 
 @router.delete("/{ticker}")

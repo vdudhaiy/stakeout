@@ -1,11 +1,19 @@
-"""Excel export for the portfolio."""
+"""Excel export for the portfolio.
+
+The "Transaction History" sheet's first six columns — market, stock, date,
+number, buy/sell, price — are deliberately the exact columns import_service
+expects (see its module docstring), so this file doubles as a ready-made
+backup: re-uploading it through Import lands every transaction again.
+Company/Remaining/P&L are extra, informational-only trailing columns the
+importer ignores.
+"""
 
 import io
 from datetime import date as dt_date
 
 import xlsxwriter
 
-from schemas.portfolio import PortfolioResponse
+from schemas.portfolio import PortfolioResponse, StockHolding, StockPurchaseHistory
 
 # ── Layout constants (0-indexed rows) ─────────────────────────────────────────
 _S1_TITLE_ROW   = 0
@@ -165,50 +173,58 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     ws2.hide_gridlines(2)
     ws2.set_row(_S2_TITLE_ROW, 24)
 
-    ws2.set_column('A:A', 13)   # Date
-    ws2.set_column('B:B', 10)   # Ticker
-    ws2.set_column('C:C', 26)   # Company
-    ws2.set_column('D:D', 9)    # Type
-    ws2.set_column('E:E', 10)   # Shares
-    ws2.set_column('F:F', 13)   # Bought @
-    ws2.set_column('G:G', 13)   # Sold @
+    ws2.set_column('A:A', 9)    # Market
+    ws2.set_column('B:B', 10)   # Stock
+    ws2.set_column('C:C', 13)   # Date
+    ws2.set_column('D:D', 10)   # Number
+    ws2.set_column('E:E', 9)    # Buy/Sell
+    ws2.set_column('F:F', 13)   # Price
+    ws2.set_column('G:G', 26)   # Company
     ws2.set_column('H:H', 13)   # Remaining
     ws2.set_column('I:I', 15)   # P&L
 
     ws2.merge_range(0, 0, 0, 8, f'Transaction History — {dt_date.today().isoformat()}', title_fmt)
 
+    # Header text matches import_service's recognized column aliases exactly
+    # (Market/Stock/Date/Number/Buy-Sell/Price) — Company/Remaining/P&L don't,
+    # so a re-import just ignores those three as harmless extras.
     t_cols = [
+        {'header': 'Market'},
+        {'header': 'Stock'},
         {'header': 'Date'},
-        {'header': 'Ticker'},
+        {'header': 'Number',    'format': int_fmt},
+        {'header': 'Buy/Sell'},
+        {'header': 'Price',     'format': money},
         {'header': 'Company'},
-        {'header': 'Type'},
-        {'header': 'Shares',    'format': int_fmt},
-        {'header': 'Bought @',  'format': money},
-        {'header': 'Sold @',    'format': money},
         {'header': 'Remaining', 'format': int_fmt},
         {'header': 'P&L',       'format': money},
     ]
 
-    all_txns: list[tuple[str, object]] = []
+    all_txns: list[tuple[StockHolding, StockPurchaseHistory]] = []
     for h in portfolio.holdings:
         for txn in h.trade_history:
-            all_txns.append((h.company_name, txn))
+            all_txns.append((h, txn))
     all_txns.sort(key=lambda x: x[1].date, reverse=True)
 
     T2 = _S2_TABLE_ROW
     data2 = []
-    for j, (company, txn) in enumerate(all_txns):
-        xl = T2 + 2 + j          # 1-indexed Excel row
+    for holding, txn in all_txns:
+        # market+stock (bare, no exchange suffix) — same convention a user
+        # would type into an import file, not "RELIANCE.NS" redundantly
+        # alongside a market column that already says IN.
+        stock = txn.ticker.removesuffix('.NS').removesuffix('.BO')
+        price = txn.sold_at if txn.sale else txn.bought_at
+        pnl = (txn.sold_at - txn.bought_at) * txn.shares if txn.sale else None
         data2.append([
+            holding.market,
+            stock,
             txn.date,
-            txn.ticker,
-            company,
-            'SELL' if txn.sale else 'BUY',
             txn.shares,
-            float(txn.bought_at),
-            float(txn.sold_at) if txn.sale else None,
+            'SELL' if txn.sale else 'BUY',
+            float(price),
+            holding.company_name,
             txn.shares_remaining if not txn.sale else None,
-            f'=E{xl}*(G{xl}-F{xl})' if txn.sale else None,    # P&L = shares × (sold - cost)
+            float(pnl) if pnl is not None else None,
         ])
 
     nt = len(data2)
@@ -220,11 +236,11 @@ def build_portfolio_xlsx(portfolio: PortfolioResponse) -> bytes:
     })
 
     if nt > 0:
-        ws2.conditional_format(T2 + 1, 3, T2 + nt, 3,
+        ws2.conditional_format(T2 + 1, 4, T2 + nt, 4,   # Buy/Sell
             {'type': 'text', 'criteria': 'containing', 'value': 'BUY', 'format': cf_buy})
-        ws2.conditional_format(T2 + 1, 3, T2 + nt, 3,
+        ws2.conditional_format(T2 + 1, 4, T2 + nt, 4,
             {'type': 'text', 'criteria': 'containing', 'value': 'SELL', 'format': cf_sell})
-        ws2.conditional_format(T2 + 1, 8, T2 + nt, 8,
+        ws2.conditional_format(T2 + 1, 8, T2 + nt, 8,   # P&L
             {'type': 'cell', 'criteria': '>', 'value': 0, 'format': cf_pos})
         ws2.conditional_format(T2 + 1, 8, T2 + nt, 8,
             {'type': 'cell', 'criteria': '<', 'value': 0, 'format': cf_neg})

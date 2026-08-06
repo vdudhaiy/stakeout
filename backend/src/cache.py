@@ -57,3 +57,4 @@ info_cache = TTLCache(ttl_seconds=24 * 60 * 60) # Ticker sector/industry classif
 ai_cache = TTLCache(ttl_seconds=60 * 60)        # AI stock insight summaries: 1 hour
 dividend_sync_cache = TTLCache(ttl_seconds=24 * 60 * 60)  # Throttles yfinance dividend re-sync: 24 hours
 search_cache = TTLCache(ttl_seconds=5 * 60)     # Ticker autocomplete results: 5 minutes
+sec_ticker_cache = TTLCache(ttl_seconds=24 * 60 * 60)  # SEC ticker->company-name registry: one cached blob, refreshed daily

@@ -149,6 +149,75 @@ async def test_sell_stock_insufficient_shares_returns_400(client):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Portfolio — POST /import/preview, /import/apply
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def test_import_preview_success(client):
+    from schemas.portfolio import ImportPreviewResult, ImportPreviewRow
+    result = ImportPreviewResult(
+        total_rows=1,
+        rows=[ImportPreviewRow(
+            row=2, market="US", ticker="AAPL", date="2024-01-15", action="buy",
+            shares=10, price=150.0, valid=True,
+        )],
+    )
+    with patch(
+        "routers.portfolio.import_service.preview_import",
+        new_callable=AsyncMock, return_value=result,
+    ):
+        resp = await client.post(
+            "/portfolio/import/preview",
+            files={"file": (
+                "portfolio.csv", b"market,stock,date,number,buy/sell,price\nUS,AAPL,2024-01-15,10,buy,150",
+                "text/csv",
+            )},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rows"][0]["ticker"] == "AAPL"
+    assert body["rows"][0]["valid"] is True
+
+
+async def test_import_preview_bad_file_returns_400(client):
+    with patch(
+        "routers.portfolio.import_service.preview_import",
+        new_callable=AsyncMock, side_effect=ValueError("Missing required column(s): price"),
+    ):
+        resp = await client.post(
+            "/portfolio/import/preview",
+            files={"file": ("portfolio.csv", b"market,stock\nUS,AAPL", "text/csv")},
+        )
+    assert resp.status_code == 400
+    assert "Missing required column" in resp.json()["detail"]
+
+
+async def test_import_apply_success(client):
+    from schemas.portfolio import ImportRowResult, PortfolioImportResult
+    result = PortfolioImportResult(
+        total_rows=1, imported_rows=1, failed_rows=0, skipped_rows=0,
+        rows=[ImportRowResult(
+            row=2, market="US", ticker="AAPL", date="2024-01-15", action="buy",
+            shares=10, price=150.0, status="imported",
+        )],
+    )
+    with patch(
+        "routers.portfolio.import_service.apply_import",
+        new_callable=AsyncMock, return_value=result,
+    ):
+        resp = await client.post(
+            "/portfolio/import/apply",
+            json=[{
+                "row": 2, "market": "US", "ticker": "AAPL", "date": "2024-01-15",
+                "action": "buy", "shares": 10, "price": 150.0, "include": True,
+            }],
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported_rows"] == 1
+    assert body["rows"][0]["ticker"] == "AAPL"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Portfolio — DELETE
 # ─────────────────────────────────────────────────────────────────────────────
 

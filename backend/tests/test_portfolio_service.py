@@ -251,6 +251,102 @@ async def test_bulk_purchase_logs_one_audit_entry_per_lot(db_session):
     assert len(result.scalars().all()) == 3
 
 
+# ── _resolve_ticker: combined India option (NSE default, BSE fallback) ───────
+
+async def test_resolve_ticker_us_exchange_passes_through_unchanged(db_session):
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock) as mock_validate:
+        result = await portfolio_service._resolve_ticker(db_session, USER_ID, "AAPL", "US")
+    assert result == "AAPL"
+    mock_validate.assert_not_called()
+
+
+async def test_resolve_ticker_no_exchange_passes_through_unchanged(db_session):
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock) as mock_validate:
+        result = await portfolio_service._resolve_ticker(db_session, USER_ID, "AAPL", None)
+    assert result == "AAPL"
+    mock_validate.assert_not_called()
+
+
+async def test_resolve_ticker_already_suffixed_skips_probing(db_session):
+    """A manually-typed '.NS'/'.BO' ticker is unambiguous — no need to probe
+    either exchange even when exchange='IN'."""
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock) as mock_validate:
+        result = await portfolio_service._resolve_ticker(db_session, USER_ID, "RELIANCE.BO", "IN")
+    assert result == "RELIANCE.BO"
+    mock_validate.assert_not_called()
+
+
+async def test_resolve_ticker_defaults_bare_indian_ticker_to_nse(db_session):
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, return_value="Reliance Industries") as mock_validate:
+        result = await portfolio_service._resolve_ticker(db_session, USER_ID, "RELIANCE", "IN")
+    assert result == "RELIANCE.NS"
+    mock_validate.assert_awaited_once_with("RELIANCE.NS")
+
+
+async def test_resolve_ticker_falls_back_to_bse_when_nse_not_found(db_session):
+    async def fake_validate(ticker):
+        if ticker == "RELIANCE.NS":
+            raise ValueError(f"Ticker '{ticker}' could not be found.")
+        return "Reliance Industries"
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, side_effect=fake_validate) as mock_validate:
+        result = await portfolio_service._resolve_ticker(db_session, USER_ID, "RELIANCE", "IN")
+    assert result == "RELIANCE.BO"
+    assert mock_validate.await_count == 2
+
+
+async def test_resolve_ticker_raises_when_neither_exchange_has_it(db_session):
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, side_effect=ValueError("not found")):
+        with pytest.raises(ValueError, match="NSE or BSE"):
+            await portfolio_service._resolve_ticker(db_session, USER_ID, "BOGUS", "IN")
+
+
+async def test_resolve_ticker_reuses_existing_bse_holding_without_probing(db_session):
+    """A user who already holds a ticker under BSE (e.g. from before this
+    feature, or from an earlier BSE-only fallback) shouldn't get a second,
+    duplicate NSE holding just because they bought more without a picker."""
+    holding = Holding(
+        user_id=USER_ID, ticker="RELIANCE.BO", company_name="Reliance Industries",
+        shares=0, sold_shares=0, average_cost=Decimal(0),
+    )
+    db_session.add(holding)
+    await db_session.commit()
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock) as mock_validate:
+        result = await portfolio_service._resolve_ticker(db_session, USER_ID, "RELIANCE", "IN")
+    assert result == "RELIANCE.BO"
+    mock_validate.assert_not_called()
+
+
+async def test_add_purchase_falls_back_to_bse_for_bse_only_ticker(db_session):
+    """End-to-end through add_stock_purchase: exchange='IN', NSE doesn't
+    recognize the symbol, BSE does — the holding lands on the BSE ticker."""
+    async def fake_validate(ticker):
+        if ticker == "TMCV.NS":
+            raise ValueError(f"Ticker '{ticker}' could not be found.")
+        return "Tata Motors"
+
+    with patch("services.portfolio_service._validate_and_fetch_name",
+               new_callable=AsyncMock, side_effect=fake_validate):
+        with patch("services.portfolio_service._current_price",
+                   new_callable=AsyncMock, return_value=Decimal("500.0")):
+            with patch("services.portfolio_service.asyncio.create_task"):
+                result = await portfolio_service.add_stock_purchase(
+                    db_session, USER_ID, "TMCV", shares=10, bought_at=Decimal("480.0"),
+                    date="2024-01-01", exchange="IN",
+                )
+
+    assert result.ticker == "TMCV.BO"
+    assert result.company_name == "Tata Motors"
+
+
 # ── sell_stock_shares ─────────────────────────────────────────────────────────
 
 async def test_sell_reduces_shares(aapl_session):
@@ -784,7 +880,9 @@ def test_is_rate_limited_false_for_unrelated_error():
 async def test_validate_and_fetch_name_does_not_retry_on_rate_limit():
     with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
         mock_ticker.return_value.history.side_effect = YFRateLimitError()
-        name = await portfolio_service._validate_and_fetch_name("AAPL")
+        with patch("services.portfolio_service.sec_service.company_name",
+                   new_callable=AsyncMock, return_value=None):
+            name = await portfolio_service._validate_and_fetch_name("AAPL")
 
     assert name == ""
     assert mock_ticker.return_value.history.call_count == 1  # no wasted retry
@@ -800,6 +898,57 @@ async def test_validate_and_fetch_name_retries_a_genuinely_transient_error():
 
     assert name == "Apple Inc."
     assert mock_ticker.return_value.history.call_count == 2  # retried once, succeeded
+
+
+# ── _validate_and_fetch_name: SEC fallback ─────────────────────────────────
+
+async def test_validate_and_fetch_name_never_consults_sec_when_yfinance_succeeds():
+    import pandas as pd
+    ok_history = pd.DataFrame({"Close": [100.0]})
+    with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.return_value = ok_history
+        mock_ticker.return_value.info = {"shortName": "Apple Inc."}
+        with patch("services.portfolio_service.sec_service.company_name",
+                   new_callable=AsyncMock) as mock_sec:
+            name = await portfolio_service._validate_and_fetch_name("AAPL")
+
+    assert name == "Apple Inc."
+    mock_sec.assert_not_called()
+
+
+async def test_validate_and_fetch_name_falls_back_to_sec_when_yfinance_has_no_name():
+    import pandas as pd
+    ok_history = pd.DataFrame({"Close": [100.0]})
+    with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.return_value = ok_history
+        mock_ticker.return_value.info = {}  # valid ticker, but no shortName/longName
+        with patch("services.portfolio_service.sec_service.company_name",
+                   new_callable=AsyncMock, return_value="Apple Inc.") as mock_sec:
+            name = await portfolio_service._validate_and_fetch_name("AAPL")
+
+    assert name == "Apple Inc."
+    mock_sec.assert_awaited_once_with("AAPL")
+
+
+async def test_validate_and_fetch_name_falls_back_to_sec_on_rate_limit():
+    with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.side_effect = YFRateLimitError()
+        with patch("services.portfolio_service.sec_service.company_name",
+                   new_callable=AsyncMock, return_value="Apple Inc.") as mock_sec:
+            name = await portfolio_service._validate_and_fetch_name("AAPL")
+
+    assert name == "Apple Inc."
+    mock_sec.assert_awaited_once_with("AAPL")
+
+
+async def test_validate_and_fetch_name_returns_empty_when_both_sources_miss():
+    with patch("services.portfolio_service.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.side_effect = YFRateLimitError()
+        with patch("services.portfolio_service.sec_service.company_name",
+                   new_callable=AsyncMock, return_value=None):
+            name = await portfolio_service._validate_and_fetch_name("RELIANCE.NS")
+
+    assert name == ""
 
 
 async def test_ensure_in_dashboard_does_not_retry_on_rate_limit():

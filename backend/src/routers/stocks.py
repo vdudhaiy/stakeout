@@ -86,9 +86,9 @@ async def get_classification(tickers: str):
 async def search_tickers(q: str, exchange: str = "US"):
     '''
     Ticker/company-name autocomplete, e.g. ?q=apple&exchange=US. `exchange`
-    is "US" | "NSE" | "BSE" (defaults to "US") — results are scoped to it,
-    and Indian results have their .NS/.BO suffix stripped since the
-    exchange picker in the UI is what applies it. Cached 5 minutes.
+    is "US" | "IN" (defaults to "US") — results are scoped to it, and Indian
+    results have their .NS/.BO suffix stripped since which exchange to
+    actually use is resolved later, at add/buy time. Cached 5 minutes.
     '''
     results = await stock_service.search_tickers(q, exchange)
     return TickerSearchResponse(query=q, results=results)

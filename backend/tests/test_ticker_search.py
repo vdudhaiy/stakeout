@@ -46,28 +46,56 @@ async def test_us_exchange_returns_only_unsuffixed_symbols():
     assert results[0]["exchange"] == "NASDAQ"
 
 
-async def test_nse_exchange_strips_ns_suffix():
+async def test_in_exchange_strips_ns_suffix_and_excludes_non_indian():
     quotes = [
         _quote("TCS.NS", "Tata Consultancy Services", exchange="NSI", exch_disp="NSE"),
         _quote("TCS.TO", "Tecsys Inc", exchange="TOR", exch_disp="Toronto"),
     ]
     with patch("services.stock_service.yf.Search", return_value=_mock_search(quotes)):
-        results = await stock_service.search_tickers("tcs", "NSE")
+        results = await stock_service.search_tickers("tcs", "IN")
 
     assert len(results) == 1
-    assert results[0]["symbol"] == "TCS"  # suffix stripped — the exchange picker re-applies it
+    assert results[0]["symbol"] == "TCS"  # suffix stripped — resolution picks the exchange later
 
 
-async def test_bse_exchange_strips_bo_suffix_and_excludes_ns():
+async def test_in_exchange_strips_bo_suffix_too():
     quotes = [
         _quote("TMCV.BO", "Tata Motors", exchange="BSE", exch_disp="Bombay"),
-        _quote("TMCV.NS", "Tata Motors", exchange="NSI", exch_disp="NSE"),
+        _quote("AAPL", "Apple Inc.", exchange="NMS", exch_disp="NASDAQ"),
     ]
     with patch("services.stock_service.yf.Search", return_value=_mock_search(quotes)):
-        results = await stock_service.search_tickers("tata motors", "BSE")
+        results = await stock_service.search_tickers("tata motors", "IN")
 
     assert len(results) == 1
     assert results[0]["symbol"] == "TMCV"
+
+
+async def test_in_exchange_includes_both_ns_and_bo_listings():
+    """NSE and BSE aren't a separate choice — "IN" surfaces matches from
+    either exchange, not just one."""
+    quotes = [
+        _quote("TCS.NS", "Tata Consultancy Services", exchange="NSI", exch_disp="NSE"),
+        _quote("TMCV.BO", "Tata Motors", exchange="BSE", exch_disp="Bombay"),
+    ]
+    with patch("services.stock_service.yf.Search", return_value=_mock_search(quotes)):
+        results = await stock_service.search_tickers("tata", "IN")
+
+    symbols = {r["symbol"] for r in results}
+    assert symbols == {"TCS", "TMCV"}
+
+
+async def test_in_exchange_dedupes_ns_and_bo_listings_of_the_same_symbol():
+    """A dual-listed company shouldn't show up twice just because it trades
+    on both exchanges — only the combined "India" choice remains."""
+    quotes = [
+        _quote("RELIANCE.NS", "Reliance Industries", exchange="NSI", exch_disp="NSE"),
+        _quote("RELIANCE.BO", "Reliance Industries", exchange="BSE", exch_disp="Bombay"),
+    ]
+    with patch("services.stock_service.yf.Search", return_value=_mock_search(quotes)):
+        results = await stock_service.search_tickers("reliance", "IN")
+
+    assert len(results) == 1
+    assert results[0]["symbol"] == "RELIANCE"
 
 
 async def test_defaults_to_us_when_exchange_omitted():
@@ -115,7 +143,7 @@ async def test_results_are_cached_per_exchange_and_query():
         await stock_service.search_tickers("apple", "US")
         assert mock_search.call_count == 1
 
-        await stock_service.search_tickers("apple", "NSE")  # different cache key
+        await stock_service.search_tickers("apple", "IN")  # different cache key
         assert mock_search.call_count == 2
 
 
@@ -125,7 +153,7 @@ async def test_deduplicates_by_stripped_symbol():
         _quote("TCS.NS", "Tata Consultancy Services (dup)", exchange="NSI", exch_disp="NSE"),
     ]
     with patch("services.stock_service.yf.Search", return_value=_mock_search(quotes)):
-        results = await stock_service.search_tickers("tcs", "NSE")
+        results = await stock_service.search_tickers("tcs", "IN")
     assert len(results) == 1
 
 
