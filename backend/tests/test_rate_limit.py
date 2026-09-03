@@ -70,12 +70,39 @@ def test_the_window_slides(monkeypatch):
 
 def test_tracked_keys_stay_bounded(monkeypatch):
     """One key per client IP, so an attacker cycling source addresses would
-    otherwise grow this without limit."""
+    otherwise grow this without limit.
+
+    Asserts the hard cap, not merely "fewer than we added". Dropping only
+    *stale* keys doesn't bound a fast burst at all — every key in it is
+    fresh — and on a platform with a coarse monotonic clock (Windows ticks
+    at ~15 ms) they can even share a timestamp, so nothing ages out.
+    """
     monkeypatch.setattr(rate_limit, "_MAX_TRACKED_KEYS", 64)
-    limiter = RateLimiter(max_requests=10, window_seconds=0.001)
+    limiter = RateLimiter(max_requests=10, window_seconds=60)
     for i in range(1000):
         limiter.check(f"ip-{i}")
-    assert len(limiter._hits) < 1000
+    assert len(limiter._hits) <= 64
+
+
+def test_the_cap_holds_even_when_every_key_is_fresh(monkeypatch):
+    """The burst case, with a window long enough that nothing can age out."""
+    monkeypatch.setattr(rate_limit, "_MAX_TRACKED_KEYS", 32)
+    limiter = RateLimiter(max_requests=10, window_seconds=3600)
+    for i in range(500):
+        limiter.check(f"ip-{i}")
+    assert len(limiter._hits) <= 32
+
+
+def test_eviction_keeps_the_most_recently_seen_keys(monkeypatch):
+    """Evicting the wrong end would reset the quota of whoever is actually
+    hammering the endpoint."""
+    monkeypatch.setattr(rate_limit, "_MAX_TRACKED_KEYS", 8)
+    limiter = RateLimiter(max_requests=100, window_seconds=3600)
+    for i in range(40):
+        limiter.check(f"ip-{i}")
+    survivors = set(limiter._hits)
+    assert "ip-39" in survivors          # newest kept
+    assert "ip-0" not in survivors       # oldest dropped
 
 
 def test_reset_all_clears_every_limiter_including_new_ones():

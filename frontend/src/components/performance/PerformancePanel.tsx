@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { Activity, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Scale, TrendingDown, TrendingUp } from 'lucide-react'
@@ -140,16 +140,33 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
   const [range, setRange] = usePersistedState<PerformanceRange>('performance-range', 'max')
   const [chartMode, setChartMode] = usePersistedState<ChartMode>('performance-chart', 'growth')
   const [data, setData] = useState<PerformanceResponse | null>(null)
+  // Read inside `load` so comparing against the previous result doesn't put
+  // `data` in its dependency list and re-fetch on every response.
+  const dataRef = useRef<PerformanceResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryNotice, setRetryNotice] = useState<string | null>(null)
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true)
     else setLoading(true)
     setError(null)
+    setRetryNotice(null)
     try {
-      setData(await fetchPerformance(market, portfolioId, range, refresh))
+      const before = dataRef.current?.excluded_tickers ?? []
+      const result = await fetchPerformance(market, portfolioId, range, refresh)
+      setData(result)
+      // A refresh that leaves the same holdings unarchived has silently done
+      // nothing, and the user is left clicking a button that looks broken.
+      // Say so instead.
+      if (refresh && result.excluded_tickers.length > 0
+          && result.excluded_tickers.join() === before.join()) {
+        setRetryNotice(
+          `Couldn't fetch price history for ${result.excluded_tickers.join(', ')} just now. `
+          + 'The market-data provider may be rate-limiting — try again in a minute.',
+        )
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load performance')
       // A failed refresh keeps whatever is already on screen — losing a good
@@ -169,7 +186,10 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
     load()
   }, [load, open])
 
+  useEffect(() => { dataRef.current = data }, [data])
+
   const excluded = data?.excluded_tickers ?? []
+  const hasBenchmark = data?.benchmark_available ?? false
 
   const tiles = useMemo(() => {
     if (!data) return []
@@ -185,7 +205,9 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
       {
         label: `${data.benchmark_name} equivalent`,
         value: pct(data.benchmark.money_weighted, { sign: true }),
-        detail: 'same money, same days, in the index',
+        detail: data.benchmark_available
+          ? 'same money, same days, in the index'
+          : 'index history unavailable',
         tone: toneOf(data.benchmark.money_weighted),
         glossary: 'benchmark_equivalent' as const,
       },
@@ -199,21 +221,24 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
       {
         label: 'Max drawdown',
         value: pct(data.portfolio.max_drawdown),
-        detail: `${data.benchmark_name} ${pct(data.benchmark.max_drawdown)}`,
+        detail: data.benchmark_available
+          ? `${data.benchmark_name} ${pct(data.benchmark.max_drawdown)}` : undefined,
         tone: 'neutral' as const,
         glossary: 'max_drawdown' as const,
       },
       {
         label: 'Volatility',
         value: pct(data.portfolio.volatility),
-        detail: `${data.benchmark_name} ${pct(data.benchmark.volatility)}`,
+        detail: data.benchmark_available
+          ? `${data.benchmark_name} ${pct(data.benchmark.volatility)}` : undefined,
         tone: 'neutral' as const,
         glossary: 'volatility' as const,
       },
       {
         label: 'Beta',
         value: data.beta == null ? '—' : data.beta.toFixed(2),
-        detail: `sensitivity to ${data.benchmark_name}`,
+        detail: data.benchmark_available
+          ? `sensitivity to ${data.benchmark_name}` : 'index history unavailable',
         tone: 'neutral' as const,
         glossary: 'beta' as const,
       },
@@ -374,13 +399,19 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
 
                   <div className="h-[16rem] sm:h-[20rem]">
                     {chartMode === 'growth' ? (
-                      <GrowthChart points={data.points} days={data.days} benchmarkName={data.benchmark_name} />
+                      <GrowthChart
+                        points={data.points}
+                        days={data.days}
+                        benchmarkName={data.benchmark_name}
+                        benchmarkAvailable={hasBenchmark}
+                      />
                     ) : (
                       <ValueChart
                         points={data.points}
                         days={data.days}
                         currency={data.currency}
                         benchmarkName={data.benchmark_name}
+                        benchmarkAvailable={hasBenchmark}
                       />
                     )}
                   </div>
@@ -393,10 +424,18 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
                       <span className="hidden sm:block text-right w-16">MAX DD</span>
                     </div>
                     <SummaryRow label="Portfolio" summary={data.portfolio} />
-                    <SummaryRow label={data.benchmark_name} summary={data.benchmark} muted />
+                    {hasBenchmark && (
+                      <SummaryRow label={data.benchmark_name} summary={data.benchmark} muted />
+                    )}
                   </div>
                 </div>
 
+                {retryNotice && (
+                  <p className="flex items-start gap-2 text-xs text-red-300/90">
+                    <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                    <span>{retryNotice}</span>
+                  </p>
+                )}
                 {excluded.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2 text-xs text-amber-300/80">
                     <AlertTriangle size={13} className="shrink-0" />
@@ -416,9 +455,11 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
                 )}
                 <p className="text-[0.6875rem] text-zinc-600 leading-relaxed">
                   Priced to the close on {data.end_date}, from the price archive rather than the
-                  live quotes above. The {data.benchmark_name} comparison tracks the index level
-                  only, so it excludes index dividends and will read slightly low over long
-                  periods. Contributions are assumed to land at the end of their day.
+                  live quotes above.{' '}
+                  {hasBenchmark
+                    ? `The ${data.benchmark_name} comparison tracks the index level only, so it excludes index dividends and will read slightly low over long periods. `
+                    : `${data.benchmark_name} history isn't available for this window, so no comparison is shown. `}
+                  Contributions are assumed to land at the end of their day.
                 </p>
               </div>
             )}

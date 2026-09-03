@@ -86,6 +86,17 @@ export function intradayTickFormatter(dateStr: string): string {
 
 
 /**
+ * Decimal places for an axis label, chosen from how much ground the axis
+ * actually covers. A fixed 0 turns a range of a couple of percent into
+ * "0%, 0%, 1%" — three labels, two of them identical and none of them true.
+ */
+export function axisDecimals(span: number): number {
+  if (span >= 20) return 0
+  if (span >= 2) return 1
+  return 2
+}
+
+/**
  * Thin `ticks` down to at most `max`, keeping the first and last.
  *
  * computeXTicks picks a sensible density for a wide chart, but the same

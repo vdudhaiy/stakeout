@@ -625,9 +625,13 @@ async def test_backfill_archives_only_the_holdings_that_have_no_history(db_sessi
                new_callable=AsyncMock, return_value={"MSFT": _flat(axis, 200.0)}):
         with patch("services.performance_service.stock_service.add_stock",
                    new_callable=AsyncMock) as mock_add:
-            archived = await performance_service.backfill_missing_archives(
-                db_session, USER_ID, "US",
-            )
+            # Success is decided by re-reading the archive, not by add_stock
+            # returning without raising.
+            with patch("services.performance_service.market_data_service.has_data",
+                       new_callable=AsyncMock, return_value=True):
+                archived = await performance_service.backfill_missing_archives(
+                    db_session, USER_ID, "US",
+                )
 
     assert archived == ["AAPL"]
     mock_add.assert_awaited_once_with("AAPL")
@@ -642,13 +646,18 @@ async def test_backfill_keeps_going_when_one_ticker_fails(db_session, pid):
         if ticker == "AAPL":
             raise ValueError("rate limited")
 
+    async def landed(ticker):
+        return ticker != "AAPL"
+
     with patch("services.performance_service.market_data_service.get_closes",
                new_callable=AsyncMock, return_value={}):
         with patch("services.performance_service.stock_service.add_stock",
                    new_callable=AsyncMock, side_effect=flaky):
-            archived = await performance_service.backfill_missing_archives(
-                db_session, USER_ID, "US",
-            )
+            with patch("services.performance_service.market_data_service.has_data",
+                       new_callable=AsyncMock, side_effect=landed):
+                archived = await performance_service.backfill_missing_archives(
+                    db_session, USER_ID, "US",
+                )
 
     assert archived == ["MSFT"]   # the failure stays reported as excluded
 
@@ -666,7 +675,7 @@ async def test_backfill_is_a_no_op_for_a_fully_archived_portfolio(db_session, pi
             )
 
     assert archived == []
-    mock_add.assert_not_called()
+    mock_add.assert_not_called()   # nothing missing, so nothing is even attempted
 
 
 # ── route ─────────────────────────────────────────────────────────────────
@@ -712,3 +721,43 @@ async def test_refresh_is_rate_limited_per_user(client):
 
     assert statuses[0] == 200
     assert statuses[-1] == 429
+
+
+# ── backfill decides by the archive, not by exceptions ────────────────────
+# add_stock does more than archive prices, so it can raise *after* the rows
+# have landed. Reporting that as a failure left a ticker looking unfetchable
+# when it had in fact just been fetched — which is what made "Fetch now" look
+# like it did nothing.
+
+async def test_backfill_counts_a_ticker_whose_rows_landed_despite_an_error(db_session, pid):
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    with patch("services.performance_service.market_data_service.get_closes",
+               new_callable=AsyncMock, return_value={}):
+        with patch("services.performance_service.stock_service.add_stock",
+                   new_callable=AsyncMock, side_effect=ValueError("details scrape failed")):
+            with patch("services.performance_service.market_data_service.has_data",
+                       new_callable=AsyncMock, return_value=True):
+                archived = await performance_service.backfill_missing_archives(
+                    db_session, USER_ID, "US",
+                )
+
+    assert archived == ["AAPL"]
+
+
+async def test_backfill_reports_a_ticker_whose_rows_never_landed(db_session, pid):
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    with patch("services.performance_service.market_data_service.get_closes",
+               new_callable=AsyncMock, return_value={}):
+        with patch("services.performance_service.stock_service.add_stock",
+                   new_callable=AsyncMock, side_effect=ValueError("rate limited")):
+            with patch("services.performance_service.market_data_service.has_data",
+                       new_callable=AsyncMock, return_value=False):
+                archived = await performance_service.backfill_missing_archives(
+                    db_session, USER_ID, "US",
+                )
+
+    assert archived == []

@@ -257,6 +257,11 @@ async def backfill_missing_archives(
 
     Returns the tickers it managed to archive. Never raises — a ticker that
     still fails stays in `excluded_tickers`, which is where the UI reports it.
+
+    Success is decided by re-reading the archive rather than by the absence of
+    an exception: add_stock does more than archive prices, so it can raise
+    after the rows have landed, and reporting that as a failure would leave a
+    ticker looking unfetchable when it had in fact just been fetched.
     """
     market = normalize_market(market)
     positions = await _load_positions(session, user_id, market, portfolio_id)
@@ -269,13 +274,14 @@ async def backfill_missing_archives(
 
     archived: list[str] = []
     for ticker in missing:
+        # Sequential on purpose: each is a multi-year download, and firing
+        # them together is the shape yfinance rate-limits.
         try:
-            # Sequential on purpose: each is a multi-year download, and
-            # firing them together is the shape yfinance rate-limits.
             await stock_service.add_stock(ticker)
+        except Exception as e:  # noqa: BLE001 — the archive check below decides
+            logger.warning("Backfill raised for %s: %r", ticker, e)
+        if await market_data_service.has_data(ticker):
             archived.append(ticker)
-        except Exception as e:  # noqa: BLE001 — a miss stays reported as excluded
-            logger.warning("Backfill failed for %s: %r", ticker, e)
 
     if archived:
         invalidate(user_id)

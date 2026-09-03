@@ -178,18 +178,25 @@ async def add_stock(ticker: str):
         OHLCVResponse: The stock data for the specified ticker and time period.
         StockDetailedResponse: Detailed information about the stock, including financials, calendar events, analyst price targets, and recommendations.
     '''
+    # Archiving the price history is what this function exists for. It used
+    # to also scrape `.info` afterwards and let a failure there raise — so a
+    # rate limit on the *description* discarded a price archive that had
+    # already been written, and the caller was told the whole add failed.
     try:
-        # Fetch data from yfinance and upsert into the market_data table
         from .price_fetcher import fetch_historical_price_data
         await fetch_historical_price_data(ticker)
         _snapshot_cache.invalidate("all_stocks")
-        ohlcv = await fetch(ticker)  # Return the fetched data
-        service = StockService()
-        stock = yf.Ticker(ticker)
-        detailed_info = await asyncio.to_thread(service.get_stock_details, stock)  # Get detailed info for the stock
-        return StockCreateResponse(exist=False, ohlcv=ohlcv, details=detailed_info)
+        ohlcv = await fetch(ticker)
     except Exception as e:  # noqa: BLE001
-        raise ValueError(f"Error creating stock data for {ticker}: {str(e)}")
+        raise ValueError(f"Error creating stock data for {ticker}: {e}")
+
+    try:
+        detailed_info = await fetch_detailed(yf.Ticker(ticker))
+    except Exception as e:  # noqa: BLE001 — cosmetic next to having the prices
+        logger.warning("Detail fetch failed while adding %s: %r", ticker, e)
+        detailed_info = StockDetailedResponse(ticker=ticker)
+
+    return StockCreateResponse(exist=False, ohlcv=ohlcv, details=detailed_info)
 
 
 async def delete_stock(ticker: str):

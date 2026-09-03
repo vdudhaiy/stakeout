@@ -20,13 +20,16 @@ interface Props {
   days: number
   currency: Currency
   benchmarkName: string
+  /** False when the index couldn't be priced — `benchmark_value` is then a
+   *  flat zero series, and drawing it claims the index was worth nothing. */
+  benchmarkAvailable: boolean
 }
 
 const VALUE_COLOR = '#818cf8'
 const INVESTED_COLOR = '#52525b'
 const BENCHMARK_COLOR = '#f59e0b'
 
-function ValueTooltip({ active, payload, currency, benchmarkName }: any) {
+function ValueTooltip({ active, payload, currency, benchmarkName, benchmarkAvailable }: any) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload as PerformancePoint
   const gain = d.value - d.invested
@@ -38,8 +41,10 @@ function ValueTooltip({ active, payload, currency, benchmarkName }: any) {
         <span className="text-zinc-100 text-right">{formatMoney(d.value, currency, { compact: true })}</span>
         <span className="text-zinc-500">Invested</span>
         <span className="text-zinc-300 text-right">{formatMoney(d.invested, currency, { compact: true })}</span>
-        <span style={{ color: BENCHMARK_COLOR }}>In {benchmarkName}</span>
-        <span className="text-zinc-300 text-right">{formatMoney(d.benchmark_value, currency, { compact: true })}</span>
+        {benchmarkAvailable && <>
+          <span style={{ color: BENCHMARK_COLOR }}>In {benchmarkName}</span>
+          <span className="text-zinc-300 text-right">{formatMoney(d.benchmark_value, currency, { compact: true })}</span>
+        </>}
       </div>
       <div className="mt-2 pt-2 border-t border-zinc-800 flex justify-between gap-4">
         <span className="text-zinc-500">Gain</span>
@@ -62,13 +67,19 @@ function ValueTooltip({ active, payload, currency, benchmarkName }: any) {
  * "did I beat it?" and this one answers "by how much money?" — and a single
  * axis can't carry both without one of them becoming unreadable.
  */
-export function ValueChart({ points, days, currency, benchmarkName }: Props) {
+export function ValueChart({ points, days, currency, benchmarkName, benchmarkAvailable }: Props) {
   if (points.length < 2) return null
 
   const ticks = thinTicks(computeXTicks(points.map(p => p.date), days), MAX_TICKS)
-  const all = points.flatMap(p => [p.value, p.invested, p.benchmark_value])
+  const all = points.flatMap(p => benchmarkAvailable
+    ? [p.value, p.invested, p.benchmark_value]
+    : [p.value, p.invested])
   const max = Math.max(...all)
   const min = Math.min(...all, 0)
+  // See GrowthChart: a spline through three points draws a trend that was
+  // never observed.
+  const sparse = points.length <= 10
+  const curve = sparse ? 'linear' : 'monotone'
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -97,7 +108,13 @@ export function ValueChart({ points, days, currency, benchmarkName }: Props) {
           width={64}
           tickFormatter={v => formatMoney(v as number, currency, { compact: true })}
         />
-        <Tooltip content={<ValueTooltip currency={currency} benchmarkName={benchmarkName} />} />
+        <Tooltip content={
+          <ValueTooltip
+            currency={currency}
+            benchmarkName={benchmarkName}
+            benchmarkAvailable={benchmarkAvailable}
+          />
+        } />
         {/* Drawn first so the filled value area sits on top of both lines. */}
         <Line
           type="stepAfter"
@@ -108,23 +125,25 @@ export function ValueChart({ points, days, currency, benchmarkName }: Props) {
           isAnimationActive={false}
           name="Invested"
         />
-        <Line
-          type="monotone"
-          dataKey="benchmark_value"
-          stroke={BENCHMARK_COLOR}
-          strokeWidth={1.4}
-          strokeDasharray="5 3"
-          dot={false}
-          isAnimationActive={false}
-          name={benchmarkName}
-        />
+        {benchmarkAvailable && (
+          <Line
+            type={curve}
+            dataKey="benchmark_value"
+            stroke={BENCHMARK_COLOR}
+            strokeWidth={1.4}
+            strokeDasharray="5 3"
+            dot={false}
+            isAnimationActive={false}
+            name={benchmarkName}
+          />
+        )}
         <Area
-          type="monotone"
+          type={curve}
           dataKey="value"
           stroke={VALUE_COLOR}
           strokeWidth={1.8}
           fill="url(#valueGradient)"
-          dot={false}
+          dot={sparse ? { r: 2.5, strokeWidth: 0, fill: VALUE_COLOR } : false}
           isAnimationActive={false}
           activeDot={{ r: 3, strokeWidth: 0, fill: VALUE_COLOR }}
           name="Value"

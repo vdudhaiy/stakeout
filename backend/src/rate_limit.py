@@ -84,6 +84,15 @@ class RateLimiter:
             stale = [k for k, v in self._hits.items() if not v or v[-1] < cutoff]
             for k in stale[: max(1, len(self._hits) // 8)]:
                 self._hits.pop(k, None)
+            # Staleness alone cannot bound this. A caller cycling source
+            # addresses produces keys that are all *fresh*, so none of them
+            # qualify above and the dict grows without limit — which is the
+            # exact shape this cap exists to stop. Fall back to evicting the
+            # least recently seen until the cap actually holds.
+            if len(self._hits) > _MAX_TRACKED_KEYS:
+                by_age = sorted(self._hits, key=lambda k: self._hits[k][-1] if self._hits[k] else 0.0)
+                for k in by_age[: len(self._hits) - _MAX_TRACKED_KEYS]:
+                    self._hits.pop(k, None)
 
     def reset(self) -> None:
         """Test-only: clear all tracked state."""

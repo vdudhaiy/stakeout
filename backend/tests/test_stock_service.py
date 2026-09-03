@@ -1042,3 +1042,31 @@ async def test_a_fresh_fetch_refreshes_the_stale_copy_too():
         served = await fetch_detailed(mock_stock)
 
     assert served.info == {"shortName": "second"}
+
+
+# ── add_stock degrades on the details scrape ──────────────────────────────
+
+async def test_add_stock_keeps_the_archive_when_the_details_scrape_fails():
+    """Archiving prices is what add_stock is for. It used to scrape `.info`
+    afterwards and let a failure there raise, discarding a price archive that
+    had already been written — which is why the Performance panel's "Fetch
+    now" reported failure on tickers it had just archived."""
+    with patch("services.price_fetcher.fetch_historical_price_data",
+               new_callable=AsyncMock) as mock_archive:
+        with patch("services.stock_service.fetch",
+                   new_callable=AsyncMock, return_value=_ohlcv("AAPL")):
+            with patch("services.stock_service.fetch_detailed",
+                       new_callable=AsyncMock, side_effect=YFRateLimitError()):
+                result = await stock_service.add_stock("AAPL")
+
+    mock_archive.assert_awaited_once_with("AAPL")
+    assert result.exist is False
+    assert result.ohlcv.ticker == "AAPL"
+    assert result.details.info is None      # degraded, not fatal
+
+
+async def test_add_stock_still_fails_when_the_archive_cannot_be_written():
+    with patch("services.price_fetcher.fetch_historical_price_data",
+               new_callable=AsyncMock, side_effect=ValueError("no data for ticker")):
+        with pytest.raises(ValueError, match="Error creating stock data"):
+            await stock_service.add_stock("ZZZZ")
