@@ -185,8 +185,16 @@ def _summarize(
     index = returns_math.growth_index(returns)
     drawdown, _peak, _trough = returns_math.max_drawdown(index)
     twr = returns_math.total_return(returns)
+    # XIRR is an annual rate by construction, so it needs the same floor as
+    # CAGR. Without it a two-day-old portfolio up 0.6% reported "+8796.1% per
+    # year" — arithmetically correct, and the least trustworthy thing on the
+    # page. The cumulative time-weighted return is still shown, because that
+    # one is honest over any span.
+    money_weighted = (
+        returns_math.xirr(flows) if span_days >= returns_math.MIN_ANNUALIZATION_DAYS else None
+    )
     return ReturnSummary(
-        money_weighted=returns_math.xirr(flows),
+        money_weighted=money_weighted,
         time_weighted=twr,
         annualized=returns_math.annualized(twr, span_days),
         max_drawdown=drawdown,
@@ -218,6 +226,7 @@ def _empty(
         portfolio_name=portfolio_name,
         benchmark_symbol=symbol,
         benchmark_name=name,
+        benchmark_available=False,
         range=range_key,
         start_date=None,
         end_date=None,
@@ -230,6 +239,47 @@ def _empty(
         stale_archive=stale_archive,
         insufficient_data=True,
     )
+
+
+async def backfill_missing_archives(
+    session: AsyncSession, user_id: str, market: str | None = None,
+    portfolio_id: int | None = None,
+) -> list[str]:
+    """Archive price history for held tickers that have none yet.
+
+    `ensure_archive_current` deliberately does nothing for a ticker with an
+    empty archive — extending nothing is not a top-up. But that is exactly
+    the state a holding lands in when its first-buy backfill lost a race with
+    a rate limit, and nothing afterwards ever retried it: the position simply
+    sat in the "not included" list forever. This is the retry, triggered by
+    the user rather than on a timer, because it is expensive (a full history
+    download per ticker) and pointless to repeat unprompted.
+
+    Returns the tickers it managed to archive. Never raises — a ticker that
+    still fails stays in `excluded_tickers`, which is where the UI reports it.
+    """
+    market = normalize_market(market)
+    positions = await _load_positions(session, user_id, market, portfolio_id)
+    tickers = [h.ticker for h, _t, _d in positions]
+    if not tickers:
+        return []
+
+    present = await market_data_service.get_closes(tickers)
+    missing = [t for t in tickers if t not in present]
+
+    archived: list[str] = []
+    for ticker in missing:
+        try:
+            # Sequential on purpose: each is a multi-year download, and
+            # firing them together is the shape yfinance rate-limits.
+            await stock_service.add_stock(ticker)
+            archived.append(ticker)
+        except Exception as e:  # noqa: BLE001 — a miss stays reported as excluded
+            logger.warning("Backfill failed for %s: %r", ticker, e)
+
+    if archived:
+        invalidate(user_id)
+    return archived
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────
@@ -432,7 +482,10 @@ async def _compute(
 
     current_value = Decimal(str(round(values[-1], 8)))
     net_invested = Decimal(str(round(invested[-1], 8)))
-    benchmark_final = Decimal(str(round(benchmark_values[-1], 8)))
+    # None, never 0, when the index couldn't be priced. `current_value - 0`
+    # reads as "you beat the index by your entire portfolio" — the most
+    # confidently wrong number this page could print, and it printed it.
+    benchmark_final = Decimal(str(round(benchmark_values[-1], 8))) if have_benchmark else None
 
     realized = Decimal(0)
     for _h, transactions, _d in priced:
@@ -463,8 +516,9 @@ async def _compute(
         total_dividends=total_dividends,
         realized_gains=realized,
         unrealized_gains=current_value - net_invested,
+        benchmark_available=have_benchmark,
         benchmark_final_value=benchmark_final,
-        value_added=current_value - benchmark_final,
+        value_added=(current_value - benchmark_final) if benchmark_final is not None else None,
         excluded_tickers=excluded,
         insufficient_data=False,
     )

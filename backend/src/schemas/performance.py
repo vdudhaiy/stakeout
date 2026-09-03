@@ -67,10 +67,17 @@ class PerformanceResponse(BaseModel):
     realized_gains: Money = Decimal(0)
     unrealized_gains: Money = Decimal(0)
 
+    # Whether the benchmark index could be priced at all over this window.
+    # False means every benchmark figure below is None and the UI must not
+    # present a comparison — see the two fields after it.
+    benchmark_available: bool = True
+
     # What the same money, on the same days, would be worth in the index —
     # the only apples-to-apples comparison when contributions are irregular.
-    benchmark_final_value: Money = Decimal(0)
-    value_added: Money = Decimal(0)        # current_value - benchmark_final_value
+    # None (not 0) when the index is unavailable: a 0 here turns value_added
+    # into the whole portfolio and claims a win that was never measured.
+    benchmark_final_value: Money | None = None
+    value_added: Money | None = None       # current_value - benchmark_final_value
 
     # Holdings left out because the shared archive has no price history for
     # them. Surfaced rather than silently dropped: the totals on this page

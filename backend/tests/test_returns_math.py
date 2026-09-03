@@ -160,6 +160,14 @@ def test_annualizing_is_refused_for_very_short_periods():
     assert rm.annualized(0.05, 14) is None
 
 
+def test_the_annualization_floor_is_shared_so_both_measures_agree():
+    """XIRR and CAGR are both annual rates; withholding one while publishing
+    the other is how "+8796.1% per year" reached a real screen."""
+    assert rm.MIN_ANNUALIZATION_DAYS >= 28
+    assert rm.annualized(0.05, rm.MIN_ANNUALIZATION_DAYS - 1) is None
+    assert rm.annualized(0.05, rm.MIN_ANNUALIZATION_DAYS) is not None
+
+
 def test_annualized_floors_at_total_loss():
     assert rm.annualized(-1.0, 400) == -1.0
 

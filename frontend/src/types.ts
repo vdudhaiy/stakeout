@@ -519,8 +519,11 @@ export interface PerformanceResponse {
   total_dividends: number
   realized_gains: number
   unrealized_gains: number
-  benchmark_final_value: number
-  value_added: number
+  /** False when the index couldn't be priced — the two fields below are then
+   *  null and no comparison may be shown. */
+  benchmark_available: boolean
+  benchmark_final_value: number | null
+  value_added: number | null
   excluded_tickers: string[]
   insufficient_data: boolean
   /** insufficient_data is because the price archive is behind, not because

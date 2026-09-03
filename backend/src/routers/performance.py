@@ -6,11 +6,12 @@ mutates a position, and nothing here calls yfinance for the portfolio side
 (see services/performance_service.py for why that matters).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_user
 from database import get_session
+from rate_limit import performance_backfill_limiter
 from schemas.performance import PerformanceResponse
 from services import performance_service, portfolio_admin_service
 
@@ -33,6 +34,7 @@ async def get_performance(
     market: str | None = None,
     portfolio_id: int | None = None,
     range: str = performance_service.DEFAULT_RANGE,
+    refresh: bool = Query(False),
     session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_user),
 ):
@@ -45,7 +47,16 @@ async def get_performance(
 
     `private` on the cache header, not `public`: this is one user's holdings,
     and a shared cache must never hand it to anyone else.
+
+    Pass `refresh=true` (the panel's reload control) to drop the cached
+    answer and archive any holding that has no price history yet — the one
+    thing a plain reload cannot fix, since a ticker with an empty archive has
+    nothing to top up. Rate-limited per user: each miss is a multi-year
+    download.
     """
+    if refresh:
+        performance_backfill_limiter.check(user_id)
+
     name: str | None = None
     if portfolio_id is not None:
         try:
@@ -53,6 +64,12 @@ async def get_performance(
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
         portfolio_id, name, market = portfolio.id, portfolio.name, portfolio.market
+
+    if refresh:
+        performance_service.invalidate(user_id)
+        await performance_service.backfill_missing_archives(
+            session, user_id, market, portfolio_id,
+        )
 
     data = await performance_service.get_performance(
         session, user_id, market, portfolio_id=portfolio_id, portfolio_name=name, range_key=range,

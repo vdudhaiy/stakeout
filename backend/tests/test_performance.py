@@ -227,7 +227,9 @@ async def test_time_weighted_return_matches_the_price_move(db_session, pid):
 async def test_dividends_are_income_not_a_contribution(db_session, pid):
     """Counting a dividend as money added would make income look like a
     deposit and quietly depress every return figure on the page."""
-    axis = _days(date(2024, 1, 1), 5)
+    # Long enough to clear the annualization floor — a money-weighted return
+    # is withheld below a month, and this test is about its sign.
+    axis = _days(date(2024, 1, 1), 40)
     await _add_holding(
         db_session, pid, "AAPL",
         transactions=[(False, axis[0], 10, 100.0)],
@@ -545,3 +547,168 @@ async def test_the_archive_is_topped_up_for_every_held_ticker_before_charting(db
         await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert {c.args[0] for c in mock_topup.await_args_list} == {"AAPL", "MSFT"}
+
+
+# ── benchmark unavailable ─────────────────────────────────────────────────
+# A missing index used to be treated as one worth $0, so value_added came out
+# as the entire portfolio and the page announced a win it never measured.
+
+async def test_an_unavailable_benchmark_reports_no_comparison_rather_than_a_fake_one(db_session, pid):
+    axis = _days(date(2024, 1, 1), 40)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 120.0)}, {})
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.benchmark_available is False
+    assert result.benchmark_final_value is None
+    assert result.value_added is None
+    # The portfolio's own figures are still perfectly measurable.
+    assert result.current_value == pytest.approx(Decimal("1200"))
+
+
+async def test_an_available_benchmark_still_reports_a_comparison(db_session, pid):
+    axis = _days(date(2024, 1, 1), 40)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.benchmark_available is True
+    assert result.value_added == pytest.approx(Decimal("0"))
+
+
+# ── short windows ─────────────────────────────────────────────────────────
+
+async def test_a_two_day_old_portfolio_withholds_its_annualized_figures(db_session, pid):
+    """XIRR is an annual rate by construction. Two days at +0.6% annualizes to
+    several thousand percent — arithmetically right, completely useless."""
+    axis = _days(date(2024, 1, 1), 3)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 100.6)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.portfolio.money_weighted is None
+    assert result.portfolio.annualized is None
+    # The cumulative figure is honest over any span, so it stays.
+    assert result.portfolio.time_weighted == pytest.approx(0.006, abs=1e-4)
+
+
+async def test_a_long_enough_window_still_reports_a_money_weighted_return(db_session, pid):
+    axis = _days(date(2024, 1, 1), 200)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 150.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.portfolio.money_weighted is not None
+    assert result.portfolio.annualized is not None
+
+
+# ── backfill ──────────────────────────────────────────────────────────────
+# ensure_archive_current deliberately skips a ticker with an empty archive —
+# there is nothing to extend. That is exactly the state a holding lands in
+# when its first-buy backfill lost a race with a rate limit, and nothing ever
+# retried it. This is the user-triggered retry.
+
+async def test_backfill_archives_only_the_holdings_that_have_no_history(db_session, pid):
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+    await _add_holding(db_session, pid, "MSFT", transactions=[(False, axis[0], 5, 200.0)])
+
+    with patch("services.performance_service.market_data_service.get_closes",
+               new_callable=AsyncMock, return_value={"MSFT": _flat(axis, 200.0)}):
+        with patch("services.performance_service.stock_service.add_stock",
+                   new_callable=AsyncMock) as mock_add:
+            archived = await performance_service.backfill_missing_archives(
+                db_session, USER_ID, "US",
+            )
+
+    assert archived == ["AAPL"]
+    mock_add.assert_awaited_once_with("AAPL")
+
+
+async def test_backfill_keeps_going_when_one_ticker_fails(db_session, pid):
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+    await _add_holding(db_session, pid, "MSFT", transactions=[(False, axis[0], 5, 200.0)])
+
+    async def flaky(ticker):
+        if ticker == "AAPL":
+            raise ValueError("rate limited")
+
+    with patch("services.performance_service.market_data_service.get_closes",
+               new_callable=AsyncMock, return_value={}):
+        with patch("services.performance_service.stock_service.add_stock",
+                   new_callable=AsyncMock, side_effect=flaky):
+            archived = await performance_service.backfill_missing_archives(
+                db_session, USER_ID, "US",
+            )
+
+    assert archived == ["MSFT"]   # the failure stays reported as excluded
+
+
+async def test_backfill_is_a_no_op_for_a_fully_archived_portfolio(db_session, pid):
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    with patch("services.performance_service.market_data_service.get_closes",
+               new_callable=AsyncMock, return_value={"AAPL": _flat(axis, 100.0)}):
+        with patch("services.performance_service.stock_service.add_stock",
+                   new_callable=AsyncMock) as mock_add:
+            archived = await performance_service.backfill_missing_archives(
+                db_session, USER_ID, "US",
+            )
+
+    assert archived == []
+    mock_add.assert_not_called()
+
+
+# ── route ─────────────────────────────────────────────────────────────────
+
+async def test_refresh_triggers_a_backfill_and_bypasses_the_cache(client):
+    with patch("routers.performance.performance_service.get_performance",
+               new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = performance_service._empty("US", None, None, "max")
+        with patch("routers.performance.performance_service.backfill_missing_archives",
+                   new_callable=AsyncMock, return_value=["AAPL"]) as mock_backfill:
+            with patch("routers.performance.performance_service.invalidate") as mock_invalidate:
+                resp = await client.get("/performance/?refresh=true")
+
+    assert resp.status_code == 200
+    mock_backfill.assert_awaited_once()
+    mock_invalidate.assert_called_once()
+
+
+async def test_a_plain_load_does_not_backfill(client):
+    with patch("routers.performance.performance_service.get_performance",
+               new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = performance_service._empty("US", None, None, "max")
+        with patch("routers.performance.performance_service.backfill_missing_archives",
+                   new_callable=AsyncMock) as mock_backfill:
+            resp = await client.get("/performance/")
+
+    assert resp.status_code == 200
+    mock_backfill.assert_not_called()
+
+
+async def test_refresh_is_rate_limited_per_user(client):
+    """Each miss is a multi-year download, so this can't be a free retry loop."""
+    from rate_limit import performance_backfill_limiter
+
+    with patch("routers.performance.performance_service.get_performance",
+               new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = performance_service._empty("US", None, None, "max")
+        with patch("routers.performance.performance_service.backfill_missing_archives",
+                   new_callable=AsyncMock, return_value=[]):
+            statuses = []
+            for _ in range(performance_backfill_limiter._max + 2):
+                statuses.append((await client.get("/performance/?refresh=true")).status_code)
+
+    assert statuses[0] == 200
+    assert statuses[-1] == 429

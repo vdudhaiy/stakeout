@@ -157,6 +157,13 @@ add_stock_limiter = RateLimiter(max_requests=10, window_seconds=_HOUR)
 ai_limiter = RateLimiter(max_requests=20, window_seconds=_MINUTE)
 
 
+# The Performance panel's "refresh" archives any held ticker that has no
+# price history yet — years of daily bars per miss. Authenticated, so it is
+# keyed on user id rather than IP, and generous enough to cover a few
+# genuine retries while a new portfolio fills in.
+performance_backfill_limiter = RateLimiter(max_requests=8, window_seconds=_HOUR)
+
+
 def reset_all() -> None:
     """Test-only: clear every limiter's tracked state.
 

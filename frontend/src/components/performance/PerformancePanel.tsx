@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
 import { AnimatePresence, motion } from 'motion/react'
-import { Activity, AlertTriangle, ChevronDown, ChevronUp, Scale, TrendingDown, TrendingUp } from 'lucide-react'
+import { Activity, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Scale, TrendingDown, TrendingUp } from 'lucide-react'
 import { fetchPerformance } from '../../api'
 import { formatMoney } from '../../utils/currency'
 import { collapse, layoutSpring } from '../../lib/motion'
@@ -40,9 +40,15 @@ function formatSpan(days: number): string {
   return `${(days / 365).toFixed(1)} years`
 }
 
-/** The one-line verdict: money ahead of (or behind) simply buying the index. */
+/** The one-line verdict: money ahead of (or behind) simply buying the index.
+ *
+ * Falls back to plain profit when the index couldn't be priced. It used to
+ * treat an unavailable benchmark as one worth $0, which turned "we have no
+ * S&P data" into "you beat the S&P by your entire portfolio". */
 function Verdict({ data }: { data: PerformanceResponse }) {
-  const ahead = data.value_added >= 0
+  const comparable = data.benchmark_available && data.value_added != null
+  const headline = comparable ? data.value_added! : data.current_value - data.net_invested
+  const ahead = headline >= 0
   const Icon = ahead ? TrendingUp : TrendingDown
   return (
     <motion.div
@@ -63,19 +69,26 @@ function Verdict({ data }: { data: PerformanceResponse }) {
         </span>
         <div className="min-w-0">
           <p className="flex items-center gap-1 text-[0.625rem] tracking-widest text-zinc-500 font-medium">
-            VS {data.benchmark_name.toUpperCase()} <InfoTip k="value_added" />
+            {comparable ? <>VS {data.benchmark_name.toUpperCase()} <InfoTip k="value_added" /></> : 'TOTAL GAIN'}
           </p>
           <p className={clsx(
             'mt-1 font-mono text-2xl sm:text-3xl tabular-nums',
             ahead ? 'text-emerald-400' : 'text-red-400',
           )}>
-            {formatMoney(data.value_added, data.currency, { sign: true })}
+            {formatMoney(headline, data.currency, { sign: true })}
           </p>
           <p className="mt-1.5 text-xs text-zinc-400 leading-relaxed">
             Your {formatMoney(data.net_invested, data.currency)} is worth{' '}
             <span className="text-zinc-200 font-mono">{formatMoney(data.current_value, data.currency)}</span>.
-            The same contributions in {data.benchmark_name} would be{' '}
-            <span className="text-zinc-200 font-mono">{formatMoney(data.benchmark_final_value, data.currency)}</span>.
+            {comparable ? (
+              <>
+                {' '}The same contributions in {data.benchmark_name} would be{' '}
+                <span className="text-zinc-200 font-mono">{formatMoney(data.benchmark_final_value, data.currency)}</span>.
+              </>
+            ) : (
+              <> {data.benchmark_name} history isn&rsquo;t available for this period, so there&rsquo;s
+              nothing to compare against yet.</>
+            )}
           </p>
         </div>
       </div>
@@ -87,7 +100,11 @@ function SummaryRow({ label, summary, muted }: { label: string; summary: ReturnS
   return (
     <div className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1fr_auto_auto_auto] items-center gap-x-4 gap-y-1 py-2 text-xs font-mono">
       <span className={clsx('truncate', muted ? 'text-zinc-500' : 'text-zinc-200')}>{label}</span>
-      <span className={clsx('tabular-nums text-right w-16', toneOf(summary.time_weighted) === 'positive' ? 'text-emerald-400' : 'text-red-400')}>
+      <span className={clsx(
+        'tabular-nums text-right w-16',
+        summary.time_weighted == null ? 'text-zinc-600'
+          : summary.time_weighted >= 0 ? 'text-emerald-400' : 'text-red-400',
+      )}>
         {pct(summary.time_weighted, { sign: true })}
       </span>
       <span className="tabular-nums text-right w-16 text-zinc-400">{pct(summary.annualized, { sign: true })}</span>
@@ -124,18 +141,23 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
   const [chartMode, setChartMode] = usePersistedState<ChartMode>('performance-chart', 'growth')
   const [data, setData] = useState<PerformanceResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (refresh = false) => {
+    if (refresh) setRefreshing(true)
+    else setLoading(true)
     setError(null)
     try {
-      setData(await fetchPerformance(market, portfolioId, range))
+      setData(await fetchPerformance(market, portfolioId, range, refresh))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load performance')
-      setData(null)
+      // A failed refresh keeps whatever is already on screen — losing a good
+      // chart because a retry timed out would be a strictly worse outcome.
+      if (!refresh) setData(null)
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [market, portfolioId, range])
 
@@ -199,9 +221,17 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
   }, [data])
 
   // The headline the collapsed state carries, so folding the panel away
-  // doesn't hide the one number it exists to report.
-  const summary = data && !data.insufficient_data
-    ? `${formatMoney(data.value_added, data.currency, { sign: true, compact: true })} vs ${data.benchmark_name}`
+  // doesn't hide the one number it exists to report. Falls back to plain
+  // profit when the index couldn't be priced — quoting a "vs S&P 500" figure
+  // that was never measured against the S&P is worse than quoting nothing.
+  const headlineValue = data && !data.insufficient_data
+    ? (data.benchmark_available && data.value_added != null
+        ? data.value_added
+        : data.current_value - data.net_invested)
+    : null
+  const summary = data && !data.insufficient_data && headlineValue != null
+    ? `${formatMoney(headlineValue, data.currency, { sign: true, compact: true })}`
+      + (data.benchmark_available ? ` vs ${data.benchmark_name}` : ' total gain')
     : null
 
   return (
@@ -217,10 +247,32 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
         {!open && summary && (
           <span className={clsx(
             'ml-auto font-mono normal-case tracking-normal',
-            data && data.value_added >= 0 ? 'text-emerald-400' : 'text-red-400',
+            (headlineValue ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400',
           )}>
             {summary}
           </span>
+        )}
+        {/* Reload. Does more than re-fetch: it asks the server to archive any
+            holding that has no price history yet, which is the only way a
+            ticker whose first backfill failed ever gets one. Tinted amber
+            while something is missing, so the fix is where the problem is. */}
+        {open && (
+          <button
+            onClick={e => { e.stopPropagation(); load(true) }}
+            disabled={refreshing}
+            title={excluded.length > 0
+              ? `Reload and fetch missing price history (${excluded.join(', ')})`
+              : 'Reload performance'}
+            aria-label="Reload performance"
+            className={clsx(
+              'tap-target ml-auto p-1.5 sm:p-1 rounded-lg transition-colors disabled:opacity-40',
+              excluded.length > 0
+                ? 'text-amber-400 hover:text-amber-300 hover:bg-zinc-800'
+                : 'text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800',
+            )}
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+          </button>
         )}
         <button
           onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
@@ -228,7 +280,7 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
           aria-label={open ? 'Minimize performance' : 'Expand performance'}
           className={clsx(
             'tap-target p-1.5 sm:p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors',
-            (open || !summary) && 'ml-auto',
+            !open && !summary && 'ml-auto',
           )}
         >
           {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
@@ -256,6 +308,8 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
                 market={market}
                 excluded={excluded}
                 staleArchive={data?.stale_archive ?? false}
+                refreshing={refreshing}
+                onRetry={() => load(true)}
               />
             ) : (
               <div className="space-y-4">
@@ -344,13 +398,21 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
                 </div>
 
                 {excluded.length > 0 && (
-                  <p className="flex items-start gap-2 text-xs text-amber-300/80">
-                    <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-amber-300/80">
+                    <AlertTriangle size={13} className="shrink-0" />
                     <span>
                       Not included — no price history archived yet:{' '}
                       <span className="font-mono">{excluded.join(', ')}</span>
                     </span>
-                  </p>
+                    <button
+                      onClick={() => load(true)}
+                      disabled={refreshing}
+                      className="ml-auto shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-500/30 hover:bg-amber-500/10 text-amber-300 transition-colors disabled:opacity-40"
+                    >
+                      <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} />
+                      {refreshing ? 'Fetching…' : 'Fetch now'}
+                    </button>
+                  </div>
                 )}
                 <p className="text-[0.6875rem] text-zinc-600 leading-relaxed">
                   Priced to the close on {data.end_date}, from the price archive rather than the
@@ -374,9 +436,11 @@ interface EmptyStateProps {
   /** The chart is empty because prices haven't been archived yet, not
    *  because there are no positions. Very different message. */
   staleArchive: boolean
+  refreshing: boolean
+  onRetry: () => void
 }
 
-function EmptyState({ guest, market, excluded, staleArchive }: EmptyStateProps) {
+function EmptyState({ guest, market, excluded, staleArchive, refreshing, onRetry }: EmptyStateProps) {
   const title = guest
     ? 'Sign in to track performance'
     : staleArchive
@@ -397,6 +461,18 @@ function EmptyState({ guest, market, excluded, staleArchive }: EmptyStateProps) 
         <p className="mt-3 text-xs text-amber-300/80">
           Waiting on price history for <span className="font-mono">{excluded.join(', ')}</span>.
         </p>
+      )}
+      {/* The empty state is the one place a user can be stuck with nothing to
+          click, so the retry lives here too rather than only in the header. */}
+      {!guest && (excluded.length > 0 || staleArchive) && (
+        <button
+          onClick={onRetry}
+          disabled={refreshing}
+          className="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-600 hover:bg-zinc-800 text-xs text-zinc-300 transition-colors disabled:opacity-40"
+        >
+          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+          {refreshing ? 'Fetching price history…' : 'Fetch price history now'}
+        </button>
       )}
     </div>
   )

@@ -212,10 +212,14 @@ export async function fetchPerformance(
   market: Market,
   portfolioId?: number | null,
   range: PerformanceRange = 'max',
+  /** Drops the server's cached answer and archives holdings that have no
+   *  price history yet — the panel's reload control, not the normal load. */
+  refresh = false,
 ): Promise<PerformanceResponse> {
   if (isGuestMode()) return guestPerformancePlaceholder(market)
   const params = new URLSearchParams({ market, range })
   if (portfolioId != null) params.set('portfolio_id', String(portfolioId))
+  if (refresh) params.set('refresh', 'true')
   const res = await apiFetch(`/performance/?${params}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
@@ -249,8 +253,9 @@ function guestPerformancePlaceholder(market: Market): PerformanceResponse {
     total_dividends: 0,
     realized_gains: 0,
     unrealized_gains: 0,
-    benchmark_final_value: 0,
-    value_added: 0,
+    benchmark_available: false,
+    benchmark_final_value: null,
+    value_added: null,
     excluded_tickers: [],
     insufficient_data: true,
     stale_archive: false,

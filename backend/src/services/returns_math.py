@@ -32,6 +32,12 @@ _DAYS_PER_YEAR = 365.0
 # Trading days in a year, for annualizing a daily volatility figure.
 _TRADING_DAYS = 252
 
+# Below this, any *annualized* figure — XIRR or CAGR — is noise dressed as a
+# forecast: a 0.6% gain over two days annualizes to several thousand percent.
+# Both measures share the threshold so the page can't report one and withhold
+# the other.
+MIN_ANNUALIZATION_DAYS = 30
+
 # A rate below -100% is meaningless (you cannot lose more than everything)
 # and 1 + r hits zero there, so the search is bounded just above it.
 _MIN_RATE = -0.999999
@@ -159,7 +165,7 @@ def annualized(total: float, days: int) -> float | None:
     confidently enormous number that means nothing, and publishing it would
     be the single most misleading figure on the page.
     """
-    if days < 30:
+    if days < MIN_ANNUALIZATION_DAYS:
         return None
     if total <= -1.0:
         return -1.0

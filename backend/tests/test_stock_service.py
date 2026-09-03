@@ -937,3 +937,108 @@ async def test_a_persisted_marker_suppresses_a_redundant_refetch():
                     await fetch("AAPL")
 
     append.assert_not_called()
+
+
+# ── dashboard degradation ─────────────────────────────────────────────────
+# The reported bug: reloading the Tracker during a yfinance rate limit showed
+# "Error fetching dashboard data for AMD: Too Many Requests" and rendered
+# nothing — even though the chart comes from the archive and needed no
+# network at all. Only a missing archive may fail this endpoint now.
+
+def _ohlcv(ticker="AMD"):
+    return OHLCVResponse(ticker=ticker, data=[OHLCV(date="2024-01-15", close=457.06)])
+
+
+async def test_dashboard_survives_a_rate_limited_details_fetch():
+    with patch("services.stock_service.fetch", new_callable=AsyncMock, return_value=_ohlcv()):
+        with patch("services.stock_service.fetch_detailed",
+                   new_callable=AsyncMock, side_effect=YFRateLimitError()):
+            with patch("services.stock_service.fetch_eps_history",
+                       new_callable=AsyncMock, side_effect=YFRateLimitError()):
+                with patch("services.stock_service.fetch_revenue_history",
+                           new_callable=AsyncMock, side_effect=YFRateLimitError()):
+                    result = await fetch_stock_dashboard("AMD")
+
+    # The chart is what the page is for, and it survived.
+    assert result.ticker == "AMD"
+    assert len(result.ohlcv) == 1
+    assert result.ohlcv[0].close == pytest.approx(457.06)
+    # Supplementary panels degrade to empty rather than taking the page down.
+    assert result.info is None
+    assert result.earnings_history is None
+    assert result.revenue_history is None
+
+
+async def test_dashboard_still_fails_when_there_is_no_price_history():
+    """The one failure with no fallback — without price rows there is no
+    chart and nothing worth rendering."""
+    with patch("services.stock_service.fetch",
+               new_callable=AsyncMock, side_effect=ValueError("No data found for ticker: ZZZZ")):
+        with pytest.raises(ValueError, match="Error fetching dashboard data"):
+            await fetch_stock_dashboard("ZZZZ")
+
+
+async def test_dashboard_keeps_the_details_it_can_still_get():
+    """A partial failure must not discard the parts that worked."""
+    details = StockDetailedResponse(ticker="AMD", info={"shortName": "AMD"})
+    with patch("services.stock_service.fetch", new_callable=AsyncMock, return_value=_ohlcv()):
+        with patch("services.stock_service.fetch_detailed",
+                   new_callable=AsyncMock, return_value=details):
+            with patch("services.stock_service.fetch_eps_history",
+                       new_callable=AsyncMock, side_effect=YFRateLimitError()):
+                with patch("services.stock_service.fetch_revenue_history",
+                           new_callable=AsyncMock, side_effect=YFRateLimitError()):
+                    result = await fetch_stock_dashboard("AMD")
+
+    assert result.info == {"shortName": "AMD"}
+
+
+# ── stale snapshot tier ───────────────────────────────────────────────────
+
+async def test_a_snapshot_falls_back_to_a_stale_copy_when_the_fetch_fails():
+    """Analyst targets from this morning beat a blank panel."""
+    good = StockDetailedResponse(ticker="AMD", info={"shortName": "AMD"})
+    mock_stock = MagicMock()
+    mock_stock.ticker = "AMD"
+
+    with patch("services.stock_service.StockService.get_stock_details", return_value=good):
+        first = await fetch_detailed(mock_stock)
+    assert first.info == {"shortName": "AMD"}
+
+    # The live entry expires but the week-long stale copy remains.
+    _snapshot_cache.invalidate("AMD:detailed")
+
+    with patch("services.stock_service.StockService.get_stock_details",
+               side_effect=YFRateLimitError()):
+        served = await fetch_detailed(mock_stock)
+
+    assert served.info == {"shortName": "AMD"}
+
+
+async def test_a_snapshot_with_no_stale_copy_still_raises():
+    """Nothing to fall back on means the caller has to hear about it."""
+    mock_stock = MagicMock()
+    mock_stock.ticker = "NEVERSEEN"
+
+    with patch("services.stock_service.StockService.get_stock_details",
+               side_effect=YFRateLimitError()):
+        with pytest.raises(YFRateLimitError):
+            await fetch_detailed(mock_stock)
+
+
+async def test_a_fresh_fetch_refreshes_the_stale_copy_too():
+    mock_stock = MagicMock()
+    mock_stock.ticker = "AMD"
+
+    for name in ("first", "second"):
+        _snapshot_cache.invalidate("AMD:detailed")
+        with patch("services.stock_service.StockService.get_stock_details",
+                   return_value=StockDetailedResponse(ticker="AMD", info={"shortName": name})):
+            await fetch_detailed(mock_stock)
+
+    _snapshot_cache.invalidate("AMD:detailed")
+    with patch("services.stock_service.StockService.get_stock_details",
+               side_effect=YFRateLimitError()):
+        served = await fetch_detailed(mock_stock)
+
+    assert served.info == {"shortName": "second"}

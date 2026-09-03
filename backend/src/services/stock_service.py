@@ -66,7 +66,43 @@ async def _note_update_attempt(ticker: str, when: pd.Timestamp) -> None:
 # one this replaces had no size cap, and each entry holds a full yfinance
 # `.info` dict, so on the 512 MB free tier it grew until the process was
 # killed and restarted — which then cost a cold fetch of everything.
-_snapshot_cache = TTLCache(ttl_seconds=6 * 3600, max_entries=512)
+_snapshot_cache = TTLCache(ttl_seconds=6 * 3600, max_entries=1024)
+
+# How long a superseded snapshot is kept around to serve when a live fetch
+# can't be made at all. Yahoo rate-limits in bursts, and analyst targets from
+# this morning are a far better answer than a blank panel — or, as it was, an
+# error that took the whole page down with it. Same stale-while-unavailable
+# idea as index_service's `_STALE_KEY`.
+_SNAPSHOT_STALE_TTL = 7 * 24 * 3600
+
+
+async def _cached_snapshot(key: str, produce):
+    """Serve `key` from cache, else `produce()` it, else serve a stale copy.
+
+    Three tiers: the 6-hour entry, a live fetch (coalesced, so a page load
+    asking from several components makes one call), and a week-old copy used
+    only when the live fetch raises. The stale tier is what makes a reload
+    during a yfinance cooldown show yesterday's fundamentals instead of
+    nothing.
+    """
+    cached = _snapshot_cache.get(key)
+    if cached is not None:
+        return cached
+
+    async def _load():
+        try:
+            result = await produce()
+        except Exception:  # noqa: BLE001 — re-raised below unless we can cover it
+            stale = _snapshot_cache.get(f"stale:{key}")
+            if stale is not None:
+                logger.info("Serving stale snapshot for %s", key)
+                return stale
+            raise
+        _snapshot_cache.set(key, result)
+        _snapshot_cache.set(f"stale:{key}", result, _SNAPSHOT_STALE_TTL)
+        return result
+
+    return await single_flight(key, _load)
 
 async def _last_completed_trading_day(market: str = "US") -> pd.Timestamp | None:
     '''
@@ -540,18 +576,11 @@ async def fetch_detailed(stock: yf.Ticker):
     Returns:
         StockDetailedResponse: Detailed information about the stock, including financials, calendar events, analyst price targets, and recommendations.
     '''
-    key = f"{stock.ticker}:detailed"
-    cached = _snapshot_cache.get(key)
-    if cached is not None:
-        return cached
-
-    async def _load():
+    async def _produce():
         with yf_guard.guard():
-            result = await asyncio.to_thread(StockService().get_stock_details, stock)
-        _snapshot_cache.set(key, result)
-        return result
+            return await asyncio.to_thread(StockService().get_stock_details, stock)
 
-    return await single_flight(key, _load)
+    return await _cached_snapshot(f"{stock.ticker}:detailed", _produce)
 
 
 async def _cached_classification(ticker: str) -> dict:
@@ -718,13 +747,10 @@ async def fetch_eps_history(stock: yf.Ticker):
     Returns:
         EPSHistoryResponse: A list of earnings history responses for the specified ticker.
     '''
-    key = f"{stock.ticker}:eps"
-    cached = _snapshot_cache.get(key)
-    if cached is not None:
-        return cached
-    try:
+    async def _produce():
         ticker = stock.ticker
-        earnings = await asyncio.to_thread(stock.get_earnings_dates)
+        with yf_guard.guard():
+            earnings = await asyncio.to_thread(stock.get_earnings_dates)
         if earnings is None or earnings.empty:
             raise ValueError(f"No earnings history data found for ticker: {ticker}")
         # Remove future earnings rows
@@ -743,11 +769,14 @@ async def fetch_eps_history(stock: yf.Ticker):
         earnings["date"] = pd.to_datetime(earnings["date"]).dt.date
         # Return both % increase and surprise % for the last 4 quarters
         earnings_history = earnings.tail(4).to_dict(orient="records")
-        result = EPSHistoryResponse(ticker=ticker, earnings_history=[EPSHistoryRow(**row) for row in earnings_history])
-        _snapshot_cache.set(key, result)
-        return result
-    except Exception as e:  # noqa: BLE001
-        raise ValueError(f"Error fetching earnings history for {stock.ticker}: {str(e)}")
+        return EPSHistoryResponse(
+            ticker=ticker, earnings_history=[EPSHistoryRow(**row) for row in earnings_history]
+        )
+
+    try:
+        return await _cached_snapshot(f"{stock.ticker}:eps", _produce)
+    except Exception as e:  # noqa: BLE001 — the router turns this into a 404
+        raise ValueError(f"Error fetching earnings history for {stock.ticker}: {e}")
 
 
 async def fetch_revenue_history(stock: yf.Ticker):
@@ -758,13 +787,10 @@ async def fetch_revenue_history(stock: yf.Ticker):
     Returns:
         RevenueHistoryResponse: A list of revenue history responses for the specified ticker.
     '''
-    key = f"{stock.ticker}:revenue"
-    cached = _snapshot_cache.get(key)
-    if cached is not None:
-        return cached
-    try:
+    async def _produce():
         ticker = stock.ticker
-        income_stmt = await asyncio.to_thread(lambda: stock.quarterly_income_stmt)
+        with yf_guard.guard():
+            income_stmt = await asyncio.to_thread(lambda: stock.quarterly_income_stmt)
         if income_stmt is None or income_stmt.empty:
             raise ValueError(f"No revenue history data found for ticker: {ticker}")
         # Remove future revenue rows
@@ -780,11 +806,14 @@ async def fetch_revenue_history(stock: yf.Ticker):
         revenue["date"] = pd.to_datetime(revenue["date"]).dt.date
         # Return both revenue and % increase for the last 4 quarters
         revenue_history = revenue.tail(4).to_dict(orient="records")
-        result = RevenueHistoryResponse(ticker=ticker, revenue_history=[RevenueHistoryRow(**row) for row in revenue_history])
-        _snapshot_cache.set(key, result)
-        return result
-    except Exception as e:  # noqa: BLE001
-        raise ValueError(f"Error fetching revenue history for {stock.ticker}: {str(e)}")
+        return RevenueHistoryResponse(
+            ticker=ticker, revenue_history=[RevenueHistoryRow(**row) for row in revenue_history]
+        )
+
+    try:
+        return await _cached_snapshot(f"{stock.ticker}:revenue", _produce)
+    except Exception as e:  # noqa: BLE001 — the router turns this into a 404
+        raise ValueError(f"Error fetching revenue history for {stock.ticker}: {e}")
     
 
 async def fetch_stock_dashboard(ticker: str, days: int = 30):
@@ -796,30 +825,44 @@ async def fetch_stock_dashboard(ticker: str, days: int = 30):
     Returns:
         StockResponse: A comprehensive response containing the stock's OHLCV data and detailed information for the dashboard.
     '''
+    stock = yf.Ticker(ticker)
+
+    # The archive is the only part with no fallback: without price rows there
+    # is no chart and nothing worth rendering, so this is the one failure that
+    # is allowed to fail the request.
     try:
-        stock = yf.Ticker(ticker)
         ohlcv = await fetch(ticker, days)
+    except Exception as e:  # noqa: BLE001 — surfaced as a domain error
+        raise ValueError(f"Error fetching dashboard data for {ticker}: {e}")
+
+    # Everything below is supplementary and comes from yfinance scrapes that
+    # rate-limit in bursts. A reload used to take the whole page down when any
+    # one of them 429'd — including the chart, which had already been read
+    # from the archive and needed no network at all. Each degrades on its own.
+    try:
         detailed = await fetch_detailed(stock)
-        try:
-            eps = await fetch_eps_history(stock)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("EPS history fetch failed for %s: %r", ticker, e)
-            eps = None
-        try:
-            revenue = await fetch_revenue_history(stock)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Revenue history fetch failed for %s: %r", ticker, e)
-            revenue = None
-        return StockResponse(
-            ticker=ticker,
-            ohlcv=ohlcv.data,
-            info=detailed.info,
-            analyst_price_targets=detailed.analyst_price_targets,
-            recommendations_summary=detailed.recommendations_summary,
-            earnings_estimate=detailed.earnings_estimate,
-            revenue_estimate=detailed.revenue_estimate,
-            earnings_history=eps.earnings_history if eps else None,
-            revenue_history=revenue.revenue_history if revenue else None,
-        )
     except Exception as e:  # noqa: BLE001
-        raise ValueError(f"Error fetching dashboard data for {ticker}: {str(e)}")
+        logger.warning("Detail fetch failed for %s: %r", ticker, e)
+        detailed = StockDetailedResponse(ticker=ticker)
+    try:
+        eps = await fetch_eps_history(stock)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("EPS history fetch failed for %s: %r", ticker, e)
+        eps = None
+    try:
+        revenue = await fetch_revenue_history(stock)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Revenue history fetch failed for %s: %r", ticker, e)
+        revenue = None
+
+    return StockResponse(
+        ticker=ticker,
+        ohlcv=ohlcv.data,
+        info=detailed.info,
+        analyst_price_targets=detailed.analyst_price_targets,
+        recommendations_summary=detailed.recommendations_summary,
+        earnings_estimate=detailed.earnings_estimate,
+        revenue_estimate=detailed.revenue_estimate,
+        earnings_history=eps.earnings_history if eps else None,
+        revenue_history=revenue.revenue_history if revenue else None,
+    )
