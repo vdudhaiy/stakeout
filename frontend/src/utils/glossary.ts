@@ -6,6 +6,38 @@
  */
 
 export const GLOSSARY: Record<string, { title: string; body: string }> = {
+  xirr: {
+    title: 'Money-weighted return (XIRR)',
+    body: 'What your money actually earned, per year, counting when each amount went in. Adding a lot right before a rally lifts this; adding right before a fall drags it down. This is the honest answer to "how did I do?".',
+  },
+  twr: {
+    title: 'Time-weighted return',
+    body: "What your holdings earned, with the timing of deposits stripped out. It's the only fair way to compare against an index, because an index never has money paid into it.",
+  },
+  cagr: {
+    title: 'Annualized return (CAGR)',
+    body: 'The time-weighted return expressed as a steady yearly rate. Hidden for periods under a month — annualizing a couple of weeks produces a huge number that means nothing.',
+  },
+  benchmark_equivalent: {
+    title: 'If you had bought the index',
+    body: 'The same money, on the same days, put into the benchmark index instead. Comparing against this rather than the index’s headline return is what makes the comparison fair when your contributions were irregular.',
+  },
+  value_added: {
+    title: 'Value added',
+    body: 'Your portfolio today minus what the index path would be worth. Positive means your picks and timing beat simply buying the index; negative means they did not.',
+  },
+  max_drawdown: {
+    title: 'Maximum drawdown',
+    body: 'The largest peak-to-trough fall over the period, measured on returns rather than on balance — so withdrawing money never counts as a loss. A rough gauge of the worst stretch you sat through.',
+  },
+  volatility: {
+    title: 'Volatility',
+    body: 'How much daily returns swing around, annualized. Higher means a bumpier ride for the same destination. Hidden below 20 trading days, where it is noise rather than a statistic.',
+  },
+  beta: {
+    title: 'Beta',
+    body: 'How sharply your portfolio moves with the index. 1.0 means it moves in step; above 1.0 means it amplifies the index; below means it is steadier.',
+  },
   open: {
     title: 'Open',
     body: "The first traded price of the session. A gap between today's open and yesterday's close usually reflects news that broke while the market was shut.",

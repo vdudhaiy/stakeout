@@ -25,6 +25,8 @@ import { AIChatWidget } from './components/AIChatWidget'
 import { fetchAllStocks, fetchCurrentStock, fetchIntradayStock, fetchMarketStatus, fetchStock, fetchStockDashboard, deleteStock, addStock, fetchIndicators } from './api'
 import { parseEtDateStr, fmtHHMMWithTz, etToLocalHHMM, localTzAbbr, formatEtDate, formatLocalDate } from './utils/time'
 import { NewsPanel } from './components/NewsPanel'
+import { PeersPanel } from './components/PeersPanel'
+import { CompanyLogo } from './components/CompanyLogo'
 import { TickerTape } from './components/TickerTape'
 import { InfoTip } from './components/InfoTip'
 import { SignInGate } from './components/SignInGate'
@@ -281,6 +283,25 @@ export default function App() {
     }
   }, [ticker])
 
+  // Switches the tracker to a peer ticker clicked in PeersPanel. Mirrors
+  // PortfolioPage's onViewTicker: tickers not already on the watchlist get
+  // silently archived first (the same addStock flow used everywhere else a
+  // new ticker enters the tracker) so the detail view has data to show.
+  const handleSelectPeer = useCallback(async (t: string) => {
+    setComparisonGroup(null)
+    if (allTickers && t in allTickers) {
+      setTicker(t)
+      return
+    }
+    setPreparingTicker(t)
+    try {
+      await addStock(t)
+      setAllTickers(await fetchAllStocks())
+    } catch {}
+    setPreparingTicker(null)
+    setTicker(t)
+  }, [allTickers])
+
   const today = new Date().toISOString().slice(0, 10)
   // Strip today's entry unless market is confirmed closed — partial candles skew the chart
   const displayData = tickerMarketOpen !== false ? data.filter(d => d.date !== today) : data
@@ -473,6 +494,7 @@ export default function App() {
                   >
                     <PanelLeft size={16} />
                   </button>
+                  <CompanyLogo key={`logo-${ticker}`} ticker={ticker} size={36} className="hidden sm:block mt-0.5" />
                   <div className="min-w-0">
                   <div className="flex items-baseline gap-2 sm:gap-3 flex-wrap">
                     <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
@@ -997,6 +1019,8 @@ export default function App() {
 
                   {/* Layered headlines: company → industry → market */}
                   <NewsPanel key={`news-${ticker}`} mode={{ kind: 'stock', ticker }} limit={10} />
+
+                  <PeersPanel key={`peers-${ticker}`} ticker={ticker} knownNames={tickerNames} onSelect={handleSelectPeer} />
                 </>
               ) : null}
             </div>

@@ -11,8 +11,11 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import cache as _cache
 import markets
+import rate_limit
 from auth import get_current_user, get_optional_user
+from services import yf_guard
 from database import Base, get_session
 from models import local_auth as _local_auth  # noqa: F401 — registers models with Base
 from models import portfolio as _  # noqa: F401 — registers models with Base
@@ -31,6 +34,34 @@ def _clear_calendar_cache():
     markets._calendar_cache.clear()
     yield
     markets._calendar_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_wide_caches():
+    """Everything in cache.py, plus yf_guard's backoff, is a module-level
+    singleton shared by the whole process — that's the point in production
+    and a cross-test leak here.
+
+    Three ways it bites without this: a test that provokes a rate-limit
+    error leaves yf_guard in cooldown, so every later test's yfinance call
+    is refused before it goes anywhere near its own mock; the quote caches
+    now remember failures, so one test's deliberate error answers the next
+    test's lookup of the same ticker; and every test shares one client IP,
+    so requests accumulate against the public rate limiters until a later
+    test gets a 429 it did nothing to earn.
+    """
+    def _clear():
+        yf_guard.reset()
+        rate_limit.reset_all()
+        _cache._inflight.clear()
+        for name in dir(_cache):
+            value = getattr(_cache, name)
+            if isinstance(value, _cache.TTLCache):
+                value.clear()
+
+    _clear()
+    yield
+    _clear()
 
 
 @pytest_asyncio.fixture

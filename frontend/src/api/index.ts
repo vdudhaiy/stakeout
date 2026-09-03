@@ -1,4 +1,4 @@
-import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, PortfolioMeta, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot, ImportPreviewResult, ImportApplyRow, PortfolioImportResult } from '../types'
+import type { OHLCVResponse, StockDetails, GroupedStocks, WatchlistMap, EPSHistoryResponse, RevenueHistoryResponse, StockDashboardResponse, PortfolioResponse, PortfolioMeta, StockHolding, DividendEntry, IndicatorsResponse, NewsResponse, StockNewsResponse, PeersResponse, LogoResponse, QuoteBatchResponse, Market, IndicesResponse, ClassificationMap, TickerSuggestion, StockExplanationResponse, ChatMessage, ChatContext, ChatResponse, BuyLot, SellLot, ImportPreviewResult, ImportApplyRow, PortfolioImportResult, PerformanceResponse, PerformanceRange } from '../types'
 import type { Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
@@ -20,11 +20,60 @@ export function setAuthTokenGetter(fn: () => Promise<string | null>) { getAuthTo
 // DB-backed API — guest data is never written to the database.
 const isGuestMode = isGuestModeActive
 
-async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+async function rawFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await getAuthToken()
   const headers = new Headers(init?.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
   return fetch(`${API_BASE}${path}`, { ...init, headers })
+}
+
+// In-flight GETs, keyed by path. The backend's Cache-Control headers cover
+// the *sequential* case — a reload, a poll — because the browser's HTTP
+// cache answers those without a request. They do nothing for the
+// simultaneous case: several components mounting in the same tick each ask
+// for the same thing before any response exists to cache, so the browser
+// issues every one of them. That's the shape a page load actually has (the
+// ticker tape and the tracker header both want the selected ticker's quote;
+// switching tickers re-fires both), and it's what this collapses.
+//
+// Deliberately narrow: it holds a promise only while the request is open,
+// never a result. Nothing here is a cache, so nothing here can go stale —
+// caching stays entirely with the HTTP layer, which knows the TTLs.
+const inFlightGets = new Map<string, Promise<{ status: number; body: string }>>()
+
+// Response bodies with no content can't be reconstructed with one.
+const BODILESS_STATUSES = new Set([204, 205, 304])
+
+/**
+ * Fetch with concurrent-GET deduplication.
+ *
+ * Pass `raw` for a response whose body isn't text — deduping buffers the
+ * body as a string to hand each caller an independent Response, which would
+ * corrupt a binary payload (see downloadPortfolio's .xlsx).
+ */
+async function apiFetch(
+  path: string,
+  init?: RequestInit,
+  opts?: { raw?: boolean },
+): Promise<Response> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  if (opts?.raw || method !== 'GET') return rawFetch(path, init)
+
+  let pending = inFlightGets.get(path)
+  if (!pending) {
+    pending = rawFetch(path, init)
+      .then(async res => ({ status: res.status, body: await res.text() }))
+      .finally(() => { inFlightGets.delete(path) })
+    inFlightGets.set(path, pending)
+  }
+
+  const { status, body } = await pending
+  // A fresh Response per caller: a Response body can only be read once, so
+  // handing the same object to several callers would fail all but the first.
+  return new Response(BODILESS_STATUSES.has(status) ? null : body, {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 
@@ -150,6 +199,63 @@ export async function fetchPortfolio(market?: 'US' | 'IN'): Promise<PortfolioRes
 // Guest mode has exactly one implicit portfolio per market and no way to
 // manage them — the tab bar hides itself at length 1, and create/rename/
 // delete are gated behind signing in.
+
+/**
+ * Portfolio performance against its market's benchmark index.
+ *
+ * Guest mode has no server-side transaction history to derive this from —
+ * guest portfolios live only in sessionStorage — so rather than fabricating
+ * an empty chart this reports the same "not enough data" shape the backend
+ * uses, and the page renders its sign-in prompt from that.
+ */
+export async function fetchPerformance(
+  market: Market,
+  portfolioId?: number | null,
+  range: PerformanceRange = 'max',
+): Promise<PerformanceResponse> {
+  if (isGuestMode()) return guestPerformancePlaceholder(market)
+  const params = new URLSearchParams({ market, range })
+  if (portfolioId != null) params.set('portfolio_id', String(portfolioId))
+  const res = await apiFetch(`/performance/?${params}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to load performance')
+  }
+  return res.json()
+}
+
+function guestPerformancePlaceholder(market: Market): PerformanceResponse {
+  const blank = {
+    money_weighted: null, time_weighted: null, annualized: null,
+    max_drawdown: 0, volatility: null,
+  }
+  return {
+    market,
+    currency: market === 'IN' ? 'INR' : 'USD',
+    portfolio_id: null,
+    portfolio_name: null,
+    benchmark_symbol: market === 'IN' ? '^NSEI' : '^GSPC',
+    benchmark_name: market === 'IN' ? 'NIFTY 50' : 'S&P 500',
+    range: 'max',
+    start_date: null,
+    end_date: null,
+    days: 0,
+    points: [],
+    portfolio: blank,
+    benchmark: blank,
+    beta: null,
+    current_value: 0,
+    net_invested: 0,
+    total_dividends: 0,
+    realized_gains: 0,
+    unrealized_gains: 0,
+    benchmark_final_value: 0,
+    value_added: 0,
+    excluded_tickers: [],
+    insufficient_data: true,
+  }
+}
+
 
 export async function fetchPortfolios(market?: Market): Promise<PortfolioMeta[]> {
   if (isGuestMode()) return []
@@ -343,7 +449,7 @@ export async function deleteDividend(ticker: string, dividendId: number, portfol
 
 export async function downloadPortfolio(market?: 'US' | 'IN'): Promise<void> {
   if (isGuestMode()) throw new Error('Sign in to export your portfolio.')
-  const res = await apiFetch(`/portfolio/download${market ? `?market=${market}` : ''}`)
+  const res = await apiFetch(`/portfolio/download${market ? `?market=${market}` : ''}`, undefined, { raw: true })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? 'Failed to download portfolio')
@@ -463,6 +569,38 @@ export async function fetchStockNews(ticker: string, limit = 10): Promise<StockN
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail ?? `Failed to load news for ${ticker}`)
+  }
+  return res.json()
+}
+
+// ── Peers ─────────────────────────────────────────────────────────────────
+
+export async function fetchPeers(ticker: string): Promise<PeersResponse> {
+  const res = await apiFetch(`/peers/${encodeURIComponent(ticker)}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load peers for ${ticker}`)
+  }
+  return res.json()
+}
+
+// ── Logo ──────────────────────────────────────────────────────────────────
+
+export async function fetchLogo(ticker: string): Promise<LogoResponse> {
+  const res = await apiFetch(`/logo/${encodeURIComponent(ticker)}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? `Failed to load logo for ${ticker}`)
+  }
+  return res.json()
+}
+
+export async function fetchQuoteBatch(tickers: string[]): Promise<QuoteBatchResponse> {
+  if (tickers.length === 0) return { quotes: {} }
+  const res = await apiFetch(`/quote/?tickers=${encodeURIComponent(tickers.join(','))}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(err.detail ?? 'Failed to load quotes')
   }
   return res.json()
 }

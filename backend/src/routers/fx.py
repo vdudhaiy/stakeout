@@ -2,9 +2,10 @@
 
 from fastapi import APIRouter, HTTPException, Response
 
+from rate_limit import public_read
 from services import fx_service
 
-router = APIRouter(prefix="/fx", tags=["FX"])
+router = APIRouter(prefix="/fx", tags=["FX"], dependencies=public_read)
 
 
 @router.get("/{base}/{quote}")

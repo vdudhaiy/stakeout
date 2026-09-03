@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from auth import local_auth_enabled
 from database import init_db
-from routers import account, ai, fx, health, indicators, news, portfolio, portfolios, stocks, watchlist
+from routers import (
+    account, ai, fx, health, indicators, logo, news, peers, performance, portfolio, portfolios,
+    quote, stocks, watchlist,
+)
 from services.portfolio_service import repair_all_fifo, repair_stock_metadata
 
 
@@ -49,9 +52,13 @@ app.include_router(stocks.router)
 app.include_router(health.router)
 app.include_router(portfolio.router)
 app.include_router(portfolios.router)
+app.include_router(performance.router)
 app.include_router(indicators.router)
 app.include_router(watchlist.router)
 app.include_router(news.router)
+app.include_router(peers.router)
+app.include_router(logo.router)
+app.include_router(quote.router)
 app.include_router(fx.router)
 app.include_router(ai.router)
 app.include_router(account.router)

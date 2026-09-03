@@ -4,10 +4,10 @@ Read relevant stock data from the market_data table and returns it in a format s
 
 import asyncio
 import logging
-import time as _time
 import pandas as pd
 import yfinance as yf
-from . import market_data_service
+from . import company_profile_service, market_data_service, yf_guard
+from cache import TTLCache, quote_cache, single_flight
 from markets import MARKET_META, market_of, normalize_market
 import markets as _markets
 from schemas.stocks import *
@@ -24,41 +24,49 @@ def _session_bounds(ticker: str) -> tuple[time, time]:
     h2, m2 = map(int, sessions[1].split(":"))
     return time(h1, m1), time(h2, m2)
 
-# Tracks the last _last_completed_trading_day we already attempted to fetch for each ticker.
-# Prevents hammering yfinance when Yahoo Finance hasn't published the day's data yet;
-# the attempt resets automatically once a newer completed trading day becomes available.
+# The last completed trading day already attempted per ticker. Prevents
+# hammering yfinance in the gap between a session closing and Yahoo
+# publishing its daily bar; the marker resets itself once a newer completed
+# trading day comes around.
+#
+# Authoritative copy lives in the archive_refresh table — this dict is only
+# a read-through memo in front of it. It used to be the sole record, which
+# meant every restart of the free-tier host (many a day) re-spent one
+# upstream call per tracked symbol re-learning what it had just forgotten.
+# Bounded, because market_data holds every symbol any user ever archived.
+_UPDATE_ATTEMPTED_MAX = 4096
 _update_attempted: dict[str, pd.Timestamp] = {}
 
 
-class _SnapshotCache:
-    """In-memory TTL cache for static stock data (info, estimates, recommendations)."""
-
-    def __init__(self, ttl_seconds: int):
-        self._ttl = ttl_seconds
-        self._store: dict[str, tuple[object, float]] = {}
-
-    def get(self, key: str) -> object | None:
-        entry = self._store.get(key)
-        if entry is None:
-            return None
-        data, expires_at = entry
-        if _time.monotonic() > expires_at:
-            del self._store[key]
-            return None
-        return data
-
-    def set(self, key: str, value: object) -> None:
-        self._store[key] = (value, _time.monotonic() + self._ttl)
-
-    def invalidate(self, key: str) -> None:
-        self._store.pop(key, None)
-
-    def invalidate_ticker(self, ticker: str) -> None:
-        for k in [k for k in self._store if k.startswith(f"{ticker}:")]:
-            del self._store[k]
+async def _last_update_attempt(ticker: str) -> pd.Timestamp | None:
+    cached = _update_attempted.get(ticker)
+    if cached is not None:
+        return cached
+    marker = await market_data_service.get_refresh_marker(ticker)
+    if marker is None:
+        return None
+    stamp = pd.Timestamp(marker)
+    _update_attempted[ticker] = stamp
+    return stamp
 
 
-_snapshot_cache = _SnapshotCache(ttl_seconds=6 * 3600)  # 6-hour TTL
+async def _note_update_attempt(ticker: str, when: pd.Timestamp) -> None:
+    if len(_update_attempted) >= _UPDATE_ATTEMPTED_MAX:
+        # Drop the entries pinned to the oldest trading day: they are the
+        # least likely to be re-checked before they'd expire anyway. Losing
+        # one only costs a DB read, not an upstream call.
+        for stale in sorted(_update_attempted, key=_update_attempted.get)[: _UPDATE_ATTEMPTED_MAX // 8]:
+            _update_attempted.pop(stale, None)
+    _update_attempted[ticker] = when
+    await market_data_service.set_refresh_marker(ticker, when.date())
+
+
+# Static-ish per-ticker snapshots (info, estimates, recommendations, display
+# names). Uses the shared TTLCache rather than a private class: the bespoke
+# one this replaces had no size cap, and each entry holds a full yfinance
+# `.info` dict, so on the 512 MB free tier it grew until the process was
+# killed and restarted — which then cost a cold fetch of everything.
+_snapshot_cache = TTLCache(ttl_seconds=6 * 3600, max_entries=512)
 
 async def _last_completed_trading_day(market: str = "US") -> pd.Timestamp | None:
     '''
@@ -77,6 +85,31 @@ async def get_market_status(market: str = "US"):
     return await asyncio.to_thread(_markets.is_market_open, normalize_market(market))
 
 
+async def is_tracked(ticker: str) -> bool:
+    '''
+    Whether the shared archive already holds price rows for `ticker`.
+
+    The membership check callers actually want. They used to ask
+    get_all_stocks() and test the key, which fetched `.info` — yfinance's
+    single most rate-limit-prone call — for *every* archived symbol just to
+    answer a yes/no about one of them.
+    '''
+    return await market_data_service.has_data(ticker)
+
+
+async def display_name(ticker: str) -> str:
+    '''
+    Company display name for one ticker.
+
+    Shares company_profile_service's cached, DB-persisted `.info` lookup
+    with the sector/industry path below — the two used to make separate
+    `.info` calls for the same ticker. Never raises: an unknown name
+    degrades to the ticker itself.
+    '''
+    profile = await company_profile_service.get_profile(ticker)
+    return profile["name"] or ticker
+
+
 async def get_all_stocks():
     '''
     Get a list of all available stocks in the system.
@@ -87,14 +120,15 @@ async def get_all_stocks():
     if cached is not None:
         return cached
     tickers = await market_data_service.get_symbols()
+    if not tickers:
+        return {}
 
-    def _fetch() -> dict:
-        return {
-            t.ticker: (t.info.get("displayName") or t.info.get("shortName") or t.ticker)
-            for t in (yf.Ticker(sym) for sym in tickers)
-        }
-
-    stocks = await asyncio.to_thread(_fetch)
+    # Per-ticker cached lookups, resolved concurrently. Previously this was
+    # one blocking thread walking every symbol in series, so a cold cache
+    # meant N sequential `.info` scrapes before the request could answer —
+    # and one failure anywhere aborted the whole map.
+    names = await asyncio.gather(*(display_name(t) for t in tickers))
+    stocks = dict(zip(tickers, names))
     _snapshot_cache.set("all_stocks", stocks)
     return stocks
 
@@ -134,19 +168,52 @@ async def delete_stock(ticker: str):
         deleted = await market_data_service.delete_symbol(ticker)
         if not deleted:
             raise ValueError(f"No data found for ticker: {ticker}")
-        _snapshot_cache.invalidate_ticker(ticker)
+        _snapshot_cache.invalidate_prefix(f"{ticker}:")
         _snapshot_cache.invalidate("all_stocks")
         return {"message": f"Stock data for {ticker} deleted successfully."}
     except Exception as e:  # noqa: BLE001
         raise ValueError(f"Error deleting stock data for {ticker}: {str(e)}")
 
 
+# 15-minute bars: anything shorter than the bar interval is a request that
+# cannot return new information.
+_INTRADAY_TTL = 15 * 60
+
+
 async def fetch_intraday(stock: yf.Ticker):
     '''
     Fetch intraday stock data for a given ticker.
+
+    Cached for one bar interval and coalesced, for the same reason as
+    fetch_current: this is a 5-day 15-minute history pull that the tracker
+    fired on every ticker switch and every reload in 1D mode.
+
     Args:
         stock (yf.Ticker): The yfinance Ticker object.
     '''
+    key = f"intraday:{stock.ticker}"
+    cached = quote_cache.get(key)
+    if cached is not None:
+        value, error = cached
+        if error is not None:
+            raise ValueError(error)
+        return value
+
+    async def _load():
+        try:
+            with yf_guard.guard():
+                result = await _fetch_intraday_live(stock)
+        except Exception as e:  # noqa: BLE001 — cached briefly, then re-raised
+            quote_cache.set(key, (None, str(e)), _CURRENT_TTL_ERROR)
+            raise
+        quote_cache.set(key, (result, None), _INTRADAY_TTL)
+        return result
+
+    return await single_flight(key, _load)
+
+
+async def _fetch_intraday_live(stock: yf.Ticker):
+    '''The uncached body of fetch_intraday — always goes out to yfinance.'''
     try:
         df_current = await asyncio.to_thread(
             stock.history, interval="15m", period="5d", prepost=True
@@ -192,16 +259,19 @@ async def fetch(ticker: str, days: int = 30):
     last_date = pd.to_datetime(records[-1]['date'])
 
     last_completed = await _last_completed_trading_day(market_of(ticker))
-    already_attempted = _update_attempted.get(ticker)
+    already_attempted = await _last_update_attempt(ticker)
     need_update = (
         last_completed is not None
         and last_date.date() < last_completed.date()
         and (already_attempted is None or already_attempted.date() < last_completed.date())
     )
     if need_update:
-        _update_attempted[ticker] = last_completed
+        await _note_update_attempt(ticker, last_completed)
         from .price_fetcher import append_price_data
-        await append_price_data(ticker)
+        # Coalesced: a page load asks for the same ticker from several
+        # components at once, and without this each of them starts its own
+        # download of the same gap.
+        await single_flight(f"append:{ticker}", lambda: append_price_data(ticker))
         records = await market_data_service.get_ohlcv(ticker, days)
 
     return OHLCVResponse(
@@ -210,15 +280,86 @@ async def fetch(ticker: str, days: int = 30):
     )
 
 
+# How long a "current price" answer stays good. While the session is open the
+# number really is moving, so this stays short; once it has closed the only
+# thing that can still change is a thin after-hours print, which nothing in
+# the UI refreshes faster than this anyway. A failure is remembered briefly
+# too, so a symbol Yahoo has nothing for doesn't get re-asked on every poll.
+_CURRENT_TTL_OPEN = 60
+_CURRENT_TTL_CLOSED = 5 * 60
+_CURRENT_TTL_ERROR = 60
+
+
 async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
     '''
     Fetch the current stock price for a given ticker.
+
+    Cached and coalesced. This is by far the hottest upstream call in the
+    app — the ticker tape asks for a dozen symbols on every mount, the
+    tracker polls the selected one, and both restart from scratch on a page
+    reload — and it was the one quote path with no cache at all, so two
+    reloads spent two dozen fresh yfinance requests. Callers within the TTL
+    now spend none, and concurrent callers for the same ticker share one.
+
     Args:
         stock (yf.Ticker): The yfinance Ticker object.
         is_market_open: Pre-fetched market status. If None, fetches it internally.
     Returns:
         OHLCVResponse: The current stock data for the specified ticker.
     '''
+    ticker = stock.ticker
+    if is_market_open is None:
+        is_market_open = await get_market_status(market_of(ticker))
+
+    # Keyed on the session state as well as the ticker: the open and closed
+    # branches below answer different questions, so one must not serve the
+    # other's cached value across a session boundary.
+    key = f"current:{ticker}:{'open' if is_market_open else 'closed'}"
+    cached = quote_cache.get(key)
+    if cached is not None:
+        value, error = cached
+        if error is not None:
+            raise ValueError(error)
+        return value
+
+    async def _load():
+        try:
+            with yf_guard.guard():
+                result = await _fetch_current_live(stock, is_market_open)
+        except Exception as e:  # noqa: BLE001 — classified, then handled below
+            if yf_guard.is_rate_limit_error(e):
+                # Serve the last archived close rather than erroring: the
+                # archive is already the honest answer while we're backing
+                # off, and it costs no upstream call.
+                fallback = await _last_archived_close(ticker)
+                if fallback is not None:
+                    quote_cache.set(key, (fallback, None), _CURRENT_TTL_ERROR)
+                    return fallback
+            quote_cache.set(key, (None, str(e)), _CURRENT_TTL_ERROR)
+            raise
+        quote_cache.set(
+            key, (result, None),
+            _CURRENT_TTL_OPEN if is_market_open else _CURRENT_TTL_CLOSED,
+        )
+        return result
+
+    return await single_flight(key, _load)
+
+
+async def _last_archived_close(ticker: str) -> OHLCVResponse | None:
+    """The newest bar already in the archive, or None. Never touches yfinance."""
+    try:
+        records = await market_data_service.get_ohlcv(ticker, 1)
+    except Exception as e:  # noqa: BLE001 — a fallback that fails is just no fallback
+        logger.warning("Archive fallback failed for %s: %r", ticker, e)
+        return None
+    if not records:
+        return None
+    return OHLCVResponse(ticker=ticker, data=[OHLCV(**records[-1])])
+
+
+async def _fetch_current_live(stock: yf.Ticker, is_market_open: bool | None = None):
+    '''The uncached body of fetch_current — always goes out to yfinance.'''
     try:
         ticker = stock.ticker
         if is_market_open is None:
@@ -361,44 +502,31 @@ async def fetch_detailed(stock: yf.Ticker):
     cached = _snapshot_cache.get(key)
     if cached is not None:
         return cached
-    result = await asyncio.to_thread(StockService().get_stock_details, stock)
-    _snapshot_cache.set(key, result)
-    return result
 
+    async def _load():
+        with yf_guard.guard():
+            result = await asyncio.to_thread(StockService().get_stock_details, stock)
+        _snapshot_cache.set(key, result)
+        return result
 
-def _get_ticker_info(ticker: str) -> dict:
-    return yf.Ticker(ticker).info or {}
+    return await single_flight(key, _load)
 
 
 async def _cached_classification(ticker: str) -> dict:
     '''
-    Sector/industry for a single ticker, cached 24 hours (info_cache) — a
-    company's sector/industry effectively never changes intraday. Shared by
-    every caller that needs either field (get_classification, the industry/
-    sector maps and browse endpoints below) so they don't each fetch `.info`
-    separately for the same ticker — one warms the cache for all the others.
+    Sector/industry for a single ticker.
 
-    Never raises: a failed lookup degrades to {"sector": None, "industry":
-    None} (logged) rather than failing the whole caller, and isn't cached —
-    a transient yfinance failure shouldn't pin "unknown" for 24 hours.
+    Delegates to company_profile_service, which holds the cache (in-process,
+    then the company_profile table) and the single `.info` call all three of
+    these fields come from. Persisting matters more than the TTL here: the
+    24-hour in-memory cache this replaced was lost on every restart, and the
+    free-tier host restarts far more often than a company changes sector.
+
+    Never raises: an unknown classification degrades to
+    {"sector": None, "industry": None}, and is not cached as an answer.
     '''
-    from cache import info_cache
-
-    cache_key = f"class:{ticker}"
-    cached = info_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        info = await asyncio.to_thread(_get_ticker_info, ticker)
-        entry = {"sector": info.get("sector"), "industry": info.get("industry")}
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Classification lookup failed for %s: %r", ticker, e)
-        entry = {"sector": None, "industry": None}
-
-    if entry["sector"] or entry["industry"]:
-        info_cache.set(cache_key, entry)
-    return entry
+    profile = await company_profile_service.get_profile(ticker)
+    return {"sector": profile["sector"] or None, "industry": profile["industry"] or None}
 
 
 async def get_classification(tickers: list[str]) -> dict:
@@ -454,7 +582,8 @@ async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
         return yf.Search(query, max_results=25, news_count=0, lists_count=0).quotes
 
     try:
-        quotes = await asyncio.to_thread(_search)
+        with yf_guard.guard():
+            quotes = await asyncio.to_thread(_search)
     except Exception as e:  # noqa: BLE001
         logger.warning("Ticker search failed for query %r: %r", query, e)
         return []
@@ -537,40 +666,6 @@ async def get_sector_map() -> dict:
         if sector:
             result.setdefault(sector, []).append(ticker)
     return {k: sorted(v) for k, v in sorted(result.items())}
-
-
-async def fetch_industry_stocks(industry: str):
-    '''
-    Fetch stock data for all stocks in a given industry.
-    Args:
-        industry (str): The industry to filter stocks by.
-    Returns:
-        IndustryStocksResponse: A list of stocks in the specified industry along with their OHLCV data.
-    '''
-    response = {"industry": industry, "ohlcv": []}
-    for ticker in await market_data_service.get_symbols():
-        entry_industry = (await _cached_classification(ticker))["industry"] or ""
-        if entry_industry.lower() == industry.lower():
-            ohlcv_data = await fetch(ticker)
-            response["ohlcv"].append(ohlcv_data)
-    return IndustryStocksResponse(**response)
-
-
-async def fetch_sector_stocks(sector: str):
-    '''
-    Fetch stock data for all stocks in a given sector.
-    Args:
-        sector (str): The sector to filter stocks by.
-    Returns:
-        SectorStocksResponse: A list of stocks in the specified sector along with their OHLCV data.
-    '''
-    response = {"sector": sector, "ohlcv": []}
-    for ticker in await market_data_service.get_symbols():
-        entry_sector = (await _cached_classification(ticker))["sector"] or ""
-        if entry_sector.lower() == sector.lower():
-            ohlcv_data = await fetch(ticker)
-            response["ohlcv"].append(ohlcv_data)
-    return SectorStocksResponse(**response)
 
 
 async def fetch_eps_history(stock: yf.Ticker):

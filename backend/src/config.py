@@ -25,3 +25,8 @@ MODEL_DIR = _BASE / os.getenv("MODEL_DIR", "model-store/")
 # Ollama isn't reachable, so the rest of the app is unaffected.
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+
+# Company peers (services/peers_service.py) and any other Finnhub lookups.
+# Optional — peers_service degrades to an empty list (never raises) when
+# unset, same spirit as OLLAMA_BASE_URL above.
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")

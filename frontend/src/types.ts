@@ -309,6 +309,32 @@ export interface StockNewsResponse {
   articles: NewsArticle[]
 }
 
+export interface PeersResponse {
+  ticker: string
+  peers: string[]
+}
+
+export interface LogoResponse {
+  ticker: string
+  logo_url: string | null
+}
+
+/** Snapshot from Finnhub's free /quote endpoint — today's O/H/L/C plus the
+ * prior session's close, no intraday history (that's a paid Finnhub tier). */
+export interface Quote {
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+  prev_close: number | null
+  change: number | null
+  change_percent: number | null
+}
+
+export interface QuoteBatchResponse {
+  quotes: Record<string, Quote | null>
+}
+
 export type GroupedStocks = Record<string, string[]>
 
 export interface ComparisonGroup {
@@ -445,4 +471,56 @@ export type ChatContext =
 
 export interface ChatResponse {
   reply: string
+}
+
+
+// ── Performance (portfolio vs benchmark) ──────────────────────────────────
+// Mirrors backend/src/schemas/performance.py. Monetary fields arrive as
+// numbers in the market's native currency; the two `*_index` series are
+// "growth of 100" so the portfolio and the index are directly comparable.
+
+export type PerformanceRange = '1y' | '3y' | '5y' | 'max'
+
+export interface PerformancePoint {
+  date: string
+  value: number             // portfolio market value that day
+  invested: number          // cumulative net contributions
+  benchmark_value: number   // the same contributions, put into the index instead
+  portfolio_index: number   // growth of 100, deposits removed
+  benchmark_index: number
+}
+
+/** null means "not answerable from this data", never zero. */
+export interface ReturnSummary {
+  money_weighted: number | null   // XIRR — timing of contributions included
+  time_weighted: number | null    // cumulative TWR
+  annualized: number | null       // TWR per year; null under a month of history
+  max_drawdown: number            // negative fraction
+  volatility: number | null       // annualized; null under 20 trading days
+}
+
+export interface PerformanceResponse {
+  market: Market
+  currency: 'USD' | 'INR'
+  portfolio_id: number | null
+  portfolio_name: string | null
+  benchmark_symbol: string
+  benchmark_name: string
+  range: PerformanceRange
+  start_date: string | null
+  end_date: string | null
+  days: number
+  points: PerformancePoint[]
+  portfolio: ReturnSummary
+  benchmark: ReturnSummary
+  beta: number | null
+  current_value: number
+  net_invested: number
+  total_dividends: number
+  realized_gains: number
+  unrealized_gains: number
+  benchmark_final_value: number
+  value_added: number
+  excluded_tickers: string[]
+  insufficient_data: boolean
 }

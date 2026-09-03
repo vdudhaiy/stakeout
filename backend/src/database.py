@@ -52,7 +52,9 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 async def init_db() -> None:
     # Import models here so their classes are registered with Base.metadata
     # before create_all runs. This avoids circular imports at module level.
-    from models import local_auth, market_data, portfolio  # noqa: F401
+    from models import (  # noqa: F401
+        company_logo, company_profile, index_history, local_auth, market_data, peers, portfolio,
+    )
 
     if not _IS_SQLITE:
         # PostgreSQL: schema is managed entirely by Alembic.

@@ -14,6 +14,7 @@ import {
   createPortfolio, renamePortfolio, deletePortfolio,
 } from '../api'
 import { PortfolioTabs } from './portfolio/PortfolioTabs'
+import { PerformancePanel } from './performance/PerformancePanel'
 import { CombinedStatsBar } from './portfolio/CombinedStatsBar'
 import { PortfolioNameModal } from './portfolio/PortfolioNameModal'
 import { DeletePortfolioModal } from './portfolio/DeletePortfolioModal'
@@ -2039,6 +2040,18 @@ export function PortfolioPage({
                 valueColor={gainText(netPl)}
               />
             </div>
+
+            {/* ── Performance vs benchmark ───────────────────────────── */}
+            {/* Sits directly under the headline figures because it answers the
+                same portfolio-level question they do — "how did this go" —
+                whereas Allocation and Breakdown below describe composition.
+                Scoped by the market tab and portfolio tab already selected.
+                Hidden outright on an empty portfolio: the page already shows
+                its own "no positions yet" prompt, and stacking a second empty
+                state above it just says the same thing twice. */}
+            {holdings.length > 0 && (
+              <PerformancePanel market={tab} portfolioId={activeId} guest={isGuest} />
+            )}
 
             {/* ── Allocation ─────────────────────────────────────────── */}
             <AllocationCard holdings={holdings} money={money} />

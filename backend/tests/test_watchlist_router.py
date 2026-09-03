@@ -4,9 +4,10 @@ ticker is no longer NSE-or-BSE picked by the user, it's resolved server-side
 (NSE first, BSE as fallback), reusing whichever suffix an existing entry
 already has.
 
-stock_service.add_stock / get_all_stocks are mocked so these are offline —
-add_stock is the "does this ticker exist" existence check the resolver
-probes with; a ValueError from it means "not found on this exchange".
+stock_service.add_stock / is_tracked / display_name are mocked so these are
+offline — add_stock is the "does this ticker exist" existence check the
+resolver probes with; a ValueError from it means "not found on this exchange".
+is_tracked answers from the market_data archive, which is empty here.
 """
 
 from unittest.mock import patch, AsyncMock
@@ -16,8 +17,22 @@ from models.portfolio import WatchlistEntry
 USER_ID = "test-user"  # matches conftest's TEST_USER_ID, used by the `client` fixture
 
 
+def _offline_archive():
+    """Nothing is in the shared archive, and names resolve to the ticker.
+
+    Both of these used to be one get_all_stocks() call; they're separate now
+    because answering "is this ticker archived?" no longer requires fetching
+    a display name for every other ticker in the archive.
+    """
+    return patch.multiple(
+        "routers.watchlist.stock_service",
+        is_tracked=AsyncMock(return_value=False),
+        display_name=AsyncMock(side_effect=lambda t: t),
+    )
+
+
 async def test_add_bare_indian_ticker_defaults_to_nse(client):
-    with patch("routers.watchlist.stock_service.get_all_stocks", new_callable=AsyncMock, return_value={}):
+    with _offline_archive():
         with patch("routers.watchlist.stock_service.add_stock", new_callable=AsyncMock) as mock_add:
             resp = await client.post("/watchlist/RELIANCE?exchange=IN")
 
@@ -33,7 +48,7 @@ async def test_add_bare_indian_ticker_falls_back_to_bse_when_nse_not_found(clien
         if ticker == "TMCV.NS":
             raise ValueError(f"Error creating stock data for {ticker}: not found")
 
-    with patch("routers.watchlist.stock_service.get_all_stocks", new_callable=AsyncMock, return_value={}):
+    with _offline_archive():
         with patch("routers.watchlist.stock_service.add_stock",
                    new_callable=AsyncMock, side_effect=fake_add_stock):
             resp = await client.post("/watchlist/TMCV?exchange=IN")
@@ -45,7 +60,7 @@ async def test_add_bare_indian_ticker_falls_back_to_bse_when_nse_not_found(clien
 
 
 async def test_add_bare_indian_ticker_400s_when_neither_exchange_has_it(client):
-    with patch("routers.watchlist.stock_service.get_all_stocks", new_callable=AsyncMock, return_value={}):
+    with _offline_archive():
         with patch("routers.watchlist.stock_service.add_stock",
                    new_callable=AsyncMock, side_effect=ValueError("not found")):
             resp = await client.post("/watchlist/BOGUS?exchange=IN")
@@ -74,7 +89,7 @@ async def test_add_reuses_existing_bse_entry_without_probing(client, db_session)
 
 
 async def test_add_us_ticker_unaffected_by_indian_resolution(client):
-    with patch("routers.watchlist.stock_service.get_all_stocks", new_callable=AsyncMock, return_value={}):
+    with _offline_archive():
         with patch("routers.watchlist.stock_service.add_stock", new_callable=AsyncMock) as mock_add:
             resp = await client.post("/watchlist/AAPL?exchange=US")
 
@@ -87,7 +102,7 @@ async def test_add_us_ticker_unaffected_by_indian_resolution(client):
 async def test_add_already_suffixed_ticker_skips_resolution(client):
     """A manually-typed '.NS'/'.BO' ticker is unambiguous even with
     exchange='IN' — no NSE-then-BSE probing needed."""
-    with patch("routers.watchlist.stock_service.get_all_stocks", new_callable=AsyncMock, return_value={}):
+    with _offline_archive():
         with patch("routers.watchlist.stock_service.add_stock", new_callable=AsyncMock) as mock_add:
             resp = await client.post("/watchlist/RELIANCE.BO?exchange=IN")
 

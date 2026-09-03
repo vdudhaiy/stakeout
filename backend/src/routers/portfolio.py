@@ -11,7 +11,7 @@ from schemas.portfolio import (
     AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, ImportApplyRow, ImportPreviewResult,
     PortfolioImportResult, PortfolioResponse, PositionAsOf, StockHolding, UndoResult,
 )
-from services import import_service, portfolio_admin_service, portfolio_service
+from services import import_service, performance_service, portfolio_admin_service, portfolio_service
 from services.export_service import build_portfolio_xlsx
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
@@ -243,6 +243,7 @@ async def sync_dividends(
         data = await portfolio_service.sync_dividends(session, user_id, scope, ticker)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    performance_service.invalidate(user_id)
     return data
 
 
@@ -260,6 +261,7 @@ async def add_dividend(
         data = await portfolio_service.add_dividend(session, scope, ticker, date, amount_per_share, shares_held)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    performance_service.invalidate(user_id)
     return data
 
 
@@ -278,6 +280,7 @@ async def update_dividend(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    performance_service.invalidate(user_id)
     return data
 
 
@@ -293,6 +296,7 @@ async def delete_dividend(
         await portfolio_service.delete_dividend(session, scope, ticker, dividend_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    performance_service.invalidate(user_id)
     return {}
 
 

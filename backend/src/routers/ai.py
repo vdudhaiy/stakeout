@@ -9,14 +9,16 @@ shows without it.
 
 import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from cache import ai_cache
 from config import OLLAMA_MODEL
 from schemas.ai import ChatRequest, ChatResponse, StockExplanationResponse
+from rate_limit import ai_limiter, by_client_ip
 from services import analytics_service, llm_service
 
-router = APIRouter(prefix="/ai", tags=["AI"])
+router = APIRouter(prefix="/ai", tags=["AI"],
+                   dependencies=[Depends(by_client_ip(ai_limiter))])
 
 _UNAVAILABLE_DETAIL = (
     "AI explanations are unavailable right now — make sure Ollama is running "

@@ -7,7 +7,6 @@ from decimal import Decimal
 import yfinance as yf
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from yfinance.exceptions import YFRateLimitError
 
 from cache import dividend_sync_cache, quote_cache
 from markets import INDIAN_SUFFIXES, MARKET_META, apply_exchange, currency_of, market_of, normalize_market
@@ -16,7 +15,7 @@ from schemas.portfolio import (
     AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PortfolioStats, PositionAsOf,
     StockHolding, StockPurchaseHistory, UndoResult,
 )
-from . import market_data_service, portfolio_admin_service, sec_service
+from . import market_data_service, performance_service, portfolio_admin_service, sec_service, yf_guard
 from .stock_service import fetch_current, get_market_status, add_stock
 
 logger = logging.getLogger(__name__)
@@ -24,13 +23,10 @@ logger = logging.getLogger(__name__)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _is_rate_limited(e: BaseException) -> bool:
-    """True if `e` — or the exception it was raised while handling — is a
-    yfinance rate limit. add_stock wraps its underlying errors in a plain
-    ValueError, so the original type only survives via the implicit exception
-    chain Python sets on `raise ... ` inside an `except` block (__context__).
-    """
-    return isinstance(e, YFRateLimitError) or isinstance(getattr(e, "__context__", None), YFRateLimitError)
+# Detection lives in yf_guard now, alongside the backoff it triggers — the
+# two always have to agree on what "rate limited" means. Kept as a local
+# name because this module reads better with it.
+_is_rate_limited = yf_guard.is_rate_limit_error
 
 async def _validate_and_fetch_name(ticker: str) -> str:
     """Confirms the ticker exists on yfinance and returns a display name.
@@ -50,6 +46,7 @@ async def _validate_and_fetch_name(ticker: str) -> str:
     picked up later by repair_stock_metadata, which retries both sources too.
     """
     def _fetch() -> str:
+        yf_guard.check()
         stock = yf.Ticker(ticker)
         hist = stock.history(period="5d")
         if hist.empty:
@@ -63,7 +60,8 @@ async def _validate_and_fetch_name(ticker: str) -> str:
     last_error: Exception | None = None
     for _attempt in range(2):
         try:
-            name = await asyncio.to_thread(_fetch)
+            with yf_guard.guard():
+                name = await asyncio.to_thread(_fetch)
             if name:
                 return name
             break  # a valid ticker, just no name on yfinance — try SEC below
@@ -121,7 +119,8 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
             def _direct() -> float | None:
                 hist = yf.Ticker(ticker).history(period="5d")
                 return float(hist["Close"].iloc[-1]) if not hist.empty else None
-            close = await asyncio.to_thread(_direct)
+            with yf_guard.guard():
+                close = await asyncio.to_thread(_direct)
             if close is not None and not math.isnan(close):
                 price = Decimal(str(close))
         except Exception as e:  # noqa: BLE001
@@ -400,6 +399,10 @@ def _log_audit(
         user_id=user_id, portfolio_id=portfolio_id, ticker=ticker, action=action, payload=payload,
         performed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
     ))
+    # Every buy, sell and delete passes through here, which makes it the one
+    # place that can keep the Performance page's cached chart from outliving
+    # the positions it was drawn from.
+    performance_service.invalidate(user_id)
 
 
 def _realized_gains(transactions: list[Transaction]) -> Decimal:
@@ -1108,6 +1111,7 @@ async def undo_last_action(session: AsyncSession, user_id: str) -> UndoResult:
     arbitrary past one — so a reversal can never leave FIFO cost-basis state
     inconsistent with transactions that were replayed on top of it.
     """
+    performance_service.invalidate(user_id)
     result = await session.execute(
         select(AuditEntry)
         .where(AuditEntry.user_id == user_id, AuditEntry.undone == False)  # noqa: E712

@@ -1,13 +1,28 @@
 '''
 Router for stock-related endpoints.
 '''
-from fastapi import HTTPException, APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Response
 import yfinance as yf
-from schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryStocksResponse, SectorStocksResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse, StockResponse, IndicesResponse, ClassificationResponse, TickerSearchResponse
+from schemas.stocks import OHLCVResponse, StockDetailedResponse, StockCreateResponse, IndustryMapResponse, SectorMapResponse, MarketResponse, EPSHistoryResponse, RevenueHistoryResponse, StockResponse, IndicesResponse, ClassificationResponse, TickerSearchResponse
+from rate_limit import add_stock_limiter, by_client_ip, public_read, search_limiter
 from services import index_service, stock_service
 
 
-router = APIRouter(prefix="/stocks", tags=["Stocks"])
+router = APIRouter(prefix="/stocks", tags=["Stocks"], dependencies=public_read)
+
+# Browser-level caching, mirroring what /peers, /logo and /fx already do.
+# The server-side caches stop *the backend* from re-asking yfinance; these
+# stop the browser from re-asking the backend at all, which is what a user
+# reloading the page a couple of times actually generates — the ticker tape
+# alone re-requests a dozen symbols on every mount. Values match the
+# corresponding server-side TTLs in stock_service, and `public` is explicit
+# because these payloads are shared market data, never user-scoped.
+_CURRENT_CACHE_HEADER = "public, max-age=60"
+_INTRADAY_CACHE_HEADER = "public, max-age=900"      # one 15-minute bar
+_DAILY_CACHE_HEADER = "public, max-age=900"         # settled daily bars
+_SNAPSHOT_CACHE_HEADER = "public, max-age=3600"     # details/EPS/revenue: 6h server-side
+_CLASSIFICATION_CACHE_HEADER = "public, max-age=86400"
+_INDICES_CACHE_HEADER = "public, max-age=600"
 
 
 @router.get("/")
@@ -55,18 +70,19 @@ async def get_sector_map():
 
 
 @router.get("/indices", response_model=IndicesResponse)
-async def get_major_indices():
+async def get_major_indices(response: Response):
     '''
     Latest levels, day change, and ~3-month daily close series for the major
     US (S&P 500, Dow, NASDAQ) and Indian (NIFTY 50, SENSEX, NIFTY Bank)
     indices. Public and cached for 10 minutes — powers the home page strip.
     '''
     data = await index_service.get_major_indices()
+    response.headers["Cache-Control"] = _INDICES_CACHE_HEADER
     return IndicesResponse(**data)
 
 
 @router.get("/classification", response_model=ClassificationResponse)
-async def get_classification(tickers: str):
+async def get_classification(tickers: str, response: Response):
     '''
     Sector/industry classification for a comma-separated batch of tickers,
     e.g. ?tickers=AAPL,TCS.NS. Cached 24h per ticker. Powers the portfolio
@@ -79,10 +95,12 @@ async def get_classification(tickers: str):
     if len(symbols) > 100:
         raise HTTPException(status_code=400, detail="At most 100 tickers per request")
     data = await stock_service.get_classification(symbols)
+    response.headers["Cache-Control"] = _CLASSIFICATION_CACHE_HEADER
     return ClassificationResponse(classification=data)
 
 
-@router.get("/search", response_model=TickerSearchResponse)
+@router.get("/search", response_model=TickerSearchResponse,
+            dependencies=[Depends(by_client_ip(search_limiter))])
 async def search_tickers(q: str, exchange: str = "US"):
     '''
     Ticker/company-name autocomplete, e.g. ?q=apple&exchange=US. `exchange`
@@ -95,7 +113,7 @@ async def search_tickers(q: str, exchange: str = "US"):
 
 
 @router.get("/{ticker}/current", response_model=OHLCVResponse)
-async def get_current_stock_price(ticker: str):
+async def get_current_stock_price(ticker: str, response: Response):
     '''
     Get the current stock price for a given ticker.
     Args:
@@ -104,13 +122,15 @@ async def get_current_stock_price(ticker: str):
         OHLCVResponse: The current stock data for the specified ticker.
     '''
     try:
-        return await stock_service.fetch_current(yf.Ticker(ticker))
+        data = await stock_service.fetch_current(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _CURRENT_CACHE_HEADER
+    return data
 
 
 @router.get("/{ticker}/intraday", response_model=OHLCVResponse)
-async def get_intraday_stock_data(ticker: str):
+async def get_intraday_stock_data(ticker: str, response: Response):
     '''
     Get intraday stock data for a given ticker.
     Args:
@@ -119,13 +139,15 @@ async def get_intraday_stock_data(ticker: str):
         OHLCVResponse: The intraday stock data for the specified ticker.
     '''
     try:
-        return await stock_service.fetch_intraday(yf.Ticker(ticker))
+        data = await stock_service.fetch_intraday(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _INTRADAY_CACHE_HEADER
+    return data
 
 
 @router.get("/{ticker}", response_model=OHLCVResponse)
-async def get_stock(ticker: str, days: int = 30):
+async def get_stock(ticker: str, response: Response, days: int = 30):
     '''
     Get stock data for a given ticker and number of days.
     Args:
@@ -138,10 +160,12 @@ async def get_stock(ticker: str, days: int = 30):
         data = await stock_service.fetch(ticker, days)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _DAILY_CACHE_HEADER
     return data
 
 
-@router.post("/{ticker}", response_model=StockCreateResponse)
+@router.post("/{ticker}", response_model=StockCreateResponse,
+             dependencies=[Depends(by_client_ip(add_stock_limiter))])
 async def add_stock(ticker: str):
     '''
     Add stock data for a given ticker.
@@ -151,8 +175,7 @@ async def add_stock(ticker: str):
         StockCreateResponse: The stock data for the specified ticker and time period, along with detailed information about the stock, including financials, calendar events, analyst price targets, and recommendations.
     '''
     try:
-        all_stocks = await stock_service.get_all_stocks()
-        if ticker in all_stocks:
+        if await stock_service.is_tracked(ticker):
             return StockCreateResponse(exist=True, ohlcv=OHLCVResponse(ticker=ticker, data=[]), details=StockDetailedResponse(ticker=ticker))
         return await stock_service.add_stock(ticker)
     except ValueError as e:
@@ -188,7 +211,7 @@ async def add_stock(ticker: str):
 
 
 @router.get("/{ticker}/details", response_model=StockDetailedResponse)
-async def get_stock_details(ticker: str):
+async def get_stock_details(ticker: str, response: Response):
     '''
     Get detailed stock information for a given ticker.
     Args:
@@ -200,43 +223,22 @@ async def get_stock_details(ticker: str):
         data = await stock_service.fetch_detailed(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _SNAPSHOT_CACHE_HEADER
     return data
 
 
-@router.get("/{industry}", response_model=IndustryStocksResponse)
-async def get_industry_stocks(industry: str):
-    '''
-    Get stock data for all stocks in a given industry.
-    Args:
-        industry (str): The industry to filter stocks by.
-    Returns:
-        IndustryStocksResponse: A list of stocks in the specified industry along with their OHLCV data.
-    '''
-    try:
-        data = await stock_service.fetch_industry_stocks(industry)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return data
-
-
-@router.get("/{sector}", response_model=SectorStocksResponse)
-async def get_sector_stocks(sector: str):
-    '''
-    Get stock data for all stocks in a given sector.
-    Args:
-        sector (str): The sector to filter stocks by.
-    Returns:
-        SectorStocksResponse: A list of stocks in the specified sector along with their OHLCV data.
-    '''
-    try:
-        data = await stock_service.fetch_sector_stocks(sector)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return data
+# Removed: GET /{industry} and GET /{sector}. Both were declared after
+# GET /{ticker}, which matches any single path segment, so FastAPI could
+# never route to them — they were unreachable dead code. They also each
+# fanned out an archive-wide walk (a classification lookup plus a full
+# fetch() per symbol), so the only thing re-enabling them by reordering
+# would have achieved is one request stalling on hundreds of upstream
+# calls. The industry/sector *maps* at /stocks/industries and
+# /stocks/sectors are the reachable, cached equivalents.
 
 
 @router.get("/{ticker}/eps", response_model=EPSHistoryResponse)
-async def get_eps_history(ticker: str):
+async def get_eps_history(ticker: str, response: Response):
     '''
     Get EPS history for a given ticker.
     Args:
@@ -248,11 +250,12 @@ async def get_eps_history(ticker: str):
         data = await stock_service.fetch_eps_history(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _SNAPSHOT_CACHE_HEADER
     return data
 
 
 @router.get("/{ticker}/revenue", response_model=RevenueHistoryResponse)
-async def get_revenue_history(ticker: str):
+async def get_revenue_history(ticker: str, response: Response):
     '''
     Get revenue history for a given ticker.
     Args:
@@ -264,11 +267,12 @@ async def get_revenue_history(ticker: str):
         data = await stock_service.fetch_revenue_history(yf.Ticker(ticker))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _SNAPSHOT_CACHE_HEADER
     return data
 
 
 @router.get("/{ticker}/dashboard", response_model=StockResponse)
-async def get_stock_dashboard(ticker: str, days: int = 30):
+async def get_stock_dashboard(ticker: str, response: Response, days: int = 30):
     '''
     Get all dashboard data for a given ticker.
     Args:
@@ -281,4 +285,5 @@ async def get_stock_dashboard(ticker: str, days: int = 30):
         data = await stock_service.fetch_stock_dashboard(ticker, days)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    response.headers["Cache-Control"] = _DAILY_CACHE_HEADER
     return data

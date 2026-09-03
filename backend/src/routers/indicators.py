@@ -12,10 +12,11 @@ from schemas.indicators import (
     BollingerResponse,
     IndicatorsResponse,
 )
+from rate_limit import public_read
 from services import indicators_service
 
 
-router = APIRouter(prefix="/indicators", tags=["Indicators"])
+router = APIRouter(prefix="/indicators", tags=["Indicators"], dependencies=public_read)
 
 
 # ── SMA ───────────────────────────────────────────────────────────────────────

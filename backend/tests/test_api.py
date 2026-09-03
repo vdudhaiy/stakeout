@@ -51,7 +51,27 @@ def _sample_ohlcv():
 async def test_health_returns_ok(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json()["status"] == "ok"
+
+
+async def test_health_reports_upstream_backoff_state(client):
+    """Both providers back off silently and degrade to cached data, which
+    makes 'rate-limited' and 'broken' indistinguishable from outside. This
+    is the only place that difference is visible without reading logs."""
+    from yfinance.exceptions import YFRateLimitError
+
+    from services import yf_guard
+
+    body = (await client.get("/health")).json()
+    assert body["upstream"]["yfinance"]["rate_limited"] is False
+    assert body["upstream"]["yfinance"]["cooldown_seconds"] == 0
+    assert "cache_entries" in body
+
+    yf_guard.note(YFRateLimitError())
+    body = (await client.get("/health")).json()
+    assert body["status"] == "ok"  # backing off is not unhealthy
+    assert body["upstream"]["yfinance"]["rate_limited"] is True
+    assert body["upstream"]["yfinance"]["cooldown_seconds"] > 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,8 +431,8 @@ async def test_get_stock_not_in_archive_returns_404(client):
 
 async def test_add_stock_when_already_exists(client):
     with patch(
-        "routers.stocks.stock_service.get_all_stocks",
-        new_callable=AsyncMock, return_value={"AAPL": "Apple Inc."},
+        "routers.stocks.stock_service.is_tracked",
+        new_callable=AsyncMock, return_value=True,
     ):
         resp = await client.post("/stocks/AAPL")
     assert resp.status_code == 200

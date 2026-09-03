@@ -1,11 +1,13 @@
 """News endpoints backed by GDELT, Google News RSS, curated publisher RSS,
 and Yahoo Finance, in that priority order (see news_service)."""
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from rate_limit import by_client_ip, news_limiter
 from services import news_service
 
-router = APIRouter(prefix="/news", tags=["News"])
+router = APIRouter(prefix="/news", tags=["News"],
+                   dependencies=[Depends(by_client_ip(news_limiter))])
 
 _CACHE_HEADER = "public, max-age=300"  # let browsers/CDN hold results for 5 min
 

@@ -75,8 +75,7 @@ async def _resolve_ticker(session: AsyncSession, user_id: str, ticker: str, exch
     for suffix in INDIAN_SUFFIXES:
         candidate = f"{ticker}{suffix}"
         try:
-            archive = await stock_service.get_all_stocks()
-            if candidate not in archive:
+            if not await stock_service.is_tracked(candidate):
                 await stock_service.add_stock(candidate)
             return candidate
         except ValueError as e:
@@ -108,13 +107,15 @@ async def add_to_watchlist(
         entries = await _entries(session, user_id)
         return {"exist": True, "ticker": ticker, **_serialize(entries)}
 
-    # Ensure the shared archive has data (validates the ticker as a side effect)
+    # Ensure the shared archive has data (validates the ticker as a side effect).
+    # Both steps are scoped to this one ticker: they used to go through
+    # get_all_stocks(), which fetches a display name for *every* archived
+    # symbol, so adding one ticker cost a `.info` scrape per symbol in the
+    # whole shared archive — the single most expensive thing the app did.
     try:
-        archive = await stock_service.get_all_stocks()
-        if ticker not in archive:
+        if not await stock_service.is_tracked(ticker):
             await stock_service.add_stock(ticker)
-            archive = await stock_service.get_all_stocks()
-        name = archive.get(ticker, ticker)
+        name = await stock_service.display_name(ticker)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

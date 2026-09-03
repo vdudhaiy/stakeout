@@ -163,12 +163,27 @@ async def fetch_historical_price_data(ticker, start_date=None, end_date=None, in
         raise
 
 
+# How far back before the newest archived bar an incremental refresh restarts.
+# Covers Yahoo restating a recently-published bar, and the window
+# _patch_nan_daily_bars looks at, without re-pulling years of settled history.
+_REFRESH_OVERLAP_DAYS = 7
+
+
 async def append_price_data(ticker):
     '''
-    Refresh price data for a ticker by re-fetching all data from ARCHIVE_START_DATE
-    to the last completed trading day and upserting it — but only once the new
-    data is confirmed non-empty, so a transient fetch failure (network blip,
-    rate limit, etc.) can never wipe out a previously-good archive.
+    Bring a ticker's archive up to the last completed trading day.
+
+    Fetches only the gap since the newest bar already stored (plus a few days
+    of overlap, which the upsert absorbs) rather than the whole series from
+    ARCHIVE_START_DATE: the settled history never changes, so re-downloading
+    it on every refresh spent the upstream budget to learn one new bar, and a
+    watchlist of N tickers did that N times the first time anyone loaded the
+    app after a session closed. Only a ticker with no archive at all falls
+    back to a full fetch.
+
+    Upserts only once the new data is confirmed non-empty, so a transient
+    fetch failure (network blip, rate limit, etc.) can never wipe out a
+    previously-good archive.
 
     Parameters:
     ticker (str): The stock ticker symbol.
@@ -176,8 +191,21 @@ async def append_price_data(ticker):
     Returns:
     None
     '''
-    start_date = pd.Timestamp(os.getenv("ARCHIVE_START_DATE", "2023-01-01")).strftime("%Y-%m-%d")
+    archive_start = pd.Timestamp(os.getenv("ARCHIVE_START_DATE", "2023-01-01"))
+    last_archived = await market_data_service.get_last_date(ticker)
+    if last_archived is None:
+        start = archive_start
+    else:
+        start = max(archive_start, pd.Timestamp(last_archived) - pd.Timedelta(days=_REFRESH_OVERLAP_DAYS))
+
+    start_date = start.strftime("%Y-%m-%d")
     end_date = _archive_end_date()
+
+    if start_date >= end_date:
+        # Nothing has closed since the newest archived bar — the caller's
+        # staleness check raced the session boundary. Asking anyway would
+        # return an empty frame and look like a failure.
+        return
 
     try:
         data, synthetic_dates = await asyncio.to_thread(_download, ticker, start_date, end_date)

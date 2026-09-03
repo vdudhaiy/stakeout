@@ -30,9 +30,13 @@ export default defineConfig({
       // relying on that overlap makes dev and Docker disagree.
       '/portfolios': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/portfolio': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      '/performance': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/indicators': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/watchlist': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/news': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      '/peers': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      '/logo': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
+      '/quote': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/fx': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/ai': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },
       '/auth': { target: 'http://localhost:8000', bypass: bypassHtmlNavigations },

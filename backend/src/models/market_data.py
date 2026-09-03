@@ -26,3 +26,25 @@ class MarketData(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[int] = mapped_column(BigInteger)
     source: Mapped[str] = mapped_column(String, default="yfinance")
+
+
+class ArchiveRefresh(Base):
+    """The last completed trading day we already tried to fetch for a symbol.
+
+    Yahoo publishes a session's daily bar some time after the close, so
+    between the close and the publish every request for that symbol finds a
+    stale archive and asks again. This records the attempt so the next
+    caller doesn't repeat it, and clears itself naturally: the marker is the
+    trading day it was made for, so a newer completed session makes it
+    obsolete without anything having to expire it.
+
+    Persisted rather than held in a dict because the free-tier host restarts
+    many times a day, and an in-memory marker means one wasted upstream call
+    per tracked symbol on every one of those restarts.
+    """
+
+    __tablename__ = "archive_refresh"
+
+    symbol: Mapped[str] = mapped_column(String, primary_key=True)
+    # The trading day the attempt was made *for*, not when it ran.
+    attempted_for: Mapped[date_] = mapped_column(Date)

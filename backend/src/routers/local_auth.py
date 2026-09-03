@@ -39,9 +39,12 @@ _DUMMY_HASH = bcrypt.hashpw(b"stakeout-timing-safety-dummy", bcrypt.gensalt()).d
 
 # Signup/login are brute-force and spam-account targets; change-password is
 # lower-risk (already requires a valid session) but still worth capping.
-_signup_limiter = RateLimiter(max_requests=5, window_seconds=15 * 60)
-_login_limiter = RateLimiter(max_requests=10, window_seconds=15 * 60)
-_change_password_limiter = RateLimiter(max_requests=5, window_seconds=15 * 60)
+# Generous limits — this is a dev-convenience auth path (see module docstring),
+# not a hardened boundary, and low limits were tripping during normal local
+# testing (repeated login/logout cycles) well before any real abuse pattern.
+_signup_limiter = RateLimiter(max_requests=20, window_seconds=15 * 60)
+_login_limiter = RateLimiter(max_requests=40, window_seconds=15 * 60)
+_change_password_limiter = RateLimiter(max_requests=20, window_seconds=15 * 60)
 
 
 def _hash_password(password: str) -> str:

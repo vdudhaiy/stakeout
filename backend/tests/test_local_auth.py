@@ -80,11 +80,11 @@ async def test_signup_oversized_password_rejected_cleanly(client):
     assert resp.status_code == 400
 
 
-async def test_signup_rate_limited_after_five_per_ip(client):
-    for i in range(5):
+async def test_signup_rate_limited_after_twenty_per_ip(client):
+    for i in range(20):
         resp = await client.post("/auth/signup", json={"email": f"rl{i}@example.com", "password": "hunter2222"})
         assert resp.status_code == 200
-    resp = await client.post("/auth/signup", json={"email": "rl-sixth@example.com", "password": "hunter2222"})
+    resp = await client.post("/auth/signup", json={"email": "rl-overflow@example.com", "password": "hunter2222"})
     assert resp.status_code == 429
 
 
@@ -135,9 +135,9 @@ async def test_login_unknown_email_still_runs_bcrypt_compare(client, monkeypatch
     assert calls == [local_auth_module._DUMMY_HASH]
 
 
-async def test_login_rate_limited_after_ten_per_ip(client):
+async def test_login_rate_limited_after_forty_per_ip(client):
     await client.post("/auth/signup", json={"email": "rllogin@example.com", "password": "hunter2222"})
-    for _ in range(10):
+    for _ in range(40):
         resp = await client.post("/auth/login", json={"email": "rllogin@example.com", "password": "wrongpass1"})
         assert resp.status_code == 401
     resp = await client.post("/auth/login", json={"email": "rllogin@example.com", "password": "hunter2222"})
@@ -235,12 +235,12 @@ async def test_change_password_new_password_too_short_rejected(client, db_sessio
     assert resp.status_code == 400
 
 
-async def test_change_password_rate_limited_after_five(client, db_session):
+async def test_change_password_rate_limited_after_twenty(client, db_session):
     user = LocalUser(id="test-user", email="rlchange@example.com", password_hash=_hash_password("oldpass123"))
     db_session.add(user)
     await db_session.commit()
 
-    for _ in range(5):
+    for _ in range(20):
         resp = await client.post(
             "/auth/change-password",
             json={"current_password": "wrong-on-purpose", "new_password": "newpass456"},

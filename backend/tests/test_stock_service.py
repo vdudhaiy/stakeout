@@ -6,12 +6,16 @@ at the router boundary so that the transformation / parsing logic inside
 each function is actually executed and covered.
 """
 
+import asyncio
+
 import pytest
 import pandas as pd
 from datetime import date, datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
+from yfinance.exceptions import YFRateLimitError
 
 from cache import info_cache
+from services import stock_service, yf_guard
 from services.stock_service import (
     _last_completed_trading_day,
     get_market_status,
@@ -700,3 +704,154 @@ async def test_fetch_stock_dashboard_eps_and_revenue_errors_yield_none():
     assert result.ticker == "AAPL"
     assert result.earnings_history is None
     assert result.revenue_history is None
+
+
+# ── quote caching / coalescing ────────────────────────────────────────────────
+# fetch_current is the hottest upstream call in the app (ticker tape on every
+# mount, tracker poll, portfolio valuation) and was the one quote path with no
+# cache at all, so a couple of page reloads spent a couple of dozen fresh
+# yfinance requests. These pin the caching, the coalescing, and the "serve the
+# archive rather than fail" behaviour during a backoff.
+
+def _one_minute_bar_stock(ticker="AAPL"):
+    today = date.today().isoformat()
+    stock = MagicMock()
+    stock.ticker = ticker
+    stock.history.return_value = _make_ohlcv_df(
+        [f"{today} 09:30:00", f"{today} 15:59:00"], closes=[100.0, 120.0]
+    )
+    return stock
+
+
+async def test_fetch_current_second_call_is_served_from_cache(fake_to_thread):
+    stock = _one_minute_bar_stock()
+    with patch("services.stock_service.asyncio.to_thread", side_effect=fake_to_thread):
+        first = await fetch_current(stock, is_market_open=True)
+        second = await fetch_current(stock, is_market_open=True)
+
+    assert stock.history.call_count == 1
+    assert second.data[0].close == first.data[0].close
+
+
+async def test_fetch_current_concurrent_callers_share_one_upstream_call(fake_to_thread):
+    """The ticker tape fires a dozen of these at once on mount; a TTL cache
+    alone doesn't help the ones that start before the first has finished."""
+    stock = _one_minute_bar_stock()
+    with patch("services.stock_service.asyncio.to_thread", side_effect=fake_to_thread):
+        results = await asyncio.gather(
+            *(fetch_current(stock, is_market_open=True) for _ in range(10))
+        )
+
+    assert stock.history.call_count == 1
+    assert len({r.data[0].close for r in results}) == 1
+
+
+async def test_fetch_current_open_and_closed_answers_do_not_share_a_cache_entry(fake_to_thread):
+    """The two branches answer different questions — a cached open-session
+    aggregate must not be served once the session has closed."""
+    stock = _one_minute_bar_stock()
+    with patch("services.stock_service.asyncio.to_thread", side_effect=fake_to_thread):
+        await fetch_current(stock, is_market_open=True)
+        with patch("services.stock_service.fetch", new_callable=AsyncMock,
+                   return_value=OHLCVResponse(ticker="AAPL", data=[OHLCV(date="2024-01-15", close=183.5)])):
+            closed = await fetch_current(stock, is_market_open=False)
+
+    assert closed.data[0].close == pytest.approx(183.5)
+
+
+async def test_fetch_current_failure_is_cached_briefly_rather_than_retried(fake_to_thread):
+    stock = MagicMock()
+    stock.ticker = "AAPL"
+    stock.history.return_value = pd.DataFrame()
+
+    with patch("services.stock_service.asyncio.to_thread", side_effect=fake_to_thread):
+        for _ in range(3):
+            with pytest.raises(ValueError):
+                await fetch_current(stock, is_market_open=True)
+
+    assert stock.history.call_count == 1
+
+
+async def test_fetch_current_serves_the_archive_during_a_yfinance_backoff():
+    """A rate limit must not turn into a 404 when the archive already holds
+    a perfectly good last close."""
+    yf_guard.note(YFRateLimitError())
+    stock = MagicMock()
+    stock.ticker = "AAPL"
+
+    with patch("services.stock_service.market_data_service.get_ohlcv",
+               new_callable=AsyncMock,
+               return_value=[{"date": "2024-01-15", "open": 180.0, "high": 184.0,
+                              "low": 179.0, "close": 183.5, "volume": 1000}]):
+        result = await fetch_current(stock, is_market_open=True)
+
+    stock.history.assert_not_called()
+    assert result.data[0].close == pytest.approx(183.5)
+
+
+async def test_fetch_intraday_second_call_is_served_from_cache():
+    today = date.today().isoformat()
+    stock = MagicMock()
+    stock.ticker = "AAPL"
+    stock.history.return_value = _make_ohlcv_df([f"{today} 09:30:00", f"{today} 12:00:00"])
+
+    await fetch_intraday(stock)
+    await fetch_intraday(stock)
+
+    assert stock.history.call_count == 1
+
+
+# ── archive top-up ────────────────────────────────────────────────────────────
+
+async def test_update_attempted_map_stays_bounded():
+    """market_data holds every symbol any user ever archived, so this map
+    grows with the whole archive if nothing sheds from it."""
+    with patch("services.stock_service.market_data_service.set_refresh_marker",
+               new_callable=AsyncMock):
+        for i in range(stock_service._UPDATE_ATTEMPTED_MAX + 500):
+            await stock_service._note_update_attempt(
+                f"T{i}", pd.Timestamp("2026-01-01") + pd.Timedelta(days=i)
+            )
+
+    assert len(_update_attempted) <= stock_service._UPDATE_ATTEMPTED_MAX
+
+
+async def test_update_attempt_is_persisted_so_a_restart_does_not_repeat_it():
+    """The marker used to live only in the dict above, so every restart of
+    the free-tier host re-spent one upstream call per tracked symbol
+    re-learning that Yahoo hadn't published yet."""
+    with patch("services.stock_service.market_data_service.set_refresh_marker",
+               new_callable=AsyncMock) as save:
+        await stock_service._note_update_attempt("AAPL", pd.Timestamp("2026-03-10"))
+
+    save.assert_awaited_once_with("AAPL", date(2026, 3, 10))
+
+
+async def test_update_attempt_is_read_back_from_the_database_after_a_restart():
+    _update_attempted.clear()  # a fresh process
+    with patch("services.stock_service.market_data_service.get_refresh_marker",
+               new_callable=AsyncMock, return_value=date(2026, 3, 10)) as read:
+        first = await stock_service._last_update_attempt("AAPL")
+        second = await stock_service._last_update_attempt("AAPL")
+
+    assert first == pd.Timestamp("2026-03-10")
+    assert second == first
+    read.assert_awaited_once()  # memoized in-process after the first read
+
+
+async def test_a_persisted_marker_suppresses_a_redundant_refetch():
+    """End to end: a stale archive plus a marker for the same trading day
+    means no upstream call."""
+    records = [{"date": "2026-03-06", "open": 1.0, "high": 1.0, "low": 1.0,
+                "close": 1.0, "volume": 1}]
+    with patch("services.stock_service.market_data_service.get_ohlcv",
+               new_callable=AsyncMock, return_value=records):
+        with patch("services.stock_service._last_completed_trading_day",
+                   new_callable=AsyncMock, return_value=pd.Timestamp("2026-03-10")):
+            with patch("services.stock_service.market_data_service.get_refresh_marker",
+                       new_callable=AsyncMock, return_value=date(2026, 3, 10)):
+                with patch("services.price_fetcher.append_price_data",
+                           new_callable=AsyncMock) as append:
+                    await fetch("AAPL")
+
+    append.assert_not_called()

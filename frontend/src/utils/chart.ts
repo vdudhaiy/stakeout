@@ -83,3 +83,31 @@ export function intradayTickFormatter(dateStr: string): string {
   const m = dateStr.slice(14, 16)
   return `${h}:${m}`
 }
+
+
+/**
+ * Thin `ticks` down to at most `max`, keeping the first and last.
+ *
+ * computeXTicks picks a sensible density for a wide chart, but the same
+ * count collides into an unreadable smear at phone width. Rather than
+ * measuring the container (which recharts doesn't expose to the `ticks`
+ * prop), the performance charts just ask for a count that reads cleanly at
+ * every width — a couple of extra months between labels costs nothing on a
+ * chart that already has a tooltip.
+ */
+export function thinTicks(ticks: string[], max: number): string[] {
+  if (ticks.length <= max || max < 2) return ticks
+  const step = Math.ceil(ticks.length / max)
+  const kept = ticks.filter((_, i) => i % step === 0)
+  const lastIndex = ticks.length - 1
+  const keptLastIndex = (kept.length - 1) * step
+  if (keptLastIndex !== lastIndex) {
+    // Append the true final tick, but never let the closing gap be tighter
+    // than the regular spacing — a last label crowded against its neighbour
+    // is what makes the axis unreadable at phone width. When it would be,
+    // it replaces that neighbour instead of joining it.
+    if (lastIndex - keptLastIndex < step) kept.pop()
+    kept.push(ticks[lastIndex])
+  }
+  return kept
+}

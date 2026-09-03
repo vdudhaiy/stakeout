@@ -4,11 +4,13 @@ classification endpoint, and the layered 7-day stock news feed.
 yfinance and GDELT are mocked throughout — these tests are offline.
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import patch, AsyncMock
 
 from cache import index_cache, info_cache, news_cache
-from services import index_service, news_service, stock_service
+from services import company_profile_service, index_service, news_service, stock_service
 
 
 @pytest.fixture(autouse=True)
@@ -75,16 +77,100 @@ async def test_index_quote_shape():
     assert q["points"][-1]["close"] == q["last"]
 
 
+async def test_indices_serve_stale_while_revalidating():
+    """The home page is public and its first paint used to wait on six
+    yfinance history calls every time the 10-minute entry expired. Once
+    there's a previous answer, nobody waits for the next one."""
+    first = {"symbol": "^GSPC", "name": "S&P 500", "region": "US",
+             "last": 100.0, "change": 1.0, "change_pct": 1.0,
+             "points": [{"date": "2026-01-01", "close": 100.0}]}
+    second = {**first, "last": 200.0}
+
+    calls = []
+
+    def _fetch(symbol, name, region):
+        calls.append(symbol)
+        return second if calls.count(symbol) > 1 else first
+
+    with patch.object(index_service, "_fetch_one", side_effect=_fetch):
+        with patch.object(index_service, "MAJOR_INDICES", [("^GSPC", "S&P 500", "US")]):
+            warm = await index_service.get_major_indices()
+            assert warm["indices"][0]["last"] == 100.0
+
+            # Expire only the fresh entry; the stale copy outlives it.
+            index_cache.invalidate(index_service._CACHE_KEY)
+            served = await index_service.get_major_indices()
+            assert served["indices"][0]["last"] == 100.0  # stale, served instantly
+
+            await asyncio.gather(*index_service._refresh_tasks)
+            refreshed = await index_service.get_major_indices()
+            assert refreshed["indices"][0]["last"] == 200.0
+
+
+async def test_indices_first_ever_request_still_waits():
+    """With nothing to serve, the caller has to wait — but only one of them
+    does, however many arrive together."""
+    entry = {"symbol": "^GSPC", "name": "S&P 500", "region": "US",
+             "last": 100.0, "change": None, "change_pct": None,
+             "points": [{"date": "2026-01-01", "close": 100.0}]}
+
+    with patch.object(index_service, "_fetch_one", return_value=entry) as fetch:
+        with patch.object(index_service, "MAJOR_INDICES", [("^GSPC", "S&P 500", "US")]):
+            results = await asyncio.gather(
+                *(index_service.get_major_indices() for _ in range(5))
+            )
+
+    assert fetch.call_count == 1
+    assert all(r["indices"][0]["last"] == 100.0 for r in results)
+
+
+async def test_indices_outage_keeps_serving_the_last_good_answer():
+    """An empty result is never cached, so a Yahoo outage can't blank the
+    strip — the stale copy is still there."""
+    entry = {"symbol": "^GSPC", "name": "S&P 500", "region": "US",
+             "last": 100.0, "change": None, "change_pct": None,
+             "points": [{"date": "2026-01-01", "close": 100.0}]}
+
+    with patch.object(index_service, "MAJOR_INDICES", [("^GSPC", "S&P 500", "US")]):
+        with patch.object(index_service, "_fetch_one", return_value=entry):
+            await index_service.get_major_indices()
+
+        index_cache.invalidate(index_service._CACHE_KEY)
+        with patch.object(index_service, "_fetch_one", return_value=None):
+            served = await index_service.get_major_indices()
+            await asyncio.gather(*index_service._refresh_tasks, return_exceptions=True)
+            again = await index_service.get_major_indices()
+
+    assert served["indices"][0]["last"] == 100.0
+    assert again["indices"][0]["last"] == 100.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # /stocks/classification
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Classification now shares one cached, DB-persisted `.info` lookup with the
+# display-name path (services.company_profile_service). Same treatment as
+# test_peers gives peers_service: the module-level SessionLocal helpers are
+# mocked out so these stay pure yfinance-shaping tests, and `_fetch_info` is
+# the single upstream call whose count they assert on.
+def _no_profile_db():
+    return patch.multiple(
+        "services.company_profile_service",
+        _read_row=AsyncMock(return_value=None),
+        _save=AsyncMock(),
+    )
+
 
 async def test_classification_batch_and_cache(client):
     infos = {
         "AAPL": {"sector": "Technology", "industry": "Consumer Electronics"},
         "TCS.NS": {"sector": "Technology", "industry": "IT Services"},
     }
-    with patch.object(stock_service, "_get_ticker_info", side_effect=lambda t: infos[t]) as info:
+    with _no_profile_db(), patch.object(
+        company_profile_service, "_fetch_info",
+        side_effect=lambda t: {"name": t, **infos[t]},
+    ) as info:
         res = await client.get("/stocks/classification?tickers=AAPL,TCS.NS")
         assert res.status_code == 200
         body = res.json()["classification"]
@@ -102,7 +188,9 @@ async def test_classification_failed_lookup_returns_nulls_and_is_not_cached(clie
     def _boom(_):
         raise RuntimeError("yfinance down")
 
-    with patch.object(stock_service, "_get_ticker_info", side_effect=_boom) as info:
+    with _no_profile_db(), patch.object(
+        company_profile_service, "_fetch_info", side_effect=_boom
+    ) as info:
         res = await client.get("/stocks/classification?tickers=ZZZZ")
         assert res.status_code == 200
         assert res.json()["classification"]["ZZZZ"] == {"sector": None, "industry": None}
@@ -123,8 +211,10 @@ async def test_classification_cache_is_shared_across_industry_sector_and_batch_l
     """_cached_classification is the single source of truth behind
     get_classification, get_industry_map, and get_sector_map — a lookup
     warmed by one is reused by the others instead of refetching `.info`."""
-    with patch.object(stock_service, "_get_ticker_info",
-                       return_value={"sector": "Technology", "industry": "Consumer Electronics"}) as info:
+    with _no_profile_db(), patch.object(
+        company_profile_service, "_fetch_info",
+        return_value={"name": "Apple Inc.", "sector": "Technology", "industry": "Consumer Electronics"},
+    ) as info:
         await stock_service.get_classification(["AAPL"])
         assert info.call_count == 1
 
