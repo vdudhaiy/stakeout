@@ -27,9 +27,16 @@ dependencies = [
 # Flat layout: backend/src has no wrapping package (main.py, config.py, etc. import
 # each other with relative imports and nothing outside backend imports this code),
 # so top-level modules and subpackages are both discovered directly under src.
+#
+# `packages.find` below picks up the subpackages (routers, services, models,
+# schemas) automatically, but the flat modules do NOT get discovered — every
+# one has to be listed here by hand or it is simply absent from the installed
+# wheel. A deployment then imports the *installed* routers, which fail on a
+# module that only ever existed in the working tree. test_packaging.py checks
+# this list against the directory so the next flat module can't slip through.
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["auth", "cache", "config", "database", "main", "markets"]
+py-modules = ["auth", "cache", "config", "database", "main", "markets", "rate_limit"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

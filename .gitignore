@@ -25,6 +25,8 @@ model-store/
 
 # Ignore Python packaging artifacts
 *.egg-info
+# setuptools staging dir, left behind by `uv build` / `python -m build`
+build/
 .venv/
 
 # Pytest cache and coverage reports
