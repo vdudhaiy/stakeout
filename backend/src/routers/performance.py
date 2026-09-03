@@ -16,10 +16,15 @@ from services import performance_service, portfolio_admin_service
 
 router = APIRouter(prefix="/performance", tags=["Performance"])
 
-# Matches performance_service's own TTL. The payload only changes when a
-# session closes or the user trades, and a trade invalidates the server-side
-# entry anyway — so a reload inside the window costs nothing at all.
-_CACHE_HEADER = "private, max-age=600"
+# Revalidate every time. The obvious choice here is a max-age matching
+# performance_service's own TTL, and it was — until a trade proved that
+# invalidating the server-side entry cannot reach a copy already sitting in
+# the browser: the panel kept insisting there was no history for ten minutes
+# after the user added positions. The server cache still absorbs the compute,
+# so revalidating costs a round trip, not a recomputation.
+#
+# `private`, never `public`: this is one user's holdings.
+_CACHE_HEADER = "private, no-cache"
 
 
 @router.get("/", response_model=PerformanceResponse)

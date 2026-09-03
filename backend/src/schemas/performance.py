@@ -81,3 +81,9 @@ class PerformanceResponse(BaseModel):
     # or no overlapping archive data). The frontend shows an empty state
     # instead of a chart of one point.
     insufficient_data: bool = False
+
+    # Set alongside insufficient_data when the cause is a price archive that
+    # hasn't caught up, rather than a genuinely new portfolio. The two are
+    # indistinguishable from the data but mean opposite things to the user:
+    # one resolves itself, the other needs them to go and buy something.
+    stale_archive: bool = False

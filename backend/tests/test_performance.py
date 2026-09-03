@@ -67,21 +67,35 @@ async def _add_holding(session, pid, ticker, market="US", transactions=(), divid
     return holding
 
 
-def _mock_data(closes: dict[str, dict[date, float]], index: dict[date, float]):
-    """Patch both data sources the service reads."""
+def _mock_data(
+    closes: dict[str, dict[date, float]],
+    index: dict[date, float],
+    *,
+    archive_behind: bool = False,
+):
+    """Patch every external the service reads.
+
+    The archive top-up is patched out too: it would otherwise reach for the
+    module-level SessionLocal (which has no tables here) on every test.
+    `archive_behind` drives the "the archive hasn't caught up" branch.
+    """
     return (
         patch("services.performance_service.market_data_service.get_closes",
               new_callable=AsyncMock, return_value=closes),
         patch("services.performance_service.index_service.get_history",
               new_callable=AsyncMock, return_value=index),
+        patch("services.performance_service.stock_service.ensure_archive_current",
+              new_callable=AsyncMock, return_value=False),
+        patch("services.performance_service.stock_service.archive_is_behind",
+              new_callable=AsyncMock, return_value=archive_behind),
     )
 
 
 # ── empty / degenerate cases ──────────────────────────────────────────────
 
 async def test_no_holdings_reports_insufficient_data(db_session, pid):
-    closes, index = _mock_data({}, {})
-    with closes, index:
+    closes, index, topup, behind = _mock_data({}, {})
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.insufficient_data is True
@@ -95,8 +109,8 @@ async def test_a_holding_with_no_archive_history_is_excluded_not_silently_droppe
     day = date(2024, 1, 1)
     await _add_holding(db_session, pid, "OBSCURE", transactions=[(False, day, 10, 5.0)])
 
-    closes, index = _mock_data({}, {})
-    with closes, index:
+    closes, index, topup, behind = _mock_data({}, {})
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.insufficient_data is True
@@ -107,8 +121,8 @@ async def test_a_single_day_of_history_is_not_enough_to_chart(db_session, pid):
     day = date(2024, 1, 1)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, day, 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": {day: 100.0}}, {day: 4000.0})
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": {day: 100.0}}, {day: 4000.0})
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.insufficient_data is True
@@ -120,8 +134,8 @@ async def test_value_series_tracks_shares_times_price(db_session, pid):
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _ramp(axis, 100.0, 140.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 140.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     values = [p.value for p in result.points]
@@ -138,10 +152,10 @@ async def test_a_holding_bought_mid_window_is_worth_nothing_before_it_was_bought
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
     await _add_holding(db_session, pid, "MSFT", transactions=[(False, axis[2], 5, 200.0)])
 
-    closes, index = _mock_data(
+    closes, index, topup, behind = _mock_data(
         {"AAPL": _flat(axis, 100.0), "MSFT": _flat(axis, 200.0)}, _flat(axis, 4000.0),
     )
-    with closes, index:
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     values = [p.value for p in result.points]
@@ -156,8 +170,8 @@ async def test_a_sale_reduces_the_value_series(db_session, pid):
         (True, axis[3], 4, 100.0),
     ])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     values = [p.value for p in result.points]
@@ -171,8 +185,8 @@ async def test_a_missing_price_bar_holds_the_last_known_price(db_session, pid):
     prices = {axis[0]: 100.0, axis[1]: 100.0, axis[3]: 120.0}  # axis[2] missing
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": prices, "OTHER": _flat(axis, 1.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": prices, "OTHER": _flat(axis, 1.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     by_date = {p.date: p.value for p in result.points}
@@ -190,8 +204,8 @@ async def test_a_deposit_is_not_reported_as_a_gain(db_session, pid):
         (False, axis[2], 10, 100.0),
     ])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.points[-1].value == pytest.approx(2000.0)
@@ -203,8 +217,8 @@ async def test_time_weighted_return_matches_the_price_move(db_session, pid):
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _ramp(axis, 100.0, 150.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 150.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.portfolio.time_weighted == pytest.approx(0.50, abs=1e-9)
@@ -220,8 +234,8 @@ async def test_dividends_are_income_not_a_contribution(db_session, pid):
         dividends=[(axis[2], 2.0, 10)],
     )
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.total_dividends == pytest.approx(Decimal("20"))
@@ -247,8 +261,8 @@ async def test_benchmark_follows_the_users_own_cash_flows(db_session, pid):
     ])
     index_levels = dict(zip(axis, [100.0, 100.0, 100.0, 200.0, 200.0]))
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, index_levels)
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, index_levels)
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.benchmark_final_value == pytest.approx(Decimal("3000"))
@@ -260,8 +274,8 @@ async def test_beating_the_benchmark_shows_positive_value_added(db_session, pid)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
     # Stock doubles; index is flat.
-    closes, index = _mock_data({"AAPL": _ramp(axis, 100.0, 200.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 200.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.current_value == pytest.approx(Decimal("2000"))
@@ -273,8 +287,8 @@ async def test_lagging_the_benchmark_shows_negative_value_added(db_session, pid)
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _ramp(axis, 100.0, 200.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _ramp(axis, 100.0, 200.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.benchmark_final_value == pytest.approx(Decimal("2000"))
@@ -286,8 +300,8 @@ async def test_both_growth_series_start_at_the_same_base(db_session, pid):
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _ramp(axis, 100.0, 150.0)}, _ramp(axis, 100.0, 110.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _ramp(axis, 100.0, 150.0)}, _ramp(axis, 100.0, 110.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.points[0].portfolio_index == pytest.approx(100.0)
@@ -300,8 +314,8 @@ async def test_an_unavailable_benchmark_degrades_rather_than_drawing_a_fake_line
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, {})
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, {})
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US")
 
     assert result.insufficient_data is False
@@ -316,8 +330,8 @@ async def test_indian_portfolios_are_benchmarked_against_nifty(db_session, pid, 
     await _add_holding(db_session, portfolio.id, "TCS.NS", market="IN",
                        transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"TCS.NS": _flat(axis, 100.0)}, _flat(axis, 22000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"TCS.NS": _flat(axis, 100.0)}, _flat(axis, 22000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "IN")
 
     assert result.benchmark_symbol == "^NSEI"
@@ -331,8 +345,8 @@ async def test_range_narrows_the_window(db_session, pid):
     axis = _days(date.today() - timedelta(days=800), 800)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         full = await performance_service.get_performance(db_session, USER_ID, "US", range_key="max")
         windowed = await performance_service.get_performance(db_session, USER_ID, "US", range_key="1y")
 
@@ -347,8 +361,8 @@ async def test_contributions_made_before_the_window_are_not_counted_inside_it(db
     axis = _days(date.today() - timedelta(days=800), 800)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         windowed = await performance_service.get_performance(db_session, USER_ID, "US", range_key="1y")
 
     assert windowed.net_invested == pytest.approx(Decimal("1000"))
@@ -365,8 +379,8 @@ async def test_a_window_opens_at_market_value_not_cost_basis(db_session, pid):
     # 100 until the last ~year, then 300 for the whole window.
     prices = {d: (100.0 if i < 400 else 300.0) for i, d in enumerate(axis)}
 
-    closes, index = _mock_data({"AAPL": prices}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": prices}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         windowed = await performance_service.get_performance(db_session, USER_ID, "US", range_key="1y")
 
     assert windowed.points[0].value == pytest.approx(3000.0)
@@ -383,8 +397,8 @@ async def test_a_window_starts_the_benchmark_from_the_same_capital(db_session, p
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
     prices = {d: (100.0 if i < 400 else 300.0) for i, d in enumerate(axis)}
 
-    closes, index = _mock_data({"AAPL": prices}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": prices}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         windowed = await performance_service.get_performance(db_session, USER_ID, "US", range_key="1y")
 
     assert windowed.points[0].benchmark_value == pytest.approx(windowed.points[0].value)
@@ -396,8 +410,8 @@ async def test_an_unknown_range_falls_back_to_max_rather_than_erroring(db_sessio
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
         result = await performance_service.get_performance(db_session, USER_ID, "US", range_key="nonsense")
 
     assert result.range == "max"
@@ -407,8 +421,8 @@ async def test_a_second_request_is_served_from_cache(db_session, pid):
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes as mock_closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes as mock_closes, index, topup, behind:
         await performance_service.get_performance(db_session, USER_ID, "US")
         await performance_service.get_performance(db_session, USER_ID, "US")
 
@@ -419,8 +433,8 @@ async def test_invalidate_forces_a_recompute(db_session, pid):
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes as mock_closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes as mock_closes, index, topup, behind:
         await performance_service.get_performance(db_session, USER_ID, "US")
         performance_service.invalidate(USER_ID)
         await performance_service.get_performance(db_session, USER_ID, "US")
@@ -432,8 +446,8 @@ async def test_one_users_cache_is_not_dropped_by_anothers_trade(db_session, pid)
     axis = _days(date(2024, 1, 1), 5)
     await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
 
-    closes, index = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
-    with closes as mock_closes, index:
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes as mock_closes, index, topup, behind:
         await performance_service.get_performance(db_session, USER_ID, "US")
         performance_service.invalidate("someone-else")
         await performance_service.get_performance(db_session, USER_ID, "US")
@@ -464,3 +478,70 @@ async def test_ranges_route_lists_the_windows_the_server_accepts(client):
     resp = await client.get("/performance/ranges")
     assert resp.status_code == 200
     assert resp.json()["ranges"] == list(performance_service.RANGES)
+
+
+# ── stale archive ─────────────────────────────────────────────────────────
+# The bug this section exists for: four positions bought over a weekend, all
+# priced fine on the Portfolio page, and the panel insisting there was no
+# history. The archive had been filled up to the Friday before the first buy
+# and never advanced, because only the Tracker's fetch() ever topped it up.
+
+async def test_an_archive_that_stops_before_the_first_buy_reports_itself_as_stale(db_session, pid):
+    """Not "you have no history" — the user has plenty, we just hadn't
+    downloaded it. The two need opposite messages."""
+    axis = _days(date(2024, 1, 1), 10)
+    bought = axis[-1] + timedelta(days=2)          # after every archived bar
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, bought, 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data(
+        {"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0), archive_behind=True,
+    )
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.insufficient_data is True
+    assert result.stale_archive is True
+    # Not excluded: the ticker *is* in the archive, just not recently enough.
+    assert result.excluded_tickers == []
+
+
+async def test_a_genuinely_new_portfolio_is_not_blamed_on_the_archive(db_session, pid):
+    axis = _days(date(2024, 1, 1), 10)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[-1], 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data(
+        {"AAPL": {axis[-1]: 100.0}}, _flat(axis, 4000.0), archive_behind=False,
+    )
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.insufficient_data is True
+    assert result.stale_archive is False
+
+
+async def test_a_healthy_chart_never_claims_a_stale_archive(db_session, pid):
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.insufficient_data is False
+    assert result.stale_archive is False
+
+
+async def test_the_archive_is_topped_up_for_every_held_ticker_before_charting(db_session, pid):
+    """The Portfolio page prices from live quotes and never advances the
+    archive, so this panel has to do it or it reads a frozen one."""
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, axis[0], 10, 100.0)])
+    await _add_holding(db_session, pid, "MSFT", transactions=[(False, axis[0], 5, 200.0)])
+
+    closes, index, topup, behind = _mock_data(
+        {"AAPL": _flat(axis, 100.0), "MSFT": _flat(axis, 200.0)}, _flat(axis, 4000.0),
+    )
+    with closes, index, topup as mock_topup, behind:
+        await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert {c.args[0] for c in mock_topup.await_args_list} == {"AAPL", "MSFT"}

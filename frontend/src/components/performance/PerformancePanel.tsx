@@ -251,7 +251,12 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
                 <div className="h-64 rounded-xl bg-zinc-800 animate-pulse" />
               </div>
             ) : !data || data.insufficient_data ? (
-              <EmptyState guest={guest} market={market} excluded={excluded} />
+              <EmptyState
+                guest={guest}
+                market={market}
+                excluded={excluded}
+                staleArchive={data?.stale_archive ?? false}
+              />
             ) : (
               <div className="space-y-4">
                 <Verdict data={data} />
@@ -362,16 +367,31 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
   )
 }
 
-function EmptyState({ guest, market, excluded }: { guest?: boolean; market: Market; excluded: string[] }) {
+interface EmptyStateProps {
+  guest?: boolean
+  market: Market
+  excluded: string[]
+  /** The chart is empty because prices haven't been archived yet, not
+   *  because there are no positions. Very different message. */
+  staleArchive: boolean
+}
+
+function EmptyState({ guest, market, excluded, staleArchive }: EmptyStateProps) {
+  const title = guest
+    ? 'Sign in to track performance'
+    : staleArchive
+      ? 'Catching up on price history'
+      : 'Not enough history yet'
+
   return (
     <div className="py-6 text-center">
-      <p className="text-sm text-zinc-400">
-        {guest ? 'Sign in to track performance' : 'Not enough history yet'}
-      </p>
+      <p className="text-sm text-zinc-400">{title}</p>
       <p className="mt-2 text-xs text-zinc-500 max-w-md mx-auto leading-relaxed">
         {guest
           ? 'Guest portfolios live only in this browser tab, so there is no transaction history to measure a return against. Create an account and your buys and sells build this chart as you go.'
-          : `Record a buy in your ${market === 'IN' ? 'India' : 'US'} portfolio and this starts plotting it against the benchmark. It needs at least two days of archived prices to draw a line.`}
+          : staleArchive
+            ? 'Daily prices for your positions are still being downloaded — this happens the first time you hold a stock over a weekend or a market holiday. Refresh in a moment and the chart will draw itself.'
+            : `Record a buy in your ${market === 'IN' ? 'India' : 'US'} portfolio and this starts plotting it against the benchmark. It needs at least two days of archived prices to draw a line.`}
       </p>
       {excluded.length > 0 && (
         <p className="mt-3 text-xs text-amber-300/80">

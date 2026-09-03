@@ -523,4 +523,7 @@ export interface PerformanceResponse {
   value_added: number
   excluded_tickers: string[]
   insufficient_data: boolean
+  /** insufficient_data is because the price archive is behind, not because
+   *  the portfolio is new — the two need very different wording. */
+  stale_archive: boolean
 }

@@ -244,6 +244,62 @@ async def _fetch_intraday_live(stock: yf.Ticker):
         raise ValueError(f"Error fetching current stock data for {stock.ticker}: {str(e)}")
 
 
+async def ensure_archive_current(ticker: str) -> bool:
+    """Bring `ticker`'s price archive up to the last completed session.
+
+    Returns whether a top-up actually ran, so the caller knows to re-read.
+    Never raises: the archive being behind is a degraded state, not an error,
+    and every caller has something older to show instead.
+
+    This used to live inline in fetch(), which meant the archive only ever
+    advanced for tickers someone opened on the Tracker. A portfolio-only user
+    could hold a stock for weeks with its history frozen at the day it was
+    added — invisible on the Portfolio page, which prices from live quotes,
+    but fatal to anything reading the archive (see performance_service).
+
+    Cheap when there is nothing to do: two indexed reads and a date compare.
+    The attempt marker means at most one download per ticker per trading day
+    even when Yahoo hasn't published the bar yet, and single_flight collapses
+    concurrent callers onto one.
+    """
+    try:
+        last_completed = await _last_completed_trading_day(market_of(ticker))
+        if last_completed is None:
+            return False
+        last_archived = await market_data_service.get_last_date(ticker)
+        if last_archived is None or last_archived >= last_completed.date():
+            return False  # nothing archived at all, or already current
+
+        already_attempted = await _last_update_attempt(ticker)
+        if already_attempted is not None and already_attempted.date() >= last_completed.date():
+            return False  # already asked for this session; Yahoo just hasn't published
+
+        await _note_update_attempt(ticker, last_completed)
+        from .price_fetcher import append_price_data
+        # Coalesced: a page load asks for the same ticker from several
+        # components at once, and without this each of them starts its own
+        # download of the same gap.
+        await single_flight(f"append:{ticker}", lambda: append_price_data(ticker))
+        return True
+    except Exception as e:  # noqa: BLE001 — a stale archive must never fail the caller
+        logger.warning("Archive top-up failed for %s: %r", ticker, e)
+        return False
+
+
+async def archive_is_behind(ticker: str) -> bool:
+    """Whether `ticker`'s archive still stops short of the last completed
+    session. Used to explain an empty chart honestly rather than blaming the
+    user for having no history."""
+    try:
+        last_completed = await _last_completed_trading_day(market_of(ticker))
+        last_archived = await market_data_service.get_last_date(ticker)
+    except Exception:  # noqa: BLE001
+        return False
+    if last_completed is None or last_archived is None:
+        return False
+    return last_archived < last_completed.date()
+
+
 async def fetch(ticker: str, days: int = 30):
     '''
     Fetch stock data for a given ticker and number of days. If data is outdated, fetch the latest data and update the archive. Ensure that no new data is fetched if the current date is a weekend.
@@ -256,22 +312,8 @@ async def fetch(ticker: str, days: int = 30):
     records = await market_data_service.get_ohlcv(ticker, days)
     if not records:
         raise ValueError(f"No data found for ticker: {ticker}")
-    last_date = pd.to_datetime(records[-1]['date'])
 
-    last_completed = await _last_completed_trading_day(market_of(ticker))
-    already_attempted = await _last_update_attempt(ticker)
-    need_update = (
-        last_completed is not None
-        and last_date.date() < last_completed.date()
-        and (already_attempted is None or already_attempted.date() < last_completed.date())
-    )
-    if need_update:
-        await _note_update_attempt(ticker, last_completed)
-        from .price_fetcher import append_price_data
-        # Coalesced: a page load asks for the same ticker from several
-        # components at once, and without this each of them starts its own
-        # download of the same gap.
-        await single_flight(f"append:{ticker}", lambda: append_price_data(ticker))
+    if await ensure_archive_current(ticker):
         records = await market_data_service.get_ohlcv(ticker, days)
 
     return OHLCVResponse(

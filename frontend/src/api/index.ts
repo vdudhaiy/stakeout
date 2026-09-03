@@ -253,6 +253,7 @@ function guestPerformancePlaceholder(market: Market): PerformanceResponse {
     value_added: 0,
     excluded_tickers: [],
     insufficient_data: true,
+    stale_archive: false,
   }
 }
 

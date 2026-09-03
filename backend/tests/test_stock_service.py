@@ -189,6 +189,21 @@ async def test_fetch_no_data_raises():
             await fetch("AAPL")
 
 
+def _archive_state(last_archived, last_completed, attempted=None):
+    """Patch the three reads ensure_archive_current makes its decision from."""
+    return patch.multiple(
+        "services.stock_service",
+        _last_completed_trading_day=AsyncMock(return_value=pd.Timestamp(last_completed)),
+        _last_update_attempt=AsyncMock(
+            return_value=pd.Timestamp(attempted) if attempted else None
+        ),
+    ), patch(
+        "services.stock_service.market_data_service.get_last_date",
+        new_callable=AsyncMock,
+        return_value=date.fromisoformat(last_archived) if last_archived else None,
+    )
+
+
 async def test_fetch_stale_data_triggers_append():
     stale_records = [{
         "date": "2024-01-10", "open": 183.0, "high": 185.0,
@@ -198,15 +213,11 @@ async def test_fetch_stale_data_triggers_append():
         "date": "2024-01-15", "open": 186.0, "high": 188.0,
         "low": 185.0, "close": 187.0, "volume": 4_000_000,
     }]
+    state, last_date = _archive_state("2024-01-10", "2024-01-15")
 
-    # last_completed is ahead of last_date → need_update=True
     with patch("services.stock_service.market_data_service.get_ohlcv",
                new_callable=AsyncMock, side_effect=[stale_records, fresh_records]):
-        with patch(
-            "services.stock_service._last_completed_trading_day",
-            new_callable=AsyncMock,
-            return_value=pd.Timestamp("2024-01-15"),
-        ):
+        with state, last_date:
             with patch("services.price_fetcher.append_price_data",
                        new_callable=AsyncMock) as mock_append:
                 result = await fetch("AAPL", days=1)
@@ -214,6 +225,77 @@ async def test_fetch_stale_data_triggers_append():
     mock_append.assert_called_once_with("AAPL")
     assert result.ticker == "AAPL"
     assert result.data[0].close == pytest.approx(187.0)
+
+
+# ── ensure_archive_current ────────────────────────────────────────────────
+# Extracted out of fetch() because the archive used to advance *only* for
+# tickers someone opened on the Tracker. A portfolio-only user could hold a
+# stock for weeks with its history frozen at the day it was added — which is
+# exactly what left the Performance panel insisting there was no history.
+
+async def test_ensure_archive_current_tops_up_a_stale_archive():
+    state, last_date = _archive_state("2024-01-10", "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.append_price_data",
+                   new_callable=AsyncMock) as mock_append:
+            updated = await stock_service.ensure_archive_current("AAPL")
+
+    assert updated is True
+    mock_append.assert_awaited_once_with("AAPL")
+
+
+async def test_ensure_archive_current_is_a_no_op_when_already_current():
+    state, last_date = _archive_state("2024-01-15", "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.append_price_data",
+                   new_callable=AsyncMock) as mock_append:
+            updated = await stock_service.ensure_archive_current("AAPL")
+
+    assert updated is False
+    mock_append.assert_not_called()
+
+
+async def test_ensure_archive_current_respects_the_attempt_marker():
+    """Yahoo publishes a session's bar some time after the close; asking again
+    within the same session is a wasted call, not a retry."""
+    state, last_date = _archive_state("2024-01-10", "2024-01-15", attempted="2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.append_price_data",
+                   new_callable=AsyncMock) as mock_append:
+            updated = await stock_service.ensure_archive_current("AAPL")
+
+    assert updated is False
+    mock_append.assert_not_called()
+
+
+async def test_ensure_archive_current_skips_a_ticker_with_no_archive_at_all():
+    """Nothing to extend — that's add_stock's job, not a top-up's."""
+    state, last_date = _archive_state(None, "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.append_price_data",
+                   new_callable=AsyncMock) as mock_append:
+            updated = await stock_service.ensure_archive_current("AAPL")
+
+    assert updated is False
+    mock_append.assert_not_called()
+
+
+async def test_ensure_archive_current_never_raises():
+    """A stale archive is a degraded state, not an error — every caller has
+    something older it can still show."""
+    with patch("services.stock_service.market_data_service.get_last_date",
+               new_callable=AsyncMock, side_effect=RuntimeError("db gone")):
+        assert await stock_service.ensure_archive_current("AAPL") is False
+
+
+async def test_archive_is_behind_reports_the_gap():
+    state, last_date = _archive_state("2024-01-10", "2024-01-15")
+    with state, last_date:
+        assert await stock_service.archive_is_behind("AAPL") is True
+
+    state, last_date = _archive_state("2024-01-15", "2024-01-15")
+    with state, last_date:
+        assert await stock_service.archive_is_behind("AAPL") is False
 
 
 # ── fetch_intraday ────────────────────────────────────────────────────────────

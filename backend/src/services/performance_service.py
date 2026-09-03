@@ -34,6 +34,7 @@ somewhere else; the Portfolio page remains the place for a live figure.
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -44,7 +45,7 @@ from cache import performance_cache, single_flight
 from markets import currency_of, normalize_market
 from models.portfolio import Dividend, Holding, Transaction
 from schemas.performance import PerformancePoint, PerformanceResponse, ReturnSummary
-from . import index_service, market_data_service, returns_math
+from . import index_service, market_data_service, returns_math, stock_service
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +194,17 @@ def _summarize(
     )
 
 
+async def _archive_is_behind(tickers: list[str]) -> bool:
+    """Whether any held ticker's archive stops short of the last completed
+    session. Only consulted when there's nothing to chart, to say which of
+    the two very different reasons applies."""
+    behind = await asyncio.gather(*(stock_service.archive_is_behind(t) for t in tickers))
+    return any(behind)
+
+
 def _empty(
     market: str, portfolio_id: int | None, portfolio_name: str | None, range_key: str,
-    excluded: list[str] | None = None,
+    excluded: list[str] | None = None, stale_archive: bool = False,
 ) -> PerformanceResponse:
     symbol, name = index_service.BENCHMARKS.get(market, index_service.BENCHMARKS["US"])
     blank = ReturnSummary(
@@ -218,6 +227,7 @@ def _empty(
         benchmark=blank,
         beta=None,
         excluded_tickers=excluded or [],
+        stale_archive=stale_archive,
         insufficient_data=True,
     )
 
@@ -272,6 +282,15 @@ async def _compute(
     start = first_transaction if window is None else max(first_transaction, today - timedelta(days=window))
 
     tickers = [h.ticker for h, _t, _d in positions]
+
+    # Bring the archive up to date before reading it. The Portfolio page
+    # prices from live quotes and never touches the archive, so without this
+    # a portfolio-only user's history stops at the day each ticker was added
+    # — and a portfolio opened over a weekend has no archived bar anywhere
+    # inside its own window, which reads as "no history" when it is really
+    # "not fetched yet". Gap-only, marker-guarded and coalesced (see
+    # stock_service.ensure_archive_current), so this is normally a no-op.
+    await asyncio.gather(*(stock_service.ensure_archive_current(t) for t in tickers))
     # One query for every held symbol, and from the window start rather than
     # all of history — a "1y" view must not drag a decade of rows out of the
     # archive to throw them away.
@@ -280,11 +299,20 @@ async def _compute(
 
     priced = [(h, txns, divs) for h, txns, divs in positions if h.ticker in closes_by_symbol]
     if not priced:
-        return _empty(market, portfolio_id, portfolio_name, range_key, excluded)
+        return _empty(
+            market, portfolio_id, portfolio_name, range_key, excluded,
+            stale_archive=await _archive_is_behind(tickers),
+        )
 
     axis = _build_axis(closes_by_symbol, start, today)
     if len(axis) < 2:
-        return _empty(market, portfolio_id, portfolio_name, range_key, excluded)
+        # Distinguish "you have barely any history" from "the archive hasn't
+        # caught up yet" — they look identical here but mean opposite things
+        # to the user, and only one of them is their problem.
+        return _empty(
+            market, portfolio_id, portfolio_name, range_key, excluded,
+            stale_archive=await _archive_is_behind(tickers),
+        )
 
     # ── Portfolio value and contribution series ──
     # `opening_value` is what the positions held *before* this window were
