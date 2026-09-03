@@ -6,6 +6,8 @@ import asyncio
 import logging
 import pandas as pd
 import yfinance as yf
+import config
+
 from . import company_profile_service, market_data_service, yf_guard
 from cache import TTLCache, quote_cache, single_flight
 from markets import MARKET_META, market_of, normalize_market
@@ -317,16 +319,81 @@ async def ensure_archive_current(ticker: str) -> bool:
         if already_attempted is not None and already_attempted.date() >= last_completed.date():
             return False  # already asked for this session; Yahoo just hasn't published
 
-        await _note_update_attempt(ticker, last_completed)
         from .price_fetcher import append_price_data
         # Coalesced: a page load asks for the same ticker from several
         # components at once, and without this each of them starts its own
         # download of the same gap.
-        await single_flight(f"append:{ticker}", lambda: append_price_data(ticker))
+        answered = await single_flight(f"append:{ticker}", lambda: append_price_data(ticker))
+
+        # The marker means "Yahoo has already been asked about this session",
+        # and it is only true if Yahoo actually answered. Recording it up
+        # front instead meant one rate-limited request burned the ticker's
+        # only attempt for the day, so an archive could sit weeks behind
+        # while every page load quietly declined to retry. A failed request
+        # is cheap to repeat — yf_guard's cooldown makes the next one fail
+        # without leaving the process.
+        if answered:
+            await _note_update_attempt(ticker, last_completed)
         return True
     except Exception as e:  # noqa: BLE001 — a stale archive must never fail the caller
         logger.warning("Archive top-up failed for %s: %r", ticker, e)
         return False
+
+
+async def refresh_all_archives() -> int:
+    """Bring every archived symbol up to the last completed session.
+
+    On-demand top-up (via fetch) only ever advances a ticker somebody opens,
+    so anything not viewed drifts indefinitely — which is how a deployment
+    ends up serving a chart weeks out of date without anything looking
+    broken. This is the sweep that makes staleness self-correcting.
+
+    Cheap once things are current: `ensure_archive_current` short-circuits on
+    two indexed reads when a symbol is already up to date, so a steady-state
+    pass costs a handful of queries and no network at all. Tickers are spaced
+    out because a burst of history downloads is precisely what yfinance
+    rate-limits, and nothing is waiting on this.
+
+    Returns how many symbols it actually tried to top up. Never raises.
+    """
+    try:
+        symbols = await market_data_service.get_symbols()
+    except Exception as e:  # noqa: BLE001 — a background job must not crash the app
+        logger.warning("Archive sweep could not list symbols: %r", e)
+        return 0
+
+    attempted = 0
+    for i, symbol in enumerate(symbols):
+        if i:
+            await asyncio.sleep(config.ARCHIVE_SWEEP_SPACING_SECONDS)
+        if await ensure_archive_current(symbol):
+            attempted += 1
+    if attempted:
+        logger.info("Archive sweep topped up %d of %d symbols", attempted, len(symbols))
+    return attempted
+
+
+async def archive_refresh_loop() -> None:
+    """Run the sweep shortly after startup, then on an interval.
+
+    The startup pass is the one that matters on a host that recycles the
+    process regularly: every wake brings the archive forward. The interval
+    covers an instance that stays up. Set ARCHIVE_SWEEP_INTERVAL_MINUTES=0
+    to switch the whole thing off.
+    """
+    if config.ARCHIVE_SWEEP_INTERVAL_MINUTES <= 0:
+        logger.info("Archive sweep disabled (ARCHIVE_SWEEP_INTERVAL_MINUTES=0)")
+        return
+
+    await asyncio.sleep(config.ARCHIVE_SWEEP_START_DELAY_SECONDS)
+    while True:
+        try:
+            await refresh_all_archives()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — keep the loop alive
+            logger.warning("Archive sweep failed: %r", e)
+        await asyncio.sleep(config.ARCHIVE_SWEEP_INTERVAL_MINUTES * 60)
 
 
 async def archive_is_behind(ticker: str) -> bool:

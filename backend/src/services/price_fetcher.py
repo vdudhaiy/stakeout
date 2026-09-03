@@ -10,7 +10,7 @@ import pandas_market_calendars as mcal
 import yfinance as yf
 from datetime import datetime, timezone, timedelta
 
-from . import market_data_service
+from . import market_data_service, yf_guard
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,14 @@ async def fetch_historical_price_data(ticker, start_date=None, end_date=None, in
         end_date = _archive_end_date()
 
     try:
-        data, synthetic_dates = await asyncio.to_thread(_download, ticker, start_date, end_date, interval)
+        # Behind the backoff like every other yfinance call. This is the
+        # single biggest one the app makes — years of daily bars — so leaving
+        # it outside meant the heaviest request neither tripped the cooldown
+        # nor respected one.
+        with yf_guard.guard():
+            data, synthetic_dates = await asyncio.to_thread(
+                _download, ticker, start_date, end_date, interval
+            )
         if data.empty:
             # Never upsert zero rows: their absence is what makes get_all_stocks()
             # correctly treat this ticker as untracked, rather than tracked
@@ -169,7 +176,7 @@ async def fetch_historical_price_data(ticker, start_date=None, end_date=None, in
 _REFRESH_OVERLAP_DAYS = 7
 
 
-async def append_price_data(ticker):
+async def append_price_data(ticker) -> bool:
     '''
     Bring a ticker's archive up to the last completed trading day.
 
@@ -189,7 +196,12 @@ async def append_price_data(ticker):
     ticker (str): The stock ticker symbol.
 
     Returns:
-    None
+    bool: whether Yahoo gave a *definitive* answer — rows, or a credible
+    "nothing new yet". False means the request itself failed and is worth
+    retrying. The caller uses this to decide whether to burn the ticker's
+    one attempt for the session: recording a failed request as an attempt is
+    what let a rate-limited archive sit weeks out of date, since it could
+    then only try again the following trading day.
     '''
     archive_start = pd.Timestamp(os.getenv("ARCHIVE_START_DATE", "2023-01-01"))
     last_archived = await market_data_service.get_last_date(ticker)
@@ -205,15 +217,26 @@ async def append_price_data(ticker):
         # Nothing has closed since the newest archived bar — the caller's
         # staleness check raced the session boundary. Asking anyway would
         # return an empty frame and look like a failure.
-        return
+        return True
 
     try:
-        data, synthetic_dates = await asyncio.to_thread(_download, ticker, start_date, end_date)
-        if data.empty:
-            raise ValueError(f"No historical price data found for ticker: {ticker}")
+        with yf_guard.guard():
+            data, synthetic_dates = await asyncio.to_thread(
+                _download, ticker, start_date, end_date
+            )
     except Exception as e:  # noqa: BLE001
+        # Transient: keep serving the existing archive, and tell the caller
+        # this doesn't count as having asked.
         logger.error(f"Error re-fetching price data for {ticker}: {e}")
-        return  # keep serving the existing archive rather than destroying it
+        return False
+
+    if data.empty:
+        # Yahoo answered and had nothing for the window — usually the day's
+        # bar simply isn't published yet. A definitive answer, so it does
+        # count as having asked.
+        logger.info(f"No new price data for {ticker} ({start_date} to {end_date}, exclusive).")
+        return True
 
     await market_data_service.upsert_ohlcv(ticker, data, synthetic_dates=synthetic_dates)
     logger.info(f"Re-fetched {len(data)} rows for {ticker} ({start_date} to {end_date}, exclusive).")
+    return True

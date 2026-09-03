@@ -26,6 +26,22 @@ MODEL_DIR = _BASE / os.getenv("MODEL_DIR", "model-store/")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
+# Background price-archive sweep (see services/stock_service.refresh_all_archives).
+# Minutes between passes; 0 disables it entirely. The default is deliberately
+# short relative to the host's idle spin-down — on a free tier the process is
+# recycled often enough that the startup pass is what actually keeps the
+# archive current, and the loop only matters for a long-lived instance.
+ARCHIVE_SWEEP_INTERVAL_MINUTES = int(os.getenv("ARCHIVE_SWEEP_INTERVAL_MINUTES", "60"))
+
+# Seconds to wait before the first sweep, so a user's own page load isn't
+# competing with it for the upstream budget the moment the process wakes.
+ARCHIVE_SWEEP_START_DELAY_SECONDS = float(os.getenv("ARCHIVE_SWEEP_START_DELAY_SECONDS", "45"))
+
+# Gap between tickers within a sweep. A burst of simultaneous history
+# downloads is the exact shape yfinance rate-limits, and this job has no
+# deadline — nobody is waiting on it.
+ARCHIVE_SWEEP_SPACING_SECONDS = float(os.getenv("ARCHIVE_SWEEP_SPACING_SECONDS", "4"))
+
 # Company peers (services/peers_service.py) and any other Finnhub lookups.
 # Optional — peers_service degrades to an empty list (never raises) when
 # unset, same spirit as OLLAMA_BASE_URL above.

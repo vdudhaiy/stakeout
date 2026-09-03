@@ -14,6 +14,12 @@ from routers import (
     quote, stocks, watchlist,
 )
 from services.portfolio_service import repair_all_fifo, repair_stock_metadata
+from services.stock_service import archive_refresh_loop
+
+
+# Background tasks are held here because asyncio keeps only a weak
+# reference to a bare task, and a garbage-collected one stops silently.
+_background: set[asyncio.Task] = set()
 
 
 @asynccontextmanager
@@ -24,8 +30,18 @@ async def lifespan(app: FastAPI):
     # coverage to a transient yfinance failure when it was first bought (see
     # repair_stock_metadata). Runs in the background, not awaited, since it
     # does real network I/O per affected ticker and shouldn't delay startup.
-    asyncio.create_task(repair_stock_metadata())
+    _background.add(asyncio.create_task(repair_stock_metadata()))
+
+    # Keeps the shared price archive moving without waiting for someone to
+    # open each ticker. Without it the archive only advances for symbols
+    # somebody happens to view, and everything else silently falls weeks
+    # behind while still rendering as though it were current.
+    _background.add(asyncio.create_task(archive_refresh_loop()))
+
     yield
+
+    for task in _background:
+        task.cancel()
 
 
 app = FastAPI(

@@ -1070,3 +1070,161 @@ async def test_add_stock_still_fails_when_the_archive_cannot_be_written():
                new_callable=AsyncMock, side_effect=ValueError("no data for ticker")):
         with pytest.raises(ValueError, match="Error creating stock data"):
             await stock_service.add_stock("ZZZZ")
+
+
+# ── the attempt marker records answers, not attempts ──────────────────────
+
+async def test_a_failed_top_up_leaves_the_ticker_retryable():
+    """The bug that froze archives for weeks: a rate-limited request marked
+    the session as asked, so nothing retried until the next trading day."""
+    state, last_date = _archive_state("2024-01-10", "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.append_price_data",
+                   new_callable=AsyncMock, return_value=False):
+            with patch("services.stock_service._note_update_attempt",
+                       new_callable=AsyncMock) as mock_note:
+                await stock_service.ensure_archive_current("AAPL")
+
+    mock_note.assert_not_called()
+
+
+async def test_a_successful_top_up_records_the_attempt():
+    state, last_date = _archive_state("2024-01-10", "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.append_price_data",
+                   new_callable=AsyncMock, return_value=True):
+            with patch("services.stock_service._note_update_attempt",
+                       new_callable=AsyncMock) as mock_note:
+                await stock_service.ensure_archive_current("AAPL")
+
+    mock_note.assert_awaited_once()
+
+
+# ── background archive sweep ──────────────────────────────────────────────
+# On-demand top-up only advances tickers somebody opens, so anything not
+# viewed drifts indefinitely — which is how a deployment served a chart weeks
+# out of date with nothing looking broken. These cover the sweep that makes
+# staleness self-correcting.
+
+async def test_the_sweep_visits_every_archived_symbol():
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["AAPL", "MSFT", "TCS.NS"]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=True) as mock_ensure:
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 0):
+                attempted = await stock_service.refresh_all_archives()
+
+    assert attempted == 3
+    assert [c.args[0] for c in mock_ensure.await_args_list] == ["AAPL", "MSFT", "TCS.NS"]
+
+
+async def test_the_sweep_is_free_when_everything_is_current():
+    """ensure_archive_current short-circuits on two indexed reads, so a
+    steady-state pass must report no work rather than re-downloading."""
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["AAPL", "MSFT"]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=False):
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 0):
+                assert await stock_service.refresh_all_archives() == 0
+
+
+async def test_the_sweep_spaces_its_tickers_out():
+    """A burst of history downloads is exactly the shape yfinance rate-limits,
+    and nothing is waiting on this job."""
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["A", "B", "C"]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=False):
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 4):
+                with patch("services.stock_service.asyncio.sleep", fake_sleep):
+                    await stock_service.refresh_all_archives()
+
+    # One gap between each pair, none before the first.
+    assert slept == [4, 4]
+
+
+async def test_one_bad_symbol_does_not_abandon_the_sweep():
+    async def flaky(ticker):
+        if ticker == "MSFT":
+            raise RuntimeError("boom")
+        return True
+
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["AAPL", "MSFT", "NVDA"]):
+        # ensure_archive_current swallows its own failures; assert the real
+        # one does so rather than mocking that guarantee away.
+        with patch("services.stock_service._last_completed_trading_day",
+                   new_callable=AsyncMock, side_effect=flaky):
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 0):
+                attempted = await stock_service.refresh_all_archives()
+
+    assert attempted == 0   # nothing advanced, but it visited all three
+
+
+async def test_the_sweep_survives_an_unreadable_symbol_list():
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, side_effect=RuntimeError("db gone")):
+        assert await stock_service.refresh_all_archives() == 0
+
+
+async def test_the_loop_can_be_switched_off():
+    """A deployment that doesn't want the background upstream spend needs a
+    way to say so."""
+    with patch("services.stock_service.config.ARCHIVE_SWEEP_INTERVAL_MINUTES", 0):
+        with patch("services.stock_service.refresh_all_archives",
+                   new_callable=AsyncMock) as mock_sweep:
+            await stock_service.archive_refresh_loop()   # returns immediately
+
+    mock_sweep.assert_not_called()
+
+
+async def test_the_loop_waits_before_its_first_pass():
+    """The process has just woken; the user's own page load gets the budget
+    first."""
+    import asyncio as _asyncio
+
+    calls = []
+
+    async def fake_sleep(seconds):
+        calls.append(seconds)
+        if len(calls) > 1:          # let the first pass run, then stop
+            raise _asyncio.CancelledError
+
+    with patch("services.stock_service.config.ARCHIVE_SWEEP_INTERVAL_MINUTES", 60):
+        with patch("services.stock_service.config.ARCHIVE_SWEEP_START_DELAY_SECONDS", 45):
+            with patch("services.stock_service.refresh_all_archives",
+                       new_callable=AsyncMock) as mock_sweep:
+                with patch("services.stock_service.asyncio.sleep", fake_sleep):
+                    with pytest.raises(_asyncio.CancelledError):
+                        await stock_service.archive_refresh_loop()
+
+    assert calls[0] == 45           # startup delay came first
+    mock_sweep.assert_awaited_once()
+    assert calls[1] == 60 * 60      # then the interval
+
+
+async def test_a_failing_sweep_does_not_kill_the_loop():
+    import asyncio as _asyncio
+
+    calls = []
+
+    async def fake_sleep(seconds):
+        calls.append(seconds)
+        if len(calls) > 2:
+            raise _asyncio.CancelledError
+
+    with patch("services.stock_service.config.ARCHIVE_SWEEP_INTERVAL_MINUTES", 60):
+        with patch("services.stock_service.config.ARCHIVE_SWEEP_START_DELAY_SECONDS", 0):
+            with patch("services.stock_service.refresh_all_archives",
+                       new_callable=AsyncMock, side_effect=RuntimeError("upstream down")) as mock_sweep:
+                with patch("services.stock_service.asyncio.sleep", fake_sleep):
+                    with pytest.raises(_asyncio.CancelledError):
+                        await stock_service.archive_refresh_loop()
+
+    assert mock_sweep.await_count >= 2   # kept going after the first failure

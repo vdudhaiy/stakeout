@@ -13,7 +13,10 @@ from unittest.mock import AsyncMock, patch
 import pandas as pd
 import pytest
 
-from services import price_fetcher
+from unittest.mock import patch as _patch  # noqa: F401
+from yfinance.exceptions import YFRateLimitError
+
+from services import price_fetcher, yf_guard
 
 
 def _df(dates: list[str]) -> pd.DataFrame:
@@ -116,3 +119,56 @@ async def test_an_empty_result_is_not_upserted(refresh_harness):
         await price_fetcher.append_price_data("AAPL")
 
     mock_upsert.assert_not_called()
+
+
+# ── a failed top-up must stay retryable ───────────────────────────────────
+# The marker means "Yahoo has already been asked about this session". Writing
+# it for a request that never got an answer is what let a rate-limited
+# archive sit weeks behind: one failure a day, and the next page load
+# politely declined to retry.
+
+async def test_a_failed_download_is_not_reported_as_answered(refresh_harness):
+    last, upsert, end, _download = refresh_harness(date(2026, 3, 6))
+    with last, upsert, end, patch(
+        "services.price_fetcher._download", side_effect=RuntimeError("Too Many Requests")
+    ):
+        answered = await price_fetcher.append_price_data("AAPL")
+
+    assert answered is False
+
+
+async def test_an_empty_response_is_a_definitive_answer(refresh_harness):
+    """Yahoo replied and had nothing — usually the bar isn't published yet.
+    Worth remembering, unlike a request that failed."""
+    last, upsert, end, _download = refresh_harness(date(2026, 3, 6))
+    with last, upsert as mock_upsert, end, patch(
+        "services.price_fetcher._download", return_value=(pd.DataFrame(), set())
+    ):
+        answered = await price_fetcher.append_price_data("AAPL")
+
+    assert answered is True
+    mock_upsert.assert_not_called()
+
+
+async def test_a_successful_download_is_answered(refresh_harness):
+    last, upsert, end, download = refresh_harness(date(2026, 3, 6))
+    with last, upsert, end, download:
+        assert await price_fetcher.append_price_data("AAPL") is True
+
+
+async def test_nothing_to_fetch_counts_as_answered(refresh_harness):
+    last, upsert, end, download = refresh_harness(date(2026, 3, 20), end_date="2026-03-10")
+    with last, upsert, end, download:
+        assert await price_fetcher.append_price_data("AAPL") is True
+
+
+async def test_the_bulk_download_runs_behind_the_backoff(refresh_harness):
+    """The heaviest yfinance call the app makes was the one outside the
+    cooldown — it neither tripped it nor respected it."""
+    yf_guard.note(YFRateLimitError())
+    last, upsert, end, download = refresh_harness(date(2026, 3, 6))
+    with last, upsert, end, download as mock_download:
+        answered = await price_fetcher.append_price_data("AAPL")
+
+    mock_download.assert_not_called()
+    assert answered is False
