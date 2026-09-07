@@ -172,3 +172,45 @@ async def test_the_bulk_download_runs_behind_the_backoff(refresh_harness):
 
     mock_download.assert_not_called()
     assert answered is False
+
+
+# ── _archive_end_date follows the ticker's own market ────────────────────────
+#
+# The staleness check (stock_service.ensure_archive_current) uses the ticker's
+# own trading calendar; this used to use NYSE's for everything. In the ~10
+# hours between the NSE close and the NYSE close the two disagreed, so an
+# Indian ticker was judged stale for today, asked for a window ending
+# yesterday, and got the empty frame that counts as a definitive "nothing new"
+# — burning its one attempt for the day and leaving NSE history a session
+# behind indefinitely.
+
+def test_archive_end_date_uses_the_indian_calendar_for_indian_tickers():
+    us_close = pd.Timestamp("2026-03-10")
+    in_close = pd.Timestamp("2026-03-11")
+
+    def _by_market(market):
+        return in_close if market == "IN" else us_close
+
+    with patch("services.price_fetcher.last_completed_trading_day", side_effect=_by_market):
+        assert price_fetcher._archive_end_date("AAPL") == "2026-03-11"
+        assert price_fetcher._archive_end_date("RELIANCE.NS") == "2026-03-12"
+
+
+def test_archive_end_date_falls_back_to_today_without_a_calendar():
+    with patch("services.price_fetcher.last_completed_trading_day", return_value=None):
+        assert price_fetcher._archive_end_date("AAPL") == \
+            pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+
+
+async def test_append_passes_the_tickers_own_market_end_date(refresh_harness):
+    """The end date the download actually receives is derived from the ticker,
+    not from a hardcoded NYSE calendar."""
+    last, upsert, _end, download = refresh_harness(date(2026, 3, 6))
+    with last, upsert, download as mock_download, \
+         patch("services.price_fetcher.last_completed_trading_day",
+               side_effect=lambda m: pd.Timestamp("2026-03-11") if m == "IN"
+               else pd.Timestamp("2026-03-10")):
+        await price_fetcher.append_price_data("RELIANCE.NS")
+
+    _ticker, _start, end_date = mock_download.call_args.args
+    assert end_date == "2026-03-12"

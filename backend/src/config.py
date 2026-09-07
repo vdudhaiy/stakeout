@@ -40,7 +40,14 @@ ARCHIVE_SWEEP_START_DELAY_SECONDS = float(os.getenv("ARCHIVE_SWEEP_START_DELAY_S
 # Gap between tickers within a sweep. A burst of simultaneous history
 # downloads is the exact shape yfinance rate-limits, and this job has no
 # deadline — nobody is waiting on it.
-ARCHIVE_SWEEP_SPACING_SECONDS = float(os.getenv("ARCHIVE_SWEEP_SPACING_SECONDS", "4"))
+ARCHIVE_SWEEP_SPACING_SECONDS = float(os.getenv("ARCHIVE_SWEEP_SPACING_SECONDS", "10"))
+
+# Most tickers to actually download in one pass. A host that spins down
+# runs the startup pass on every wake, so an uncapped sweep is not
+# occasional maintenance — it is a burst of history downloads each time
+# somebody visits, competing with their own requests for the same
+# upstream budget. Capping spreads a cold archive over several passes.
+ARCHIVE_SWEEP_MAX_PER_PASS = int(os.getenv("ARCHIVE_SWEEP_MAX_PER_PASS", "8"))
 
 # Company peers (services/peers_service.py) and any other Finnhub lookups.
 # Optional — peers_service degrades to an empty list (never raises) when

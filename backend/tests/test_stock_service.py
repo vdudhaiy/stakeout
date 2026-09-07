@@ -7,6 +7,7 @@ each function is actually executed and covered.
 """
 
 import asyncio
+from decimal import Decimal
 
 import pytest
 import pandas as pd
@@ -133,7 +134,8 @@ async def test_get_all_stocks_falls_back_to_short_name():
 # ── delete_stock ──────────────────────────────────────────────────────────────
 
 async def test_delete_stock_removes_matching_rows():
-    with patch("services.stock_service.market_data_service.delete_symbol",
+    with patch("services.stock_service.referencing_user_count",
+               new_callable=AsyncMock, return_value=0),          patch("services.stock_service.market_data_service.delete_symbol",
                new_callable=AsyncMock, return_value=1) as mock_delete:
         result = await delete_stock("AAPL")
 
@@ -142,7 +144,8 @@ async def test_delete_stock_removes_matching_rows():
 
 
 async def test_delete_stock_no_matching_rows_raises():
-    with patch("services.stock_service.market_data_service.delete_symbol",
+    with patch("services.stock_service.referencing_user_count",
+               new_callable=AsyncMock, return_value=0),          patch("services.stock_service.market_data_service.delete_symbol",
                new_callable=AsyncMock, return_value=0):
         with pytest.raises(ValueError, match="No data found"):
             await delete_stock("AAPL")
@@ -152,12 +155,66 @@ async def test_delete_stock_invalidates_cache():
     _snapshot_cache.set("AAPL:detailed", "cached_value")
     _snapshot_cache.set("all_stocks", {"AAPL": "Apple"})
 
-    with patch("services.stock_service.market_data_service.delete_symbol",
+    with patch("services.stock_service.referencing_user_count",
+               new_callable=AsyncMock, return_value=0),          patch("services.stock_service.market_data_service.delete_symbol",
                new_callable=AsyncMock, return_value=1):
         await delete_stock("AAPL")
 
     assert _snapshot_cache.get("AAPL:detailed") is None
     assert _snapshot_cache.get("all_stocks") is None
+
+
+# ── delete_stock: the shared archive outlives any one user ───────────────────
+#
+# market_data is keyed by symbol alone, with no user column, so a delete is
+# global by construction. These pin the guard that keeps one user's removal
+# from taking everybody else's price history with it.
+
+async def test_delete_stock_refuses_while_another_user_holds_it():
+    with patch("services.stock_service.referencing_user_count",
+               new_callable=AsyncMock, return_value=1),          patch("services.stock_service.market_data_service.delete_symbol",
+               new_callable=AsyncMock) as mock_delete:
+        with pytest.raises(ValueError, match="still held or watched"):
+            await delete_stock("AAPL")
+
+    mock_delete.assert_not_called()
+
+
+async def test_referencing_user_count_counts_holders_and_watchers(db_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from models.portfolio import Holding, WatchlistEntry
+    from services import portfolio_admin_service
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        portfolio = await portfolio_admin_service.ensure_default(session, "alice", "US")
+        session.add(Holding(
+            portfolio_id=portfolio.id, ticker="AAPL", company_name="Apple",
+            market="US", shares=1, sold_shares=0,
+            average_cost=Decimal("100"),
+        ))
+        session.add(WatchlistEntry(user_id="bob", ticker="AAPL", market="US"))
+        session.add(WatchlistEntry(user_id="bob", ticker="MSFT", market="US"))
+        await session.commit()
+
+    with patch("database.SessionLocal", factory):
+        # alice holds it, bob watches it — two distinct users, counted once each.
+        assert await stock_service.referencing_user_count("AAPL") == 2
+        assert await stock_service.referencing_user_count("MSFT") == 1
+        assert await stock_service.referencing_user_count("NVDA") == 0
+
+
+async def test_delete_stock_allowed_once_nobody_references_it(db_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    with patch("database.SessionLocal", factory),          patch("services.stock_service.market_data_service.delete_symbol",
+               new_callable=AsyncMock, return_value=3) as mock_delete:
+        result = await delete_stock("AAPL")
+
+    assert "deleted successfully" in result["message"]
+    mock_delete.assert_called_once_with("AAPL")
 
 
 # ── fetch ─────────────────────────────────────────────────────────────────────
@@ -268,16 +325,51 @@ async def test_ensure_archive_current_respects_the_attempt_marker():
     mock_append.assert_not_called()
 
 
-async def test_ensure_archive_current_skips_a_ticker_with_no_archive_at_all():
-    """Nothing to extend — that's add_stock's job, not a top-up's."""
+async def test_an_empty_archive_is_seeded_with_a_full_download():
+    """The state that made a ticker permanently unusable.
+
+    append_price_data can only *extend* a series, so a ticker whose first
+    archive attempt failed had nothing to extend — the Tracker answered "No
+    data found for ticker: DELL" and its Try again button re-ran the same
+    doomed read forever. An empty archive now triggers the initial download.
+    """
     state, last_date = _archive_state(None, "2024-01-15")
     with state, last_date:
-        with patch("services.price_fetcher.append_price_data",
-                   new_callable=AsyncMock) as mock_append:
-            updated = await stock_service.ensure_archive_current("AAPL")
+        with patch("services.price_fetcher.fetch_historical_price_data",
+                   new_callable=AsyncMock) as mock_seed:
+            with patch("services.price_fetcher.append_price_data",
+                       new_callable=AsyncMock) as mock_append:
+                updated = await stock_service.ensure_archive_current("AAPL")
 
-    assert updated is False
-    mock_append.assert_not_called()
+    assert updated is True
+    mock_seed.assert_awaited_once_with("AAPL")
+    mock_append.assert_not_called()   # nothing to append to
+
+
+async def test_a_rate_limited_seed_stays_retryable():
+    """An unknown symbol is a real answer; a 429 is not."""
+    state, last_date = _archive_state(None, "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.fetch_historical_price_data",
+                   new_callable=AsyncMock, side_effect=YFRateLimitError()):
+            with patch("services.stock_service._note_update_attempt",
+                       new_callable=AsyncMock) as mock_note:
+                await stock_service.ensure_archive_current("AAPL")
+
+    mock_note.assert_not_called()
+
+
+async def test_a_seed_for_an_unknown_symbol_is_not_retried_all_session():
+    state, last_date = _archive_state(None, "2024-01-15")
+    with state, last_date:
+        with patch("services.price_fetcher.fetch_historical_price_data",
+                   new_callable=AsyncMock,
+                   side_effect=ValueError("No historical price data found for ticker: ZZZZ")):
+            with patch("services.stock_service._note_update_attempt",
+                       new_callable=AsyncMock) as mock_note:
+                await stock_service.ensure_archive_current("ZZZZ")
+
+    mock_note.assert_awaited_once()
 
 
 async def test_ensure_archive_current_never_raises():
@@ -871,6 +963,42 @@ async def test_fetch_current_serves_the_archive_during_a_yfinance_backoff():
     assert result.data[0].close == pytest.approx(183.5)
 
 
+async def test_fetch_current_serves_the_archive_after_any_live_failure():
+    """The archive fallback used to be reserved for rate limits, so a parse
+    error or a network blip blanked the ticker tape even with a good close
+    sitting in the archive — indistinguishable, to the user, from a throttle."""
+    stock = MagicMock()
+    stock.ticker = "AAPL"
+    stock.history.side_effect = RuntimeError("yfinance decode failed")
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("services.stock_service.asyncio.to_thread", side_effect=fake_to_thread),          patch("services.stock_service.market_data_service.get_ohlcv",
+               new_callable=AsyncMock,
+               return_value=[{"date": "2024-01-15", "open": 180.0, "high": 184.0,
+                              "low": 179.0, "close": 183.5, "volume": 1000}]):
+        result = await fetch_current(stock, is_market_open=True)
+
+    assert result.data[0].close == pytest.approx(183.5)
+
+
+async def test_fetch_current_still_raises_when_there_is_no_archive_to_serve():
+    """The fallback widens what can be covered, not what can be invented — a
+    ticker with no archived bar must still surface the error."""
+    stock = MagicMock()
+    stock.ticker = "NOPE"
+    stock.history.side_effect = RuntimeError("no such ticker")
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("services.stock_service.asyncio.to_thread", side_effect=fake_to_thread),          patch("services.stock_service.market_data_service.get_ohlcv",
+               new_callable=AsyncMock, return_value=[]):
+        with pytest.raises(ValueError):
+            await fetch_current(stock, is_market_open=True)
+
+
 async def test_fetch_intraday_second_call_is_served_from_cache():
     today = date.today().isoformat()
     stock = MagicMock()
@@ -1129,9 +1257,27 @@ async def test_the_sweep_is_free_when_everything_is_current():
                 assert await stock_service.refresh_all_archives() == 0
 
 
-async def test_the_sweep_spaces_its_tickers_out():
+async def test_the_sweep_spaces_out_the_tickers_it_downloads():
     """A burst of history downloads is exactly the shape yfinance rate-limits,
-    and nothing is waiting on this job."""
+    and nothing is waiting on this job. Symbols already current do no network
+    work, so they shouldn't cost a pause either."""
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["A", "B", "C"]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=True):
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 4):
+                with patch("services.stock_service.asyncio.sleep", fake_sleep):
+                    await stock_service.refresh_all_archives()
+
+    assert slept == [4, 4, 4]
+
+
+async def test_the_sweep_does_not_pause_for_symbols_already_current():
     slept = []
 
     async def fake_sleep(seconds):
@@ -1145,8 +1291,49 @@ async def test_the_sweep_spaces_its_tickers_out():
                 with patch("services.stock_service.asyncio.sleep", fake_sleep):
                     await stock_service.refresh_all_archives()
 
-    # One gap between each pair, none before the first.
-    assert slept == [4, 4]
+    assert slept == []
+
+
+async def test_the_sweep_stops_at_its_per_pass_cap():
+    """A cold archive catches up over several passes rather than one long
+    burst that competes with real traffic."""
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=[f"T{i}" for i in range(20)]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=True) as mock_ensure:
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 0):
+                with patch("services.stock_service.config.ARCHIVE_SWEEP_MAX_PER_PASS", 5):
+                    attempted = await stock_service.refresh_all_archives()
+
+    assert attempted == 5
+    assert mock_ensure.await_count == 5
+
+
+async def test_the_sweep_does_not_start_during_a_backoff():
+    """Every request after a 429 is refused anyway — grinding through them
+    just keeps the cooldown alive."""
+    yf_guard.note(YFRateLimitError())
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["A", "B"]) as mock_symbols:
+        assert await stock_service.refresh_all_archives() == 0
+
+    mock_symbols.assert_not_called()
+
+
+async def test_the_sweep_abandons_a_pass_when_a_backoff_starts_mid_way():
+    async def trip_after_first(ticker):
+        if ticker == "B":
+            yf_guard.note(YFRateLimitError())
+        return True
+
+    with patch("services.stock_service.market_data_service.get_symbols",
+               new_callable=AsyncMock, return_value=["A", "B", "C", "D"]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, side_effect=trip_after_first) as mock_ensure:
+            with patch("services.stock_service.config.ARCHIVE_SWEEP_SPACING_SECONDS", 0):
+                await stock_service.refresh_all_archives()
+
+    assert [c.args[0] for c in mock_ensure.await_args_list] == ["A", "B"]
 
 
 async def test_one_bad_symbol_does_not_abandon_the_sweep():
@@ -1228,3 +1415,34 @@ async def test_a_failing_sweep_does_not_kill_the_loop():
                         await stock_service.archive_refresh_loop()
 
     assert mock_sweep.await_count >= 2   # kept going after the first failure
+
+
+async def test_fetch_seeds_an_empty_archive_rather_than_giving_up():
+    """The DELL case, at the level the user actually hits.
+
+    Testing ensure_archive_current alone missed this: fetch() guarded the
+    repair with `if not records or await ensure_archive_current(...)`, and
+    `or` short-circuits — so the repair was skipped in exactly the case it
+    was added for, and the endpoint kept answering "No data found".
+    """
+    seeded = [{"date": "2026-09-03", "open": 1.0, "high": 1.0,
+               "low": 1.0, "close": 515.94, "volume": 100}]
+
+    with patch("services.stock_service.market_data_service.get_ohlcv",
+               new_callable=AsyncMock, side_effect=[[], seeded]) as mock_get:
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=True) as mock_ensure:
+            result = await fetch("DELL", days=30)
+
+    mock_ensure.assert_awaited_once_with("DELL")   # not short-circuited away
+    assert mock_get.await_count == 2               # re-read after the repair
+    assert result.data[0].close == pytest.approx(515.94)
+
+
+async def test_fetch_still_raises_when_the_repair_cannot_help():
+    with patch("services.stock_service.market_data_service.get_ohlcv",
+               new_callable=AsyncMock, return_value=[]):
+        with patch("services.stock_service.ensure_archive_current",
+                   new_callable=AsyncMock, return_value=False):
+            with pytest.raises(ValueError, match="No data found for ticker"):
+                await fetch("ZZZZ", days=30)

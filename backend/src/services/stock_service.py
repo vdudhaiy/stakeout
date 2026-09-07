@@ -8,6 +8,8 @@ import pandas as pd
 import yfinance as yf
 import config
 
+import freshness
+
 from . import company_profile_service, market_data_service, yf_guard
 from cache import TTLCache, quote_cache, single_flight
 from markets import MARKET_META, market_of, normalize_market
@@ -87,7 +89,7 @@ async def _cached_snapshot(key: str, produce):
     during a yfinance cooldown show yesterday's fundamentals instead of
     nothing.
     """
-    cached = _snapshot_cache.get(key)
+    cached = _snapshot_cache.get_stamped(key, freshness.CACHED, label=key)
     if cached is not None:
         return cached
 
@@ -95,11 +97,17 @@ async def _cached_snapshot(key: str, produce):
         try:
             result = await produce()
         except Exception:  # noqa: BLE001 — re-raised below unless we can cover it
+            stale_at = _snapshot_cache.stored_at(f"stale:{key}")
             stale = _snapshot_cache.get(f"stale:{key}")
             if stale is not None:
                 logger.info("Serving stale snapshot for %s", key)
+                # Reported as STALE, not CACHED: the 6-hour entry expired and
+                # the refresh failed, which is a materially different claim
+                # about the number on screen than "cached, refreshing soon".
+                freshness.stamp(freshness.STALE, fetched_at=stale_at, label=key)
                 return stale
             raise
+        freshness.stamp(freshness.LIVE, label=key)
         _snapshot_cache.set(key, result)
         _snapshot_cache.set(f"stale:{key}", result, _SNAPSHOT_STALE_TTL)
         return result
@@ -154,7 +162,7 @@ async def get_all_stocks():
     Returns:
         dict: A dictionary mapping stock ticker symbols to their display names.
     '''
-    cached = _snapshot_cache.get("all_stocks")
+    cached = _snapshot_cache.get_stamped("all_stocks", freshness.CACHED, label="all_stocks")
     if cached is not None:
         return cached
     tickers = await market_data_service.get_symbols()
@@ -201,15 +209,49 @@ async def add_stock(ticker: str):
     return StockCreateResponse(exist=False, ohlcv=ohlcv, details=detailed_info)
 
 
+async def referencing_user_count(ticker: str) -> int:
+    '''
+    How many distinct users still hold or watch `ticker`.
+
+    market_data is a shared archive keyed by symbol alone, so "is anyone
+    else using this?" is the only thing standing between one user's removal
+    and everybody else's price history.
+    '''
+    from sqlalchemy import func, select, union
+
+    from database import SessionLocal
+    from models.portfolio import Holding, WatchlistEntry
+
+    ticker = ticker.upper().strip()
+    holders = select(Holding.user_id).where(Holding.ticker == ticker)
+    watchers = select(WatchlistEntry.user_id).where(WatchlistEntry.ticker == ticker)
+    async with SessionLocal() as session:
+        combined = union(holders, watchers).subquery()
+        result = await session.execute(select(func.count()).select_from(combined))
+        return int(result.scalar_one() or 0)
+
+
 async def delete_stock(ticker: str):
     '''
-    Delete stock data for a given ticker.
+    Delete a ticker's rows from the shared price archive.
+
+    Refuses while any user still references the ticker: this is a
+    garbage-collect of orphaned archive rows, not a per-user removal. The
+    caller that removed the ticker from *their* watchlist or portfolio has
+    already had its effect; the archive outlives them.
+
     Args:
         ticker (str): The stock ticker symbol.
     Returns:
         dict: A message indicating whether the deletion was successful.
     '''
     try:
+        in_use = await referencing_user_count(ticker)
+        if in_use:
+            raise ValueError(
+                f"{ticker} is still held or watched by {in_use} user(s); "
+                "its price history is shared and was not deleted."
+            )
         deleted = await market_data_service.delete_symbol(ticker)
         if not deleted:
             raise ValueError(f"No data found for ticker: {ticker}")
@@ -237,7 +279,7 @@ async def fetch_intraday(stock: yf.Ticker):
         stock (yf.Ticker): The yfinance Ticker object.
     '''
     key = f"intraday:{stock.ticker}"
-    cached = quote_cache.get(key)
+    cached = quote_cache.get_stamped(key, freshness.CACHED, label=key)
     if cached is not None:
         value, error = cached
         if error is not None:
@@ -251,6 +293,7 @@ async def fetch_intraday(stock: yf.Ticker):
         except Exception as e:  # noqa: BLE001 — cached briefly, then re-raised
             quote_cache.set(key, (None, str(e)), _CURRENT_TTL_ERROR)
             raise
+        freshness.stamp(freshness.LIVE, label=key)
         quote_cache.set(key, (result, None), _INTRADAY_TTL)
         return result
 
@@ -312,18 +355,41 @@ async def ensure_archive_current(ticker: str) -> bool:
         if last_completed is None:
             return False
         last_archived = await market_data_service.get_last_date(ticker)
-        if last_archived is None or last_archived >= last_completed.date():
-            return False  # nothing archived at all, or already current
+        if last_archived is not None and last_archived >= last_completed.date():
+            return False  # already current
 
         already_attempted = await _last_update_attempt(ticker)
         if already_attempted is not None and already_attempted.date() >= last_completed.date():
             return False  # already asked for this session; Yahoo just hasn't published
 
-        from .price_fetcher import append_price_data
+        from .price_fetcher import append_price_data, fetch_historical_price_data
+
+        async def _seed() -> bool:
+            """Full initial download for a ticker with no archive at all.
+
+            append_price_data can only *extend* a series, so without this a
+            ticker whose first archive attempt failed stayed permanently
+            unusable: the Tracker answered "No data found for ticker" and its
+            Try again button re-ran the same doomed read forever. Bounded by
+            the same one-attempt-per-session marker as any other top-up.
+            """
+            try:
+                await fetch_historical_price_data(ticker)
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Initial archive failed for %s: %r", ticker, e)
+                # A rate limit is worth retrying on the next request; anything
+                # else (an unknown symbol, a delisting) is a real answer and
+                # shouldn't be re-asked until the next session.
+                return not yf_guard.is_rate_limit_error(e)
+
         # Coalesced: a page load asks for the same ticker from several
         # components at once, and without this each of them starts its own
         # download of the same gap.
-        answered = await single_flight(f"append:{ticker}", lambda: append_price_data(ticker))
+        answered = await single_flight(
+            f"append:{ticker}",
+            _seed if last_archived is None else (lambda: append_price_data(ticker)),
+        )
 
         # The marker means "Yahoo has already been asked about this session",
         # and it is only true if Yahoo actually answered. Recording it up
@@ -350,12 +416,23 @@ async def refresh_all_archives() -> int:
 
     Cheap once things are current: `ensure_archive_current` short-circuits on
     two indexed reads when a symbol is already up to date, so a steady-state
-    pass costs a handful of queries and no network at all. Tickers are spaced
-    out because a burst of history downloads is precisely what yfinance
-    rate-limits, and nothing is waiting on this.
+    pass costs a handful of queries and no network at all.
+
+    Deliberately timid about the ones that *do* need work. This runs on every
+    cold start, and on a host that spins down between visits that means every
+    visit — so an unbounded sweep stops being background maintenance and
+    becomes a burst of history downloads competing with the user's own page
+    load for the same rate-limited budget. Hence: spaced out, capped per pass
+    (a cold archive catches up over several passes rather than one long
+    burst), and abandoned the moment yfinance signals a backoff, since every
+    request after that point is refused anyway.
 
     Returns how many symbols it actually tried to top up. Never raises.
     """
+    if yf_guard.in_cooldown():
+        logger.info("Archive sweep skipped — yfinance is in cooldown")
+        return 0
+
     try:
         symbols = await market_data_service.get_symbols()
     except Exception as e:  # noqa: BLE001 — a background job must not crash the app
@@ -363,11 +440,16 @@ async def refresh_all_archives() -> int:
         return 0
 
     attempted = 0
-    for i, symbol in enumerate(symbols):
-        if i:
-            await asyncio.sleep(config.ARCHIVE_SWEEP_SPACING_SECONDS)
+    for symbol in symbols:
+        if attempted >= config.ARCHIVE_SWEEP_MAX_PER_PASS:
+            logger.info("Archive sweep hit its per-pass cap; the rest wait for the next one")
+            break
+        if yf_guard.in_cooldown():
+            logger.info("Archive sweep stopping early — yfinance went into cooldown")
+            break
         if await ensure_archive_current(symbol):
             attempted += 1
+            await asyncio.sleep(config.ARCHIVE_SWEEP_SPACING_SECONDS)
     if attempted:
         logger.info("Archive sweep topped up %d of %d symbols", attempted, len(symbols))
     return attempted
@@ -420,11 +502,22 @@ async def fetch(ticker: str, days: int = 30):
         OHLCVResponse: The stock data for the specified ticker and time period.
     '''
     records = await market_data_service.get_ohlcv(ticker, days)
+
+    # Fill or extend the archive *before* concluding there's nothing here.
+    # Bailing out first meant a ticker with an empty archive could never
+    # recover through this path, however many times it was asked for.
+    #
+    # `ensure_archive_current` is evaluated first on purpose: writing this as
+    # `if not records or await ensure_archive_current(...)` short-circuits and
+    # skips the repair in precisely the case it exists for.
+    topped_up = await ensure_archive_current(ticker)
+    if topped_up or not records:
+        records = await market_data_service.get_ohlcv(ticker, days)
+
     if not records:
         raise ValueError(f"No data found for ticker: {ticker}")
 
-    if await ensure_archive_current(ticker):
-        records = await market_data_service.get_ohlcv(ticker, days)
+    await _stamp_archive(ticker)
 
     return OHLCVResponse(
         ticker=ticker,
@@ -467,7 +560,7 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
     # branches below answer different questions, so one must not serve the
     # other's cached value across a session boundary.
     key = f"current:{ticker}:{'open' if is_market_open else 'closed'}"
-    cached = quote_cache.get(key)
+    cached = quote_cache.get_stamped(key, freshness.CACHED, label=key)
     if cached is not None:
         value, error = cached
         if error is not None:
@@ -479,16 +572,25 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
             with yf_guard.guard():
                 result = await _fetch_current_live(stock, is_market_open)
         except Exception as e:  # noqa: BLE001 — classified, then handled below
-            if yf_guard.is_rate_limit_error(e):
-                # Serve the last archived close rather than erroring: the
-                # archive is already the honest answer while we're backing
-                # off, and it costs no upstream call.
-                fallback = await _last_archived_close(ticker)
-                if fallback is not None:
-                    quote_cache.set(key, (fallback, None), _CURRENT_TTL_ERROR)
-                    return fallback
+            # Serve the last archived close rather than erroring: it costs no
+            # upstream call and is the honest answer whenever a live quote
+            # can't be had. Not restricted to rate limits — a parse failure or
+            # a network blip leaves the caller exactly as priceless, and the
+            # ticker tape blanking on a transient error was indistinguishable
+            # to the user from blanking on a throttle. The error is still
+            # raised when there is no archived bar to fall back on.
+            fallback = await _last_archived_close(ticker)
+            if fallback is not None:
+                await _stamp_archive(ticker)
+                logger.info(
+                    "Serving archived close for %s — live quote unavailable (%s)",
+                    ticker, "rate limited" if yf_guard.is_rate_limit_error(e) else repr(e),
+                )
+                quote_cache.set(key, (fallback, None), _CURRENT_TTL_ERROR)
+                return fallback
             quote_cache.set(key, (None, str(e)), _CURRENT_TTL_ERROR)
             raise
+        freshness.stamp(freshness.LIVE, label=f"quote:{ticker}")
         quote_cache.set(
             key, (result, None),
             _CURRENT_TTL_OPEN if is_market_open else _CURRENT_TTL_CLOSED,
@@ -496,6 +598,24 @@ async def fetch_current(stock: yf.Ticker, is_market_open: bool | None = None):
         return result
 
     return await single_flight(key, _load)
+
+
+async def _stamp_archive(ticker: str) -> None:
+    """Report the archive's real provenance for this response.
+
+    Two numbers, because they answer different questions: when the rows were
+    pulled, and what trading day the newest one covers. A chart refreshed
+    ten minutes ago that still ends on Friday is both current and three days
+    behind, and the user needs to be able to tell which of those applies.
+    """
+    try:
+        fetched_at, through = await market_data_service.get_provenance(ticker)
+    except Exception as e:  # noqa: BLE001 — provenance never fails a payload
+        logger.debug("Archive provenance unavailable for %s: %r", ticker, e)
+        return
+    freshness.stamp(
+        freshness.ARCHIVE, fetched_at=fetched_at, data_through=through, label=f"archive:{ticker}",
+    )
 
 
 async def _last_archived_close(ticker: str) -> OHLCVResponse | None:
@@ -719,7 +839,7 @@ async def search_tickers(query: str, exchange: str | None = None) -> list[dict]:
 
     exchange = (exchange or "US").upper()
     cache_key = f"{exchange}:{query.lower()}"
-    cached = search_cache.get(cache_key)
+    cached = search_cache.get_stamped(cache_key, freshness.CACHED, label="search")
     if cached is not None:
         return cached
 
