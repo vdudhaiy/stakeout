@@ -54,6 +54,7 @@ async def init_db() -> None:
     # before create_all runs. This avoids circular imports at module level.
     from models import (  # noqa: F401
         company_logo, company_profile, index_history, local_auth, market_data, peers, portfolio,
+        service_state,
     )
 
     if not _IS_SQLITE:
@@ -112,6 +113,14 @@ async def init_db() -> None:
                           AND p.name_key = 'main'
                    )"""
             ))
+
+        # Mirrors alembic 016. Nullable, so no backfill: a NULL here means
+        # "archived before we tracked this", which the API reports as an
+        # unknown fetch time rather than a fabricated one.
+        result = await conn.execute(text("PRAGMA table_info(market_data)"))
+        market_data_cols = {row[1] for row in result.fetchall()}
+        if market_data_cols and "fetched_at" not in market_data_cols:
+            await conn.execute(text("ALTER TABLE market_data ADD COLUMN fetched_at TIMESTAMP"))
 
         result = await conn.execute(text("PRAGMA table_info(audit_log)"))
         audit_cols = {row[1] for row in result.fetchall()}
