@@ -3,6 +3,7 @@ import type { Exchange } from '../utils/market'
 import * as guestPortfolio from '../lib/guestPortfolio'
 import * as guestWatchlist from '../lib/guestWatchlist'
 import { isGuestModeActive } from '../lib/guestMode'
+import { recordFreshness } from '../lib/freshness'
 
 // ── Transport ─────────────────────────────────────────────────────────────
 // In dev, VITE_API_URL is empty and Vite proxies API paths to localhost:8000.
@@ -24,7 +25,12 @@ async function rawFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await getAuthToken()
   const headers = new Headers(init?.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
-  return fetch(`${API_BASE}${path}`, { ...init, headers })
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
+  // Every request in the app funnels through here, so this is the one place
+  // provenance has to be captured. It must happen before the dedupe layer
+  // below rebuilds the Response — that copy carries only a Content-Type.
+  recordFreshness(path, res)
+  return res
 }
 
 // In-flight GETs, keyed by path. The backend's Cache-Control headers cover

@@ -22,30 +22,67 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import freshness
+
 
 class TTLCache:
+    # Entries carry a wall-clock stored_at alongside the monotonic expiry.
+    # The expiry answers "is this still usable"; stored_at answers "when was
+    # this actually pulled", which is what the user is shown. They can't be
+    # the same clock: monotonic time is meaningless outside this process, and
+    # deriving the fetch time from the expiry would report a per-key TTL that
+    # callers frequently override.
     def __init__(self, ttl_seconds: float, max_entries: int = 2048):
         self._ttl = ttl_seconds
         self._max = max_entries
-        self._store: dict[str, tuple[Any, float]] = {}
+        self._store: dict[str, tuple[Any, float, float]] = {}
 
     def get(self, key: str) -> Any | None:
+        entry = self._get_entry(key)
+        return entry[0] if entry is not None else None
+
+    def _get_entry(self, key: str) -> tuple[Any, float] | None:
+        """(value, stored_at_epoch) or None. stored_at is a POSIX timestamp."""
         entry = self._store.get(key)
         if entry is None:
             return None
-        value, expires_at = entry
+        value, expires_at, stored_at = entry
         if time.monotonic() > expires_at:
             self._store.pop(key, None)
             return None
+        return value, stored_at
+
+    def stored_at(self, key: str) -> float | None:
+        """When the live value behind `key` was fetched, as a POSIX timestamp."""
+        entry = self._get_entry(key)
+        return entry[1] if entry is not None else None
+
+    def get_stamped(self, key: str, source: str = "cached", label: str | None = None) -> Any | None:
+        """get(), but also records where the answer came from for this request.
+
+        The one-line form of "serve this and tell the user it's a cached copy
+        from 09:41, not a live read" — see freshness.py. Kept here so a cache
+        hit and its provenance can't drift apart at the ~30 call sites that
+        read these singletons.
+        """
+        entry = self._get_entry(key)
+        if entry is None:
+            return None
+        value, stored_at = entry
+        freshness.stamp(source, fetched_at=stored_at, label=label)
         return value
 
-    def set(self, key: str, value: Any, ttl_seconds: float | None = None) -> None:
+    def set(self, key: str, value: Any, ttl_seconds: float | None = None,
+            stored_at: float | None = None) -> None:
         # Crude size cap: drop the oldest-expiring entries when full.
         if len(self._store) >= self._max:
             for k in sorted(self._store, key=lambda k: self._store[k][1])[: self._max // 8]:
                 self._store.pop(k, None)
         ttl = ttl_seconds if ttl_seconds is not None else self._ttl
-        self._store[key] = (value, time.monotonic() + ttl)
+        # `stored_at` is passed when the value is being re-shelved rather than
+        # freshly fetched (a stale copy promoted back into service), so its
+        # original fetch time survives the move.
+        self._store[key] = (value, time.monotonic() + ttl, stored_at if stored_at is not None else time.time())
 
     def invalidate(self, key: str) -> None:
         self._store.pop(key, None)

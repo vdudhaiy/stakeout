@@ -22,6 +22,8 @@ from database import SessionLocal, _IS_SQLITE
 from models.company_logo import CompanyLogo
 from services import finnhub_client
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 # Logos barely ever change — this is mostly a write-once table, so the
@@ -79,23 +81,37 @@ async def get_logo(ticker: str) -> str | None:
     (persisted for next time) -> a stale DB row as a last resort -> None.
     """
     symbol = ticker.upper()
-    cached = _logo_cache.get(symbol)
+    cached = _logo_cache.get_stamped(symbol, freshness.CACHED, label="logo")
     if cached is not None:
         return cached or None
 
     row = await _read_row(symbol)
     if row is not None and _is_fresh(row):
-        _logo_cache.set(symbol, row.logo_url)
+        freshness.stamp(freshness.ARCHIVE, fetched_at=row.fetched_at, label="logo")
+        _logo_cache.set(symbol, row.logo_url, stored_at=_epoch_of(row.fetched_at))
         return row.logo_url or None
 
     fresh = await _fetch_from_finnhub(symbol)
     if fresh is not None:
+        freshness.stamp(freshness.LIVE, label="logo")
         await _save(symbol, fresh)
         _logo_cache.set(symbol, fresh)
         return fresh or None
 
     if row is not None:
-        _logo_cache.set(symbol, row.logo_url)
+        freshness.stamp(freshness.STALE, fetched_at=row.fetched_at, label="logo")
+        _logo_cache.set(symbol, row.logo_url, stored_at=_epoch_of(row.fetched_at))
         return row.logo_url or None
 
     return None
+
+def _epoch_of(value) -> float | None:
+    """A DB timestamp as a POSIX float, or None if it can't be read."""
+    if value is None:
+        return None
+    try:
+        stamped = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return stamped.timestamp()
+    except Exception:  # noqa: BLE001 — provenance is optional, the data is not
+        return None
+

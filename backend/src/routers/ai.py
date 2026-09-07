@@ -17,6 +17,8 @@ from schemas.ai import ChatRequest, ChatResponse, StockExplanationResponse
 from rate_limit import ai_limiter, by_client_ip
 from services import analytics_service, llm_service
 
+import freshness
+
 router = APIRouter(prefix="/ai", tags=["AI"],
                    dependencies=[Depends(by_client_ip(ai_limiter))])
 
@@ -36,7 +38,7 @@ async def explain_stock(ticker: str, refresh: bool = Query(False)):
     ticker = ticker.upper()
     cache_key = f"explain:{ticker}"
     if not refresh:
-        cached = ai_cache.get(cache_key)
+        cached = ai_cache.get_stamped(cache_key, freshness.CACHED, label="ai")
         if cached is not None:
             return cached
 
@@ -57,6 +59,7 @@ async def explain_stock(ticker: str, refresh: bool = Query(False)):
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         model=OLLAMA_MODEL,
     )
+    freshness.stamp(freshness.LIVE, label="ai")
     ai_cache.set(cache_key, response)
     return response
 

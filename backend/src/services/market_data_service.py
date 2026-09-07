@@ -7,7 +7,7 @@ work.
 '''
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pandas as pd
 from sqlalchemy import delete, select
@@ -18,7 +18,7 @@ from models.market_data import ArchiveRefresh, MarketData
 
 logger = logging.getLogger(__name__)
 
-_UPSERT_COLUMNS = ("open", "high", "low", "close", "volume", "source")
+_UPSERT_COLUMNS = ("open", "high", "low", "close", "volume", "source", "fetched_at")
 
 
 def _upsert_statement(rows: list[dict]):
@@ -43,6 +43,10 @@ async def upsert_ohlcv(
     data rather than reported directly by Yahoo Finance.
     '''
     synthetic_dates = synthetic_dates or set()
+    # One timestamp for the whole batch: these rows all came out of a single
+    # upstream response, so stamping them individually would imply a precision
+    # the fetch never had.
+    fetched_at = datetime.now(timezone.utc)
     rows = [
         {
             "symbol": symbol,
@@ -53,6 +57,7 @@ async def upsert_ohlcv(
             "close": float(row["Close"]),
             "volume": int(row["Volume"]),
             "source": "yfinance_synthetic" if pd.Timestamp(ts).date() in synthetic_dates else source,
+            "fetched_at": fetched_at,
         }
         for ts, row in df.iterrows()
     ]
@@ -94,6 +99,33 @@ async def get_symbols() -> list[str]:
             select(MarketData.symbol).distinct().order_by(MarketData.symbol)
         )
         return list(result.scalars().all())
+
+
+async def get_provenance(symbol: str) -> tuple[datetime | None, date | None]:
+    '''
+    (when `symbol`'s newest bar was pulled, what trading day it covers).
+
+    Two different questions, and the UI needs both: an archive read a minute
+    ago whose newest bar is from last Tuesday is fresh and four days behind,
+    and reporting only one of those numbers hides whichever one is the
+    problem. Either element is None when the archive has nothing to say —
+    rows predating the fetched_at column report an unknown fetch time rather
+    than a fabricated one.
+    '''
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(MarketData.fetched_at, MarketData.date)
+            .where(MarketData.symbol == symbol)
+            .order_by(MarketData.date.desc())
+            .limit(1)
+        )
+        row = result.first()
+    if row is None:
+        return None, None
+    fetched_at, through = row
+    if fetched_at is not None and fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    return fetched_at, through
 
 
 async def get_ohlcv(symbol: str, days: int = 0) -> list[dict]:

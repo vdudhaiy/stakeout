@@ -27,6 +27,8 @@ from database import SessionLocal, _IS_SQLITE
 from models.company_profile import CompanyProfile
 from services import yf_guard
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 # Names, sectors and industries move on the order of a rebrand or a GICS
@@ -115,7 +117,7 @@ async def get_profile(ticker: str) -> dict:
         return dict(_EMPTY)
 
     cache_key = f"profile:{symbol}"
-    cached = info_cache.get(cache_key)
+    cached = info_cache.get_stamped(cache_key, freshness.CACHED, label="profile")
     if cached is not None:
         return cached
 
@@ -123,11 +125,13 @@ async def get_profile(ticker: str) -> dict:
         row = await _read_row(symbol)
         if row is not None and _is_fresh(row):
             profile = _as_dict(row)
-            info_cache.set(cache_key, profile)
+            freshness.stamp(freshness.ARCHIVE, fetched_at=row.fetched_at, label="profile")
+            info_cache.set(cache_key, profile, stored_at=_epoch_of(row.fetched_at))
             return profile
 
         fresh = await _fetch_from_yfinance(symbol)
         if fresh is not None and any(fresh.values()):
+            freshness.stamp(freshness.LIVE, label="profile")
             await _save(symbol, fresh)
             info_cache.set(cache_key, fresh)
             return fresh
@@ -137,11 +141,23 @@ async def get_profile(ticker: str) -> dict:
         # than pinning the ticker to "unknown" for the full TTL.
         if row is not None:
             profile = _as_dict(row)
-            info_cache.set(cache_key, profile)
+            freshness.stamp(freshness.STALE, fetched_at=row.fetched_at, label="profile")
+            info_cache.set(cache_key, profile, stored_at=_epoch_of(row.fetched_at))
             return profile
         return dict(_EMPTY)
 
     return await single_flight(cache_key, _load)
+
+def _epoch_of(value) -> float | None:
+    """A DB timestamp as a POSIX float, or None if it can't be read."""
+    if value is None:
+        return None
+    try:
+        stamped = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return stamped.timestamp()
+    except Exception:  # noqa: BLE001 — provenance is optional, the data is not
+        return None
+
 
 
 async def get_profiles(tickers: list[str]) -> dict[str, dict]:

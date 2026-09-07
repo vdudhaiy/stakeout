@@ -4,6 +4,7 @@ import { motion } from 'motion/react'
 import clsx from 'clsx'
 import { fetchMarketNews, fetchStockNews } from '../api'
 import type { NewsArticle } from '../types'
+import { FreshnessBadge } from './FreshnessBadge'
 
 type Mode =
   | { kind: 'market'; region?: 'all' | 'us' | 'in' }
@@ -179,6 +180,11 @@ export function NewsPanel({ mode, limit = 10, compact = false, className }: Prop
           <p className="hidden sm:block text-[0.625rem] text-zinc-600 font-mono">company · industry · sector · market</p>
         )}
         {loading && <RefreshCw size={11} className="animate-spin text-zinc-600 ml-auto" />}
+        {!loading && (
+          <span className="ml-auto">
+            <FreshnessBadge path={mode.kind === 'market' ? '/news/market' : `/news/stock/${mode.ticker}`} />
+          </span>
+        )}
       </div>
 
       {error ? (

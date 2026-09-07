@@ -29,6 +29,7 @@ import type { GlossaryKey } from '../utils/glossary'
 import { PORTFOLIO_REFRESH_MS } from '../utils/env'
 import { usePersistedState } from '../utils/usePersistedState'
 import { overlayFade, scaleIn, collapse, layoutSpring } from '../lib/motion'
+import { FreshnessBadge } from './FreshnessBadge'
 
 type MoneyFmt = (v: number | null | undefined, opts?: { sign?: boolean; compact?: boolean }) => string
 
@@ -2001,6 +2002,15 @@ export function PortfolioPage({
             />
 
             {/* ── Summary stats for the open portfolio ───────────────── */}
+            {/* Every value below is priced from quotes the server may have
+                cached, or fallen back to an archived close for during a
+                provider rate limit. Without this the page shows a portfolio
+                total that looks live and may be hours old. */}
+            {!isGuest && (
+              <div className="flex justify-end -mb-1">
+                <FreshnessBadge path="/portfolio/" label="Priced" />
+              </div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               <StatCard
                 label="PORTFOLIO VALUE"

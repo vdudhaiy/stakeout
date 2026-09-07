@@ -1,8 +1,9 @@
 from datetime import date as date_
+from datetime import datetime
 
 from sqlalchemy import BigInteger, Float, String
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.types import Date
+from sqlalchemy.types import Date, DateTime
 
 from database import Base
 
@@ -26,6 +27,14 @@ class MarketData(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[int] = mapped_column(BigInteger)
     source: Mapped[str] = mapped_column(String, default="yfinance")
+    # When this row was last pulled from upstream — not the trading day it
+    # describes. The chart is the largest thing the app displays and the one
+    # most likely to be quietly out of date, so "as of" has to be answerable
+    # from the data itself rather than inferred from a refresh marker (which
+    # records what was *asked for*, and exists even when nothing came back).
+    # Nullable: rows archived before this column existed have no honest value
+    # for it, and inventing one would date them to the migration.
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ArchiveRefresh(Base):

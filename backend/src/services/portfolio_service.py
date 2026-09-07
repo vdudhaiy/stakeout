@@ -18,6 +18,8 @@ from schemas.portfolio import (
 from . import market_data_service, performance_service, portfolio_admin_service, sec_service, yf_guard
 from .stock_service import fetch_current, get_market_status, add_stock
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,7 +102,7 @@ async def _current_price(ticker: str, is_market_open: bool | None = None) -> Dec
     a missing key and a value that legitimately *is* None.
     """
     cache_key = f"price:{ticker}"
-    cached = quote_cache.get(cache_key)
+    cached = quote_cache.get_stamped(cache_key, freshness.CACHED, label=f"price:{ticker}")
     if cached is not None:
         return cached[0]
 

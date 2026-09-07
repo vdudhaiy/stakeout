@@ -20,11 +20,13 @@ import asyncio
 from cache import TTLCache
 from services import finnhub_client
 
+import freshness
+
 _quote_cache = TTLCache(ttl_seconds=5 * 60)  # in-process memo: 5 minutes
 
 
 async def _fetch_one(symbol: str) -> dict | None:
-    cached = _quote_cache.get(symbol)
+    cached = _quote_cache.get_stamped(symbol, freshness.CACHED, label="quote")
     if cached is not None:
         return cached or None
 
@@ -45,6 +47,7 @@ async def _fetch_one(symbol: str) -> dict | None:
         "change": data.get("d"),
         "change_percent": data.get("dp"),
     }
+    freshness.stamp(freshness.LIVE, label="quote")
     _quote_cache.set(symbol, quote)
     return quote
 
