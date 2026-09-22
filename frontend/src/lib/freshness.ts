@@ -43,20 +43,23 @@ function emit() {
 
 /** Record what the backend said about a response. Called for every request. */
 export function recordFreshness(path: string, res: Response): void {
-  const source = res.headers.get('X-Data-Source') as DataSource | null
+  const rawSource = res.headers.get('X-Data-Source')
   // Absent on responses with nothing upstream behind them (/health, errors,
   // guest-mode short-circuits). Nothing to claim, so nothing is stored.
-  if (!source) return
+  if (!rawSource) return
+  if (rawSource !== 'live' && rawSource !== 'cached' && rawSource !== 'archive' && rawSource !== 'stale') return
+  const source = rawSource as DataSource
 
   const fetchedAtRaw = res.headers.get('X-Data-Fetched-At')
-  const age = res.headers.get('X-Data-Age-Seconds')
+  const ageRaw = res.headers.get('X-Data-Age-Seconds')
   const parsed = fetchedAtRaw ? new Date(fetchedAtRaw) : null
+  const age = ageRaw !== null ? Number(ageRaw) : null
 
-  store.set(path, {
+  store.set(pathnameOf(path), {
     source,
     fetchedAt: parsed && !Number.isNaN(parsed.getTime()) ? parsed : null,
     dataThrough: res.headers.get('X-Data-Through'),
-    ageSeconds: age !== null ? Number(age) : null,
+    ageSeconds: age !== null && Number.isFinite(age) ? age : null,
     receivedAt: Date.now(),
   })
   emit()
