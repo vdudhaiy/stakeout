@@ -181,6 +181,71 @@ def _build_axis(
     return sorted(days)
 
 
+def _project_flows(
+    daily_flow: dict[date, Decimal], axis: list[date], *, from_inception: bool = False,
+) -> list[float]:
+    """Place each cash flow on the axis, snapping a non-trading day forward.
+
+    Trade dates are unvalidated, so a weekend, a holiday or a day the archive
+    is missing never appears on the axis. Indexing the axis by date dropped
+    those flows while `_shares_on` still counted their shares. Snapping to the
+    first session on or after the trade date is the day `_shares_on` first
+    counts them, so the two agree.
+
+    `from_inception` says the window starts at the portfolio's first trade, so
+    there is no prior capital for `opening_value` to carry: a flow landing
+    before axis[0] is the first buy on a closed day, and belongs on axis[0] at
+    what was paid. Otherwise it predates the window and `opening_value` has it.
+    """
+    flows = [0.0] * len(axis)
+    if not axis:
+        return flows
+    cursor = 0
+    for day, amount in sorted(daily_flow.items()):
+        if day < axis[0] and not from_inception:
+            continue
+        if day > axis[-1]:
+            break  # dated past the archive; its shares aren't counted either
+        while axis[cursor] < day:
+            cursor += 1
+        flows[cursor] += float(amount)
+    return flows
+
+
+def _reconcile(
+    priced: list[tuple[Holding, list[Transaction], list[Dividend]]],
+    net_invested: Decimal,
+    realized: Decimal,
+    excluded: list[str],
+    from_inception: bool,
+    axis: list[date],
+) -> None:
+    """Log if capital in doesn't tie back to the cost basis of what's held.
+
+    `net_invested + realized == cost_basis` whenever the window covers every
+    trade: the cost of sold shares cancels out of both sides. That identity is
+    what the dropped-flow bug broke for months in silence, so it is worth a
+    line in the log. Only checked where it must hold, and never raised — a
+    chart must not 500 over its own audit.
+    """
+    if excluded or not from_inception:
+        return
+    cost_basis = Decimal(0)
+    for _h, transactions, _d in priced:
+        for t in transactions:
+            if _parse(t.date) > axis[-1]:
+                return  # a trade the window can't see; the identity won't hold
+            if not t.sale:
+                cost_basis += t.shares_remaining * t.bought_at
+    drift = abs(net_invested + realized - cost_basis)
+    if drift > max(Decimal("0.01"), abs(cost_basis) * Decimal("0.000001")):
+        logger.warning(
+            "Performance capital does not reconcile: net_invested %s + realized %s "
+            "!= cost basis %s (drift %s)",
+            net_invested, realized, cost_basis, drift,
+        )
+
+
 def _summarize(
     returns: list[float], flows: list[tuple[date, float]], span_days: int,
 ) -> ReturnSummary:
@@ -402,6 +467,20 @@ async def _compute(
     # instead understates the capital already at risk, which inflates the
     # windowed return and makes the benchmark look worse than it was.
     # For the "max" window nothing was held beforehand, so this is 0.
+    from_inception = start <= first_transaction
+
+    def _in_window(day: date) -> bool:
+        """Does `day` belong to this window's figures?
+
+        At inception a date before the first session is the first trade on a
+        closed day, which _project_flows already counts on axis[0]; excluding
+        it here would drop a real sale from `realized` and break the
+        reconciliation for a perfectly valid history.
+        """
+        if day > axis[-1]:
+            return False
+        return day >= axis[0] or from_inception
+
     values = [0.0] * len(axis)
     opening_value = 0.0
     day_before = axis[0] - timedelta(days=1)
@@ -409,14 +488,14 @@ async def _compute(
         prices = _forward_fill(closes_by_symbol[holding.ticker], axis)
         shares = _shares_on(transactions, axis)
         prior_shares = _shares_on(transactions, [day_before])[0]
-        if prices[0] is not None and prior_shares > 0:
+        if not from_inception and prices[0] is not None and prior_shares > 0:
             opening_value += prices[0] * prior_shares
         for i, (price, count) in enumerate(zip(prices, shares)):
             if price is not None and count:
                 values[i] += price * count
 
     daily_flow = _cash_flows(priced)
-    flows_on_axis = [float(daily_flow.get(day, Decimal(0))) for day in axis]
+    flows_on_axis = _project_flows(daily_flow, axis, from_inception=from_inception)
 
     # Capital at the window's open, plus everything added since. Flows from
     # before the window are not added again — they are already expressed in
@@ -470,16 +549,23 @@ async def _compute(
     if opening_value:
         xirr_flows.append((axis[0], -opening_value))
     for day, amount in sorted(daily_flow.items()):
-        if axis[0] <= day <= axis[-1] and amount:
-            xirr_flows.append((day, -float(amount)))
+        if not amount or day > axis[-1]:
+            continue
+        if day < axis[0]:
+            if from_inception:
+                xirr_flows.append((axis[0], -float(amount)))
+            continue
+        xirr_flows.append((day, -float(amount)))
 
     total_dividends = Decimal(0)
     for _h, _t, dividends in priced:
         for d in dividends:
             day = _parse(d.date)
-            total_dividends += d.total_amount
-            if axis[0] <= day <= axis[-1]:
-                xirr_flows.append((day, float(d.total_amount)))
+            # Windowed, like every other figure here. Summing all of them
+            # reported a lifetime of income against a one-year return.
+            if _in_window(day):
+                total_dividends += d.total_amount
+                xirr_flows.append((max(day, axis[0]), float(d.total_amount)))
 
     xirr_flows.append((axis[-1], values[-1]))
 
@@ -519,11 +605,13 @@ async def _compute(
     realized = Decimal(0)
     for _h, transactions, _d in priced:
         for t in transactions:
-            if t.sale:
-                # `bought_at` on a sell row is the FIFO cost of the shares it
-                # consumed (set by the replay in portfolio_service), so this
-                # is the same realized figure the Portfolio page reports.
+            # `bought_at` on a sell row is the FIFO cost of the shares it
+            # consumed (set by the replay in portfolio_service). Windowed for
+            # the same reason as the dividends above.
+            if t.sale and _in_window(_parse(t.date)):
                 realized += (t.sold_at - t.bought_at) * t.shares
+
+    _reconcile(priced, net_invested, realized, excluded, from_inception, axis)
 
     return PerformanceResponse(
         market=market,

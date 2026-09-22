@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from sqlalchemy import select
+
 from models.portfolio import Dividend, Holding, Transaction
 from services import performance_service
 
@@ -245,6 +247,290 @@ async def test_dividends_are_income_not_a_contribution(db_session, pid):
     # Flat price, but the dividend is real money back, so the money-weighted
     # return is positive.
     assert result.portfolio.money_weighted > 0
+
+
+# ── trades on days the archive has no bar for ─────────────────────────────
+#
+# A weekend, a holiday or a missing bar never lands on the axis, so those
+# flows were dropped while their shares stayed in the value series. Every
+# helper above builds a gapless axis, which is why this survived; these
+# deliberately punch a hole in one.
+
+def _gapped(start: date, n: int, skip: set[int]) -> list[date]:
+    """`n` consecutive days with the offsets in `skip` absent from the axis."""
+    return [start + timedelta(days=i) for i in range(n) if i not in skip]
+
+
+async def test_a_buy_on_a_day_the_archive_skipped_still_counts_as_money_in(db_session, pid):
+    """The reported bug: $56k of buys vanished from net_invested while their
+    shares stayed in the portfolio value."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 6, skip={3})
+    gap_day = start + timedelta(days=3)
+
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0),
+        (False, gap_day, 10, 100.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.net_invested == pytest.approx(Decimal("2000"))
+    assert result.points[-1].value == pytest.approx(2000.0)
+    assert result.unrealized_gains == pytest.approx(Decimal("0"))
+
+
+async def test_a_gap_day_buy_does_not_manufacture_a_return(db_session, pid):
+    """Prices never move, so every return figure on the page must be zero.
+    Before the fix this reported +100% with a matching drawdown."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 40, skip={10})
+    gap_day = start + timedelta(days=10)
+
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0),
+        (False, gap_day, 10, 100.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.portfolio.time_weighted == pytest.approx(0.0, abs=1e-9)
+    assert result.portfolio.max_drawdown == pytest.approx(0.0, abs=1e-9)
+    assert result.portfolio.volatility == pytest.approx(0.0, abs=1e-9)
+
+
+async def test_a_sale_on_a_gap_day_is_not_a_loss(db_session, pid):
+    """The mirror image: shares leave the value series on the next session,
+    and without the matching outflow that read as the portfolio collapsing."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 10, skip={5})
+    gap_day = start + timedelta(days=5)
+
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 20, 100.0),
+        (True, gap_day, 10, 100.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.portfolio.time_weighted == pytest.approx(0.0, abs=1e-9)
+    assert result.net_invested == pytest.approx(Decimal("1000"))
+
+
+async def test_the_benchmark_receives_gap_day_contributions_too(db_session, pid):
+    """The comparison has to be against the same money. Dropping a flow from
+    the simulation but not from the portfolio's own shares hands the user a
+    free position the index never got to buy."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 6, skip={3})
+    gap_day = start + timedelta(days=3)
+
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0),
+        (False, gap_day, 10, 100.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 50.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    # Flat index, so the simulation is worth exactly what was put into it.
+    assert result.benchmark_final_value == pytest.approx(Decimal("2000"))
+    assert result.value_added == pytest.approx(Decimal("0"))
+
+
+async def test_a_trade_dated_after_the_last_archived_session_is_left_out(db_session, pid):
+    """Its shares aren't in the value series either, so counting the money
+    would swap one asymmetry for the opposite one."""
+    axis = _days(date(2024, 1, 1), 5)
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0),
+        (False, axis[-1] + timedelta(days=1), 10, 100.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.net_invested == pytest.approx(Decimal("1000"))
+    assert result.points[-1].value == pytest.approx(1000.0)
+
+
+async def test_several_trades_share_one_gap_day(db_session, pid):
+    """Two holdings traded on the same skipped day both have to land."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 6, skip={3})
+    gap_day = start + timedelta(days=3)
+
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0), (False, gap_day, 5, 100.0),
+    ])
+    await _add_holding(db_session, pid, "MSFT", transactions=[
+        (False, gap_day, 4, 100.0),
+    ])
+
+    closes, index, topup, behind = _mock_data(
+        {"AAPL": _flat(axis, 100.0), "MSFT": _flat(axis, 100.0)}, _flat(axis, 4000.0),
+    )
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.net_invested == pytest.approx(Decimal("1900"))
+    assert result.portfolio.time_weighted == pytest.approx(0.0, abs=1e-9)
+
+
+# ── windowed totals ───────────────────────────────────────────────────────
+
+async def test_dividends_outside_the_window_are_not_counted_inside_it(db_session, pid):
+    """A 1y view reporting a lifetime of income against a one-year return
+    flatters the period by whatever came before it."""
+    axis = _days(date.today() - timedelta(days=60), 60)
+    old_day = date.today() - timedelta(days=900)
+    await _add_holding(
+        db_session, pid, "AAPL",
+        transactions=[(False, old_day, 10, 100.0)],
+        dividends=[(old_day + timedelta(days=1), 5.0, 10), (axis[10], 2.0, 10)],
+    )
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US", range_key="1y")
+
+    assert result.total_dividends == pytest.approx(Decimal("20"))
+
+
+async def test_realized_gains_outside_the_window_are_not_counted_inside_it(db_session, pid):
+    axis = _days(date.today() - timedelta(days=60), 60)
+    old_day = date.today() - timedelta(days=900)
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, old_day, 20, 100.0),
+        (True, old_day + timedelta(days=10), 10, 300.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US", range_key="1y")
+
+    assert result.realized_gains == pytest.approx(Decimal("0"))
+
+
+# ── inception windows ─────────────────────────────────────────────────────
+
+async def test_a_first_buy_on_a_closed_day_is_capital_not_an_opening_position(db_session, pid):
+    """`max` starts at the first trade, so there is no prior capital for
+    opening_value to carry. Valuing that buy at the next session's price
+    instead of what was paid would hide the gap between the two."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 6, skip={0})  # the buy lands before the first session
+
+    await _add_holding(db_session, pid, "AAPL", transactions=[(False, start, 10, 100.0)])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 120.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.net_invested == pytest.approx(Decimal("1000"))   # paid, not marked
+    assert result.unrealized_gains == pytest.approx(Decimal("200"))
+
+
+async def test_a_sale_before_the_first_archived_session_still_counts_as_realized(
+    db_session, pid, caplog,
+):
+    """At inception nothing precedes the window, so a buy and a sell on closed
+    days before the first bar are both inside it. Dropping the sale from
+    `realized` while its proceeds stayed in `net_invested` broke the identity
+    the reconciliation checks, on a perfectly ordinary history."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 8, skip={0, 1})   # no bar until the third day
+    buy_day, sell_day = start, start + timedelta(days=1)
+
+    # Written the way _replay_fifo leaves them — the sell carries the FIFO
+    # cost of the shares it consumed, and the buy's lot is drawn down. The
+    # shared _add_holding helper zeroes both, which is fine for a value series
+    # but not for anything that has to reconcile.
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", market="US",
+        company_name="AAPL", shares=10, sold_shares=10, average_cost=Decimal("100"),
+    )
+    db_session.add(holding)
+    await db_session.flush()
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=False, date=buy_day.isoformat(), shares=20,
+        bought_at=Decimal("100"), sold_at=Decimal(0), shares_remaining=10,
+    ))
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=True, date=sell_day.isoformat(), shares=10,
+        bought_at=Decimal("100"), sold_at=Decimal("130"), shares_remaining=0,
+    ))
+    await db_session.commit()
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with caplog.at_level("WARNING"), closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.realized_gains == pytest.approx(Decimal("300"))   # (130-100) x 10
+    assert result.net_invested == pytest.approx(Decimal("700"))     # 2000 paid - 1300 back
+    assert "does not reconcile" not in caplog.text
+
+
+async def test_a_dividend_before_the_first_archived_session_counts_at_inception(
+    db_session, pid,
+):
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 40, skip={0, 1})
+    await _add_holding(
+        db_session, pid, "AAPL",
+        transactions=[(False, start, 10, 100.0)],
+        dividends=[(start + timedelta(days=1), 2.0, 10)],
+    )
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.total_dividends == pytest.approx(Decimal("20"))
+
+
+# ── reconciliation tripwire ───────────────────────────────────────────────
+
+async def test_a_healthy_portfolio_reconciles_silently(db_session, pid, caplog):
+    axis = _days(date(2024, 1, 1), 10)
+    await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0), (False, axis[3], 5, 120.0),
+    ])
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with caplog.at_level("WARNING"), closes, index, topup, behind:
+        await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert "does not reconcile" not in caplog.text
+
+
+async def test_capital_that_does_not_tie_to_the_cost_basis_is_logged(db_session, pid, caplog):
+    """The identity net_invested + realized == cost_basis is what the dropped
+    flow broke in silence for months. Make it say something next time."""
+    axis = _days(date(2024, 1, 1), 10)
+    holding = await _add_holding(db_session, pid, "AAPL", transactions=[
+        (False, axis[0], 10, 100.0),
+    ])
+    # Corrupt the lot so the two sides disagree, the way a bad FIFO replay would.
+    txn = (await db_session.execute(
+        select(Transaction).where(Transaction.holding_id == holding.id)
+    )).scalar_one()
+    txn.shares_remaining = 4
+    await db_session.commit()
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with caplog.at_level("WARNING"), closes, index, topup, behind:
+        await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert "does not reconcile" in caplog.text
 
 
 # ── benchmark comparison ──────────────────────────────────────────────────

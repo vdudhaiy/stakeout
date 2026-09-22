@@ -69,7 +69,7 @@ from decimal import Decimal, InvalidOperation
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from markets import apply_exchange, market_of
+from markets import apply_exchange, market_of, snap_to_session
 from models.portfolio import portfolio_name_key
 from schemas.portfolio import (
     BulkPurchaseLot, BulkSaleLot, ImportApplyRow, ImportBlockingError, ImportPreviewResult, ImportPreviewRow,
@@ -267,6 +267,19 @@ def _parse_rows(df: pd.DataFrame, had_header: bool) -> list[dict]:
         if date_error:
             errors.append(date_error)
 
+        # Move a weekend/holiday trade onto the session it would have filled
+        # on. Brokers export settlement and statement dates that routinely
+        # miss the calendar, and a date with no bar behind it silently breaks
+        # the performance chart (see performance_service._project_flows).
+        original_date = None
+        if date and exchange is not None:
+            snapped = snap_to_session(
+                market_of(apply_exchange(ticker_raw, exchange)),
+                datetime.date.fromisoformat(date),
+            ).isoformat()
+            if snapped != date:
+                original_date, date = date, snapped
+
         action = _ACTION_ALIASES.get(action_raw)
         if action is None:
             errors.append(f"unrecognized buy/sell value '{action_raw}'")
@@ -297,6 +310,7 @@ def _parse_rows(df: pd.DataFrame, had_header: bool) -> list[dict]:
             "shares": shares,
             "price": price,
             "date": date,
+            "original_date": original_date,
             "valid": not errors,
             "error": "; ".join(errors) if errors else None,
             "duplicate": False,
@@ -412,17 +426,29 @@ async def _flag_duplicates(session: AsyncSession, rows: list[dict]) -> None:
     seen_in_file: dict[tuple[int, str], dict[tuple, int]] = {}  # -> {signature: first row_num}
     for r in valid_rows:
         key = (r["portfolio_id"], r["ticker"])
-        sig = (r["date"], r["action"], r["shares"], r["price"])
-
-        if sig in existing.get(key, ()):
+        # Match on the snapped date *and* the one the file gave. Transactions
+        # written before dates were snapped are stored off-session, so
+        # comparing only the snapped date would miss them and re-import the
+        # same trade a second time.
+        candidates = {
+            (day, r["action"], r["shares"], r["price"])
+            for day in (r["date"], r["original_date"]) if day
+        }
+        already = candidates & existing.get(key, set())
+        if already:
+            matched_date = sorted(already)[0][0]
             r["duplicate"] = True
             r["duplicate_reason"] = (
                 f"Matches a transaction you already have — {r['action']} {r['shares']} {r['ticker']} "
-                f"@ {r['price']} on {r['date']}."
+                f"@ {r['price']} on {matched_date}."
             )
             continue
 
+        # Within one file, two rows are duplicates only if the file itself
+        # said the same thing — a Saturday and a Sunday row snap to the same
+        # session but are not the same trade.
         file_sigs = seen_in_file.setdefault(key, {})
+        sig = (r["original_date"] or r["date"], r["action"], r["shares"], r["price"])
         if sig in file_sigs:
             r["duplicate"] = True
             r["duplicate_reason"] = f"Duplicate of row {file_sigs[sig]} in this file."
@@ -435,6 +461,7 @@ def _to_preview_row(r: dict) -> ImportPreviewRow:
         row=r["row_num"], market=r["market_label"], ticker=r["ticker"], date=r["date"],
         action=r["action"], shares=r["shares"], price=r["price"], valid=r["valid"],
         error=r["error"], duplicate=r["duplicate"], duplicate_reason=r["duplicate_reason"],
+        original_date=r["original_date"],
         portfolio=r["portfolio_label"], portfolio_id=r["portfolio_id"],
     )
 
