@@ -69,7 +69,7 @@ from decimal import Decimal, InvalidOperation
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from markets import apply_exchange, market_of
+from markets import apply_exchange, market_of, snap_to_session
 from models.portfolio import portfolio_name_key
 from schemas.portfolio import (
     BulkPurchaseLot, BulkSaleLot, ImportApplyRow, ImportBlockingError, ImportPreviewResult, ImportPreviewRow,
@@ -267,6 +267,19 @@ def _parse_rows(df: pd.DataFrame, had_header: bool) -> list[dict]:
         if date_error:
             errors.append(date_error)
 
+        # Move a weekend/holiday trade onto the session it would have filled
+        # on. Brokers export settlement and statement dates that routinely
+        # miss the calendar, and a date with no bar behind it silently breaks
+        # the performance chart (see performance_service._project_flows).
+        original_date = None
+        if date and exchange is not None:
+            snapped = snap_to_session(
+                market_of(apply_exchange(ticker_raw, exchange)),
+                datetime.date.fromisoformat(date),
+            ).isoformat()
+            if snapped != date:
+                original_date, date = date, snapped
+
         action = _ACTION_ALIASES.get(action_raw)
         if action is None:
             errors.append(f"unrecognized buy/sell value '{action_raw}'")
@@ -297,6 +310,7 @@ def _parse_rows(df: pd.DataFrame, had_header: bool) -> list[dict]:
             "shares": shares,
             "price": price,
             "date": date,
+            "original_date": original_date,
             "valid": not errors,
             "error": "; ".join(errors) if errors else None,
             "duplicate": False,
@@ -435,6 +449,7 @@ def _to_preview_row(r: dict) -> ImportPreviewRow:
         row=r["row_num"], market=r["market_label"], ticker=r["ticker"], date=r["date"],
         action=r["action"], shares=r["shares"], price=r["price"], valid=r["valid"],
         error=r["error"], duplicate=r["duplicate"], duplicate_reason=r["duplicate_reason"],
+        original_date=r["original_date"],
         portfolio=r["portfolio_label"], portfolio_id=r["portfolio_id"],
     )
 

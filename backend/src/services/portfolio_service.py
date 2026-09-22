@@ -9,7 +9,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache import dividend_sync_cache, quote_cache
-from markets import INDIAN_SUFFIXES, MARKET_META, apply_exchange, currency_of, market_of, normalize_market
+from markets import (
+    INDIAN_SUFFIXES, MARKET_META, apply_exchange, currency_of, market_of, normalize_market,
+    snap_to_session,
+)
 from models.portfolio import AuditEntry, Dividend, Holding, Portfolio, Transaction, WatchlistEntry
 from schemas.portfolio import (
     AuditEntrySummary, BulkPurchaseLot, BulkSaleLot, DividendEntry, PortfolioResponse, PortfolioStats, PositionAsOf,
@@ -508,17 +511,28 @@ async def get_holding_transactions(session: AsyncSession, portfolio_id: int, tic
     return await _fetch_transactions(session, holding.id)
 
 
-def _resolve_date(date: str | None) -> str:
+def _resolve_date(date: str | None, market: str | None = None) -> str:
     today = datetime.date.today()
     if date is None:
-        return today.isoformat()
-    try:
-        d = datetime.date.fromisoformat(date)
-    except ValueError:
-        raise ValueError(f"Invalid date '{date}'. Expected yyyy-mm-dd.")
-    if d > today:
-        raise ValueError("Transaction date cannot be in the future.")
-    return date
+        d = today
+    else:
+        try:
+            d = datetime.date.fromisoformat(date)
+        except ValueError:
+            raise ValueError(f"Invalid date '{date}'. Expected yyyy-mm-dd.")
+        if d > today:
+            raise ValueError("Transaction date cannot be in the future.")
+    return snap_to_session(market, d).isoformat() if market else d.isoformat()
+
+
+def _snap_date(day: str, market: str) -> str:
+    """Move an already-validated date onto a trading session.
+
+    Split from _resolve_date for the batch paths, which validate every row
+    before resolving the ticker so a bad date fails nothing halfway — the
+    market isn't known until after that.
+    """
+    return snap_to_session(market, datetime.date.fromisoformat(day)).isoformat()
 
 
 async def _resolve_ticker(session: AsyncSession, user_id: str, ticker: str, exchange: str | None) -> str:
@@ -570,7 +584,7 @@ async def add_stock_purchase(
     date: str | None = None, exchange: str | None = None,
 ) -> StockHolding:
     ticker = await _resolve_ticker(session, user_id, ticker, exchange)
-    txn_date = _resolve_date(date)
+    txn_date = _resolve_date(date, market_of(ticker))
     holding = await _fetch_holding(session, portfolio_id, ticker)
     is_new = holding is None
     if is_new:
@@ -631,6 +645,7 @@ async def add_stock_purchases_bulk(
     resolved_dates = [_resolve_date(lot.date) for lot in lots]
 
     ticker = await _resolve_ticker(session, user_id, ticker, exchange)
+    resolved_dates = [_snap_date(d, market_of(ticker)) for d in resolved_dates]
     holding = await _fetch_holding(session, portfolio_id, ticker)
     is_new = holding is None
     if is_new:
@@ -692,6 +707,8 @@ async def sell_stock_shares_bulk(
     holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
+    market = holding.market or market_of(ticker)
+    resolved_dates = [_snap_date(d, market) for d in resolved_dates]
 
     # Upfront guard: no sale date may precede the earliest buy.
     earliest_row = await session.execute(
@@ -743,6 +760,7 @@ async def sell_stock_shares(
     holding = await _fetch_holding(session, portfolio_id, ticker)
     if not holding:
         raise ValueError(f"No holding found for ticker: {ticker}")
+    txn_date = _snap_date(txn_date, holding.market or market_of(ticker))
 
     # Upfront guard: sell date must not precede the earliest buy.
     earliest_row = await session.execute(
