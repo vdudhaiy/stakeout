@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from yfinance.exceptions import YFRateLimitError
 
 from cache import quote_cache
-from models.portfolio import Holding, Transaction, WatchlistEntry
+from models.portfolio import Dividend, Holding, Transaction, WatchlistEntry
 from schemas.portfolio import BulkPurchaseLot, BulkSaleLot
 from services import portfolio_admin_service, portfolio_service
 
@@ -383,7 +383,7 @@ async def test_sell_exceeds_available_raises(aapl_session, pid):
 async def test_sell_before_earliest_buy_raises(aapl_session, pid):
     with pytest.raises(ValueError, match="before the earliest purchase"):
         await portfolio_service.sell_stock_shares(
-            aapl_session, USER_ID, pid, "AAPL", shares=10, sold_at=Decimal("200.0"), date="2023-12-31"
+            aapl_session, USER_ID, pid, "AAPL", shares=10, sold_at=Decimal("200.0"), date="2023-12-28"
         )
 
 
@@ -421,7 +421,7 @@ async def test_bulk_sell_exceeds_available_raises(aapl_session, pid):
 async def test_bulk_sell_before_earliest_buy_rolls_back_entire_batch(aapl_session, pid):
     lots = [
         BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2024-02-01"),
-        BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2023-12-31"),
+        BulkSaleLot(shares=10, sold_at=Decimal("200.0"), date="2023-12-28"),
     ]
     with pytest.raises(ValueError, match="before the earliest purchase"):
         await portfolio_service.sell_stock_shares_bulk(aapl_session, USER_ID, pid, "AAPL", lots)
@@ -598,6 +598,130 @@ async def test_get_portfolio_as_of_does_not_persist_changes(aapl_session):
 
 
 # ── audit log / undo ──────────────────────────────────────────────────────────
+
+# ── trade dates land on a trading session ────────────────────────────────
+#
+# The date column is free text. A weekend or holiday date has no price bar
+# behind it, which is what broke the performance chart — so the write path
+# now moves it onto the session it would have filled on.
+
+def _buy_patches():
+    return (
+        patch("services.portfolio_service._validate_and_fetch_name",
+              new_callable=AsyncMock, return_value="Apple Inc."),
+        patch("services.portfolio_service._current_price",
+              new_callable=AsyncMock, return_value=Decimal("175.0")),
+        patch("services.portfolio_service.asyncio.create_task"),
+    )
+
+
+async def _only_txn_date(session, ticker="AAPL"):
+    holding = (await session.execute(
+        select(Holding).where(Holding.ticker == ticker)
+    )).scalar_one()
+    txns = await portfolio_service._fetch_transactions(session, holding.id)
+    return txns[0].date
+
+
+async def test_a_weekend_buy_is_recorded_on_the_next_session(db_session, pid):
+    name, price, task = _buy_patches()
+    with name, price, task:
+        await portfolio_service.add_stock_purchase(
+            db_session, USER_ID, pid, "AAPL", shares=10, bought_at=Decimal("150.0"),
+            date="2024-01-06",  # a Saturday
+        )
+
+    assert await _only_txn_date(db_session) == "2024-01-08"  # the Monday
+
+
+async def test_a_holiday_buy_is_recorded_on_the_next_session(db_session, pid):
+    name, price, task = _buy_patches()
+    with name, price, task:
+        await portfolio_service.add_stock_purchase(
+            db_session, USER_ID, pid, "AAPL", shares=10, bought_at=Decimal("150.0"),
+            date="2024-01-15",  # Martin Luther King Jr. Day
+        )
+
+    assert await _only_txn_date(db_session) == "2024-01-16"
+
+
+async def test_a_buy_already_on_a_session_is_untouched(db_session, pid):
+    name, price, task = _buy_patches()
+    with name, price, task:
+        await portfolio_service.add_stock_purchase(
+            db_session, USER_ID, pid, "AAPL", shares=10, bought_at=Decimal("150.0"),
+            date="2024-01-16",
+        )
+
+    assert await _only_txn_date(db_session) == "2024-01-16"
+
+
+async def test_an_indian_buy_uses_the_indian_calendar(db_session, pid):
+    """NSE was shut for Republic Day; NYSE was open. Snapping an Indian
+    holding against the US calendar would leave it on a day with no bar."""
+    name, price, task = _buy_patches()
+    with name, price, task:
+        await portfolio_service.add_stock_purchase(
+            db_session, USER_ID, pid, "RELIANCE.NS", shares=10, bought_at=Decimal("2500.0"),
+            date="2026-01-26",
+        )
+
+    assert await _only_txn_date(db_session, "RELIANCE.NS") == "2026-01-27"
+
+
+async def test_a_bulk_buy_snaps_every_lot(db_session, pid):
+    name, price, task = _buy_patches()
+    lots = [
+        BulkPurchaseLot(shares=10, bought_at=Decimal("150.0"), date="2024-01-06"),  # Sat
+        BulkPurchaseLot(shares=5, bought_at=Decimal("160.0"), date="2024-01-16"),   # session
+    ]
+    with name, price, task:
+        await portfolio_service.add_stock_purchases_bulk(db_session, USER_ID, pid, "AAPL", lots)
+
+    holding = (await db_session.execute(
+        select(Holding).where(Holding.ticker == "AAPL")
+    )).scalar_one()
+    txns = await portfolio_service._fetch_transactions(db_session, holding.id)
+    assert sorted(t.date for t in txns) == ["2024-01-08", "2024-01-16"]
+
+
+async def test_a_weekend_sale_is_recorded_on_the_next_session(aapl_session, pid):
+    with patch("services.portfolio_service._current_price",
+               new_callable=AsyncMock, return_value=Decimal("200.0")):
+        await portfolio_service.sell_stock_shares(
+            aapl_session, USER_ID, pid, "AAPL", shares=10, sold_at=Decimal("200.0"),
+            date="2024-01-06",  # a Saturday
+        )
+
+    holding = (await aapl_session.execute(
+        select(Holding).where(Holding.ticker == "AAPL")
+    )).scalar_one()
+    txns = await portfolio_service._fetch_transactions(aapl_session, holding.id)
+    assert [t.date for t in txns if t.sale] == ["2024-01-08"]
+
+
+async def test_a_dividend_keeps_its_ex_date(db_session, pid):
+    """Ex-dates are already exchange dates and never feed the price axis, so
+    moving them would only falsify the record."""
+    name, price, task = _buy_patches()
+    with name, price, task:
+        await portfolio_service.add_stock_purchase(
+            db_session, USER_ID, pid, "AAPL", shares=10, bought_at=Decimal("150.0"),
+            date="2024-01-16",
+        )
+        await portfolio_service.add_dividend(
+            db_session, pid, "AAPL", date="2024-01-20",  # a Saturday, after the buy
+            amount_per_share=Decimal("1.0"),
+        )
+
+    holding = (await db_session.execute(
+        select(Holding).where(Holding.ticker == "AAPL")
+    )).scalar_one()
+    dividends = (await db_session.execute(
+        select(Dividend).where(Dividend.holding_id == holding.id)
+    )).scalars().all()
+    assert [d.date for d in dividends] == ["2024-01-20"]
+
 
 async def test_buy_logs_an_insert_audit_entry(db_session, pid):
     with patch("services.portfolio_service._validate_and_fetch_name",

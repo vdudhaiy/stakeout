@@ -19,10 +19,13 @@ market later is a one-dict change.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import pandas_market_calendars as mcal
+
+logger = logging.getLogger(__name__)
 
 MARKET_US = "US"
 MARKET_IN = "IN"
@@ -138,6 +141,49 @@ def is_market_open(market: str) -> bool:
         return False
     row = schedule.iloc[0]
     return bool(row["market_open"] <= pd.Timestamp(now) <= row["market_close"])
+
+
+# How far to search for a neighbouring session. Comfortably clears the
+# longest holiday cluster on either calendar (Christmas/New Year, Diwali).
+_SESSION_SEARCH_DAYS = 14
+
+
+def is_trading_day(market: str, day: date) -> bool:
+    """Whether `market`'s exchange held a session on `day`."""
+    try:
+        sessions = get_calendar(market).valid_days(start_date=day, end_date=day)
+        return len(sessions) > 0
+    except Exception as e:  # noqa: BLE001 — an unknown calendar is not a verdict
+        logger.warning("Trading-day check failed for %s on %s: %r", market, day, e)
+        return True
+
+
+def snap_to_session(market: str, day: date, today: date | None = None) -> date:
+    """The session a trade dated `day` belongs to.
+
+    Forward to the next open session, because an order placed while the
+    exchange is shut fills at the next one — and because that is the day the
+    performance chart first counts the shares. If the next session hasn't
+    happened yet (a weekend entry dated today), the previous one is used
+    instead rather than dating the trade into the future.
+
+    Returns `day` unchanged if no session can be found either way, so a
+    calendar gap can never block a trade.
+    """
+    today = today or date.today()
+    try:
+        cal = get_calendar(market)
+        window = timedelta(days=_SESSION_SEARCH_DAYS)
+        forward = [d.date() for d in cal.valid_days(start_date=day, end_date=day + window)]
+        if forward and forward[0] <= today:
+            return forward[0]
+        backward = [d.date() for d in cal.valid_days(start_date=day - window, end_date=day)]
+        if backward:
+            return backward[-1]
+        return forward[0] if forward else day
+    except Exception as e:  # noqa: BLE001 — never fail a trade over a calendar read
+        logger.warning("Could not snap %s to a %s session: %r", day, market, e)
+        return day
 
 
 def last_completed_trading_day(market: str) -> pd.Timestamp | None:
