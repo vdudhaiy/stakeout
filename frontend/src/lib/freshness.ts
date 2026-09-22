@@ -147,5 +147,5 @@ export const SOURCE_BLURB: Record<DataSource, string> = {
   live: 'Fetched from the data provider while loading this view.',
   cached: 'Served from the server cache. It was pulled from the provider at the time shown.',
   archive: 'Read from the stored price history rather than fetched live.',
-  stale: 'A previous copy — the live fetch failed (usually a provider rate limit), so the last good data is shown instead.',
+  stale: 'A previous copy — the live fetch failed, so the last good data is shown instead.',
 }
