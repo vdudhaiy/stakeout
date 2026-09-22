@@ -6,6 +6,7 @@ import { fetchPeers, fetchQuoteBatch } from '../api'
 import { displayTicker } from '../utils/market'
 import { Sparkline } from './Sparkline'
 import type { Quote } from '../types'
+import { FreshnessBadge } from './FreshnessBadge'
 
 interface Props {
   ticker: string
@@ -50,6 +51,7 @@ export function PeersPanel({ ticker, knownNames, onSelect, className }: Props) {
       <div className="flex items-center gap-2 mb-3">
         <Users size={13} className="text-indigo-400 shrink-0" />
         <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">PEER COMPANIES</p>
+        <span className="ml-auto"><FreshnessBadge path={`/peers/${ticker}`} /></span>
       </div>
 
       {error ? (

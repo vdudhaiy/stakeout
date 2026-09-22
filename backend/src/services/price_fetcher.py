@@ -6,37 +6,37 @@ import asyncio
 import os
 import logging
 import pandas as pd
-import pandas_market_calendars as mcal
 import yfinance as yf
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+
+from markets import MARKET_META, last_completed_trading_day, market_of
 
 from . import market_data_service, yf_guard
 
 logger = logging.getLogger(__name__)
 
 
-def _archive_end_date() -> str:
+def _archive_end_date(ticker: str | None = None) -> str:
     '''
-    Return the exclusive end date to pass to yfinance so that all completed NYSE
-    sessions are included and no partial (in-progress) candles are.
+    Return the exclusive end date to pass to yfinance so that all completed
+    sessions of `ticker`'s own market are included and no partial ones are.
 
-    yfinance end is exclusive, so to include the last completed trading day D we
-    need end = D + 1 calendar day. We determine D by comparing each session's
-    market_close (UTC-aware, from pandas_market_calendars) against UTC now —
-    identical logic to the dashboard's _last_completed_trading_day().
+    yfinance end is exclusive, so to include the last completed trading day D
+    we need end = D + 1 calendar day.
+
+    The market matters. This used to ask the NYSE calendar for every ticker,
+    while the staleness check that decides whether to call at all
+    (stock_service.ensure_archive_current) asks the ticker's own calendar.
+    For an Indian ticker those disagree for the ~10 hours between the NSE
+    close and the NYSE close: the archive was judged stale for today, the
+    download was capped at yesterday, Yahoo correctly returned nothing, and
+    that counted as a definitive answer — so the ticker's one attempt for the
+    day was spent and NSE history sat permanently a session behind.
     '''
-    nyse = mcal.get_calendar('NYSE')
-    now_utc = datetime.now(timezone.utc)
-    schedule = nyse.schedule(
-        start_date=(now_utc - timedelta(days=10)).date(),
-        end_date=now_utc.date(),
-    )
-    if schedule.empty:
-        return now_utc.strftime('%Y-%m-%d')
-    closed = schedule[schedule['market_close'] <= pd.Timestamp(now_utc)]
-    if closed.empty:
-        return now_utc.strftime('%Y-%m-%d')
-    last_completed = pd.Timestamp(closed.index[-1].date())
+    market = market_of(ticker) if ticker else 'US'
+    last_completed = last_completed_trading_day(market)
+    if last_completed is None:
+        return datetime.now(timezone.utc).strftime('%Y-%m-%d')
     return (last_completed + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
 
@@ -53,16 +53,19 @@ def _synthesise_daily_from_hourly(ticker: str, date: pd.Timestamp) -> dict | Non
     '''
     Reconstruct a daily OHLCV bar from hourly data for a completed trading day
     where the Yahoo Finance daily bar still shows NaN.
-    yf.Ticker.history returns tz-aware (America/New_York) index so between_time
-    compares local ET time, correctly bounding the regular session.
+    yf.Ticker.history returns a tz-aware index in the *exchange's* local time,
+    so between_time is bounded by that market's own session rather than a
+    hardcoded 09:30-16:00 — which on an NSE ticker clipped the first fifteen
+    minutes of the day and took the session's real open with it.
     '''
+    session_open, session_close = MARKET_META[market_of(ticker)]['sessions']['regular']
     try:
         start = date.strftime('%Y-%m-%d')
         end = (date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
         hourly = yf.Ticker(ticker).history(interval='1h', start=start, end=end)
         if hourly.empty:
             return None
-        regular = hourly.between_time('09:30', '16:00')
+        regular = hourly.between_time(session_open, session_close)
         if regular.empty:
             return None
         return {
@@ -79,25 +82,19 @@ def _synthesise_daily_from_hourly(ticker: str, date: pd.Timestamp) -> dict | Non
 
 def _patch_nan_daily_bars(ticker: str, data: pd.DataFrame) -> tuple[pd.DataFrame, set]:
     '''
-    For each completed NYSE trading day in `data` whose Close is NaN, attempt to
+    For each completed trading day in `data` whose Close is NaN, attempt to
     reconstruct the daily OHLCV from hourly data and patch it in place.
     Dates beyond the last fully-closed session are left untouched.
+
+    "Completed" is judged against `ticker`'s own market, for the same reason
+    as _archive_end_date.
 
     Returns the patched DataFrame plus the set of dates that were synthesised
     (the caller tags those rows with a distinct `source` on upsert).
     '''
-    nyse = mcal.get_calendar('NYSE')
-    now_utc = datetime.now(timezone.utc)
-    schedule = nyse.schedule(
-        start_date=(now_utc - timedelta(days=10)).date(),
-        end_date=now_utc.date(),
-    )
-    if schedule.empty:
+    last_completed = last_completed_trading_day(market_of(ticker))
+    if last_completed is None:
         return data, set()
-    closed = schedule[schedule['market_close'] <= pd.Timestamp(now_utc)]
-    if closed.empty:
-        return data, set()
-    last_completed = pd.Timestamp(closed.index[-1].date())
 
     nan_mask = data['Close'].isna() & (data.index <= last_completed)
     if not nan_mask.any():
@@ -147,7 +144,7 @@ async def fetch_historical_price_data(ticker, start_date=None, end_date=None, in
     if start_date is None:
         start_date = pd.Timestamp(os.getenv("ARCHIVE_START_DATE", "2023-01-01")).strftime("%Y-%m-%d")
     if end_date is None:
-        end_date = _archive_end_date()
+        end_date = _archive_end_date(ticker)
 
     try:
         # Behind the backoff like every other yfinance call. This is the
@@ -211,7 +208,7 @@ async def append_price_data(ticker) -> bool:
         start = max(archive_start, pd.Timestamp(last_archived) - pd.Timedelta(days=_REFRESH_OVERLAP_DAYS))
 
     start_date = start.strftime("%Y-%m-%d")
-    end_date = _archive_end_date()
+    end_date = _archive_end_date(ticker)
 
     if start_date >= end_date:
         # Nothing has closed since the newest archived bar — the caller's

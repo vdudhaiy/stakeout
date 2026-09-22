@@ -11,6 +11,7 @@ import { GrowthChart } from './GrowthChart'
 import { ValueChart } from './ValueChart'
 import { StatTile } from './StatTile'
 import { InfoTip } from '../InfoTip'
+import { FreshnessBadge } from '../FreshnessBadge'
 
 const RANGES: Array<{ value: PerformanceRange; label: string }> = [
   { value: '1y', label: '1Y' },
@@ -269,6 +270,11 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
         )}
       >
         PERFORMANCE <InfoTip k="xirr" />
+        {open && (
+          <span onClick={e => e.stopPropagation()} className="normal-case tracking-normal">
+            <FreshnessBadge path="/performance/" align="left" />
+          </span>
+        )}
         {!open && summary && (
           <span className={clsx(
             'ml-auto font-mono normal-case tracking-normal',

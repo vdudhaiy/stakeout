@@ -36,7 +36,7 @@ dependencies = [
 # this list against the directory so the next flat module can't slip through.
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["auth", "cache", "config", "database", "main", "markets", "rate_limit"]
+py-modules = ["auth", "cache", "config", "database", "freshness", "main", "markets", "rate_limit"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

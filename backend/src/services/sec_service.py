@@ -19,6 +19,8 @@ import httpx
 
 from cache import sec_ticker_cache
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -33,7 +35,7 @@ async def _ticker_map() -> dict[str, str]:
     Empty dict on any fetch failure — callers treat that the same as "not
     found" rather than raising, since this is only ever a fallback.
     """
-    cached = sec_ticker_cache.get(_CACHE_KEY)
+    cached = sec_ticker_cache.get_stamped(_CACHE_KEY, freshness.CACHED, label="sec-registry")
     if cached is not None:
         return cached
 
@@ -51,6 +53,7 @@ async def _ticker_map() -> dict[str, str]:
         for row in data.values()
         if row.get("ticker") and row.get("title")
     }
+    freshness.stamp(freshness.LIVE, label="sec-registry")
     sec_ticker_cache.set(_CACHE_KEY, mapping)
     return mapping
 

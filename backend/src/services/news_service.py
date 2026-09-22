@@ -42,6 +42,8 @@ import httpx
 from cache import news_cache
 from markets import MARKET_IN, MARKET_US, market_of
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 _GDELT = "https://api.gdeltproject.org/api/v2/doc/doc"
@@ -229,7 +231,7 @@ async def get_market_news(region: str = "all", limit: int = 12) -> dict:
     """Headlines for the stock market at large. US and India are prioritized."""
     region = region.lower()
     key = f"market:{region}:{limit}"
-    cached = news_cache.get(key)
+    cached = news_cache.get_stamped(key, freshness.CACHED, label="news")
     if cached is not None:
         return cached
 
@@ -304,6 +306,7 @@ async def get_market_news(region: str = "all", limit: int = 12) -> dict:
     # failing/rate-limiting at once is transient, and caching it would blank
     # headlines for 15 minutes instead of retrying on the next request.
     if deduped:
+        freshness.stamp(freshness.LIVE, label="news")
         news_cache.set(key, result)
     return result
 
@@ -332,7 +335,7 @@ async def get_stock_news(
     """
     ticker = ticker.upper()
     key = f"stock:{ticker}:{limit}"
-    cached = news_cache.get(key)
+    cached = news_cache.get_stamped(key, freshness.CACHED, label="news")
     if cached is not None:
         return cached
 
@@ -441,5 +444,6 @@ async def get_stock_news(
     # Same reasoning as get_market_news: don't lock in an empty result for
     # the full TTL when every layer above came back empty.
     if articles:
+        freshness.stamp(freshness.LIVE, label="news")
         news_cache.set(key, result)
     return result

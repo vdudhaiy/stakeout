@@ -25,6 +25,8 @@ from database import SessionLocal, _IS_SQLITE
 from models.peers import CompanyPeers
 from services import finnhub_client
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 # How stale a DB row can be before we bother asking Finnhub for a fresh
@@ -82,17 +84,23 @@ async def get_peers(ticker: str) -> list[str]:
     Finnhub is down or the quota's spent for this minute) -> empty list.
     """
     symbol = ticker.upper()
-    cached = _peers_cache.get(symbol)
+    cached = _peers_cache.get_stamped(symbol, freshness.CACHED, label="peers")
     if cached is not None:
         return cached
 
     row = await _read_row(symbol)
     if row is not None and _is_fresh(row):
-        _peers_cache.set(symbol, row.peers)
+        # The DB row's own fetch time is carried into the memo, so a cache hit
+        # on the next request reports when Finnhub was actually called rather
+        # than when this process happened to re-shelve the value.
+        stored_at = _epoch_of(row.fetched_at)
+        freshness.stamp(freshness.ARCHIVE, fetched_at=row.fetched_at, label="peers")
+        _peers_cache.set(symbol, row.peers, stored_at=stored_at)
         return row.peers
 
     fresh = await _fetch_from_finnhub(symbol)
     if fresh is not None:
+        freshness.stamp(freshness.LIVE, label="peers")
         await _save(symbol, fresh)
         _peers_cache.set(symbol, fresh)
         return fresh
@@ -100,7 +108,19 @@ async def get_peers(ticker: str) -> list[str]:
     # Finnhub didn't come through this time — fall back to whatever's on
     # record, however old, rather than showing nothing.
     if row is not None:
-        _peers_cache.set(symbol, row.peers)
+        freshness.stamp(freshness.STALE, fetched_at=row.fetched_at, label="peers")
+        _peers_cache.set(symbol, row.peers, stored_at=_epoch_of(row.fetched_at))
         return row.peers
 
     return []
+
+
+def _epoch_of(value) -> float | None:
+    """A DB timestamp as a POSIX float, or None if it can't be read."""
+    if value is None:
+        return None
+    try:
+        stamped = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return stamped.timestamp()
+    except Exception:  # noqa: BLE001 — provenance is optional, the data is not
+        return None

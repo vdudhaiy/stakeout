@@ -19,6 +19,8 @@ import httpx
 
 from cache import fx_cache
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 SUPPORTED = {"USD", "INR"}
@@ -70,7 +72,7 @@ async def get_rate(base: str, quote: str) -> dict:
         return {"base": base, "quote": quote, "rate": 1.0, "source": "identity"}
 
     key = f"{base}/{quote}"
-    cached = fx_cache.get(key)
+    cached = fx_cache.get_stamped(key, freshness.CACHED, label="fx")
     if cached is not None:
         return cached
 
@@ -86,6 +88,7 @@ async def get_rate(base: str, quote: str) -> dict:
             continue
         if rate and rate > 0:
             result = {"base": base, "quote": quote, "rate": rate, "source": source}
+            freshness.stamp(freshness.LIVE, label="fx")
             fx_cache.set(key, result)
             # Cache the inverse too — saves a round-trip when the user flips
             fx_cache.set(

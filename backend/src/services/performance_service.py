@@ -47,6 +47,8 @@ from models.portfolio import Dividend, Holding, Transaction
 from schemas.performance import PerformancePoint, PerformanceResponse, ReturnSummary
 from . import index_service, market_data_service, returns_math, stock_service
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 # Window presets. "max" means "since the first transaction".
@@ -202,6 +204,24 @@ def _summarize(
     )
 
 
+# Concurrent archive top-ups allowed at once. Unbounded gather here fired one
+# history download per held ticker simultaneously — the exact burst shape
+# refresh_all_archives spaces out on purpose, undone by any twenty-name
+# portfolio whose archive happened to be cold.
+_TOP_UP_CONCURRENCY = 2
+
+
+async def _top_up_archives(tickers: list[str]) -> None:
+    """Bring every held ticker's archive current, a couple at a time."""
+    limit = asyncio.Semaphore(_TOP_UP_CONCURRENCY)
+
+    async def _one(ticker: str) -> None:
+        async with limit:
+            await stock_service.ensure_archive_current(ticker)
+
+    await asyncio.gather(*(_one(t) for t in tickers))
+
+
 async def _archive_is_behind(tickers: list[str]) -> bool:
     """Whether any held ticker's archive stops short of the last completed
     session. Only consulted when there's nothing to chart, to say which of
@@ -308,12 +328,15 @@ async def get_performance(
     range_key = range_key if range_key in RANGES else DEFAULT_RANGE
     key = _cache_key(user_id, market, portfolio_id, range_key)
 
-    cached = performance_cache.get(key)
+    cached = performance_cache.get_stamped(key, freshness.CACHED, label="performance")
     if cached is not None:
         return cached
 
     async def _load() -> PerformanceResponse:
         result = await _compute(session, user_id, market, portfolio_id, portfolio_name, range_key)
+        # The compute itself is stamped by what it read (the archive, mostly);
+        # this only marks that the cached copy was produced now.
+        freshness.stamp(freshness.LIVE, label="performance")
         performance_cache.set(key, result, _CACHE_TTL)
         return result
 
@@ -346,7 +369,7 @@ async def _compute(
     # inside its own window, which reads as "no history" when it is really
     # "not fetched yet". Gap-only, marker-guarded and coalesced (see
     # stock_service.ensure_archive_current), so this is normally a no-op.
-    await asyncio.gather(*(stock_service.ensure_archive_current(t) for t in tickers))
+    await _top_up_archives(tickers)
     # One query for every held symbol, and from the window start rather than
     # all of history — a "1y" view must not drag a decade of rows out of the
     # archive to throw them away.

@@ -29,6 +29,7 @@ import { PeersPanel } from './components/PeersPanel'
 import { CompanyLogo } from './components/CompanyLogo'
 import { TickerTape } from './components/TickerTape'
 import { InfoTip } from './components/InfoTip'
+import { FreshnessBadge } from './components/FreshnessBadge'
 import { SignInGate } from './components/SignInGate'
 import { PasswordRecoveryModal } from './components/PasswordRecoveryModal'
 import { useAuth } from './contexts/AuthContext'
@@ -81,7 +82,6 @@ export default function App() {
   const [marketOpen, setMarketOpen] = useState<boolean | null>(null)
   const [marketOpenIN, setMarketOpenIN] = useState<boolean | null>(null)
   const [currentData, setCurrentData] = useState<OHLCV | null>(null)
-  const [currentFetchedAt, setCurrentFetchedAt] = useState<Date | null>(null)
   const [currentLoading, setCurrentLoading] = useState(false)
   const [showMarketHours, setShowMarketHours] = useState(false)
   const [epsHistory, setEpsHistory] = useState<EPSHistoryRow[] | null>(null)
@@ -131,7 +131,6 @@ export default function App() {
     return fetchCurrentStock(ticker)
       .then(res => {
         setCurrentData(res.data[0] ?? null)
-        setCurrentFetchedAt(new Date())
       })
       .catch(() => {})
       .finally(() => setCurrentLoading(false))
@@ -139,7 +138,6 @@ export default function App() {
 
   useEffect(() => {
     setCurrentData(null)
-    setCurrentFetchedAt(null)
 
     loadCurrent()
 
@@ -532,10 +530,14 @@ export default function App() {
 
                   {(latest ?? currentData) && (
                     <div className="flex items-center gap-1.5 mt-1">
+                      {/* Provenance comes from the backend, never a client
+                          clock: this label used to read `new Date()` at the
+                          moment the response landed, which reported a quote
+                          cached server-side an hour ago as "Live · now". */}
+                      <FreshnessBadge path={`/stocks/${ticker}/current`} label="Price" align="left" />
+                      <span className="text-zinc-600 text-xs">·</span>
                       <p className="text-zinc-500 text-xs">
-                        {tickerMarketOpen && currentFetchedAt
-                          ? `Live · ${currentFetchedAt.toLocaleTimeString()}`
-                          : `Last updated ${latest?.date ?? ''}`}
+                        Last close {latest?.date ?? ''}
                       </p>
                       <button
                         onClick={loadCurrent}
@@ -713,8 +715,13 @@ export default function App() {
                 <>
                   <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 sm:p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                      <p className="text-[0.625rem] text-zinc-500 tracking-widest font-medium">
+                      <p className="flex items-center gap-2 text-[0.625rem] text-zinc-500 tracking-widest font-medium">
                         {chartType === 'candle' ? 'PRICE' : 'CLOSE PRICE'}
+                        {/* The chart is served from the shared archive, which
+                            a provider rate limit can leave days behind while
+                            still rendering as a complete, current-looking
+                            series. This is where that becomes visible. */}
+                        {days > 0 && <FreshnessBadge path={`/stocks/${ticker}`} align="left" />}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         {days === 0 && chartData.length > 0 && (() => {

@@ -32,6 +32,8 @@ from database import SessionLocal, _IS_SQLITE
 from models.index_history import IndexHistory, IndexHistoryRefresh
 from . import yf_guard
 
+import freshness
+
 logger = logging.getLogger(__name__)
 
 # (symbol, display name, region). Order here is the display order.
@@ -112,12 +114,17 @@ async def get_major_indices() -> dict:
     failing the whole response — a partially rendered strip beats an error
     banner.
     """
-    cached = index_cache.get(_CACHE_KEY)
+    cached = index_cache.get_stamped(_CACHE_KEY, freshness.CACHED, label="indices")
     if cached is not None:
         return cached
 
+    stale_at = index_cache.stored_at(_STALE_KEY)
     stale = index_cache.get(_STALE_KEY)
     if stale is not None:
+        # Reported with the *previous* fetch's timestamp, not this request's:
+        # the refresh kicked off below hasn't answered yet, so the levels
+        # being handed back are exactly as old as they look.
+        freshness.stamp(freshness.STALE, fetched_at=stale_at, label="indices")
         # Stale-while-revalidate. This is the public home page's first paint,
         # and six sequential-ish yfinance history calls is a visible stall to
         # wear every ten minutes for numbers that barely moved. Hand back the
@@ -146,6 +153,7 @@ async def _refresh() -> dict:
     # otherwise blank the home page strip, and leaving the stale entry in
     # place means the next caller still gets real numbers.
     if indices:
+        freshness.stamp(freshness.LIVE, label="indices")
         index_cache.set(_CACHE_KEY, result)
         index_cache.set(_STALE_KEY, result, _STALE_TTL)
     return result

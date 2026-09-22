@@ -189,10 +189,11 @@ async def add_stock(ticker: str):
 # hits DELETE /watchlist/{ticker}; removing a holding hits DELETE
 # /portfolio/{ticker}), so disabling it costs nothing today.
 #
-# Before re-enabling: require auth AND only delete when no Holding or
-# WatchlistEntry in any user still references the symbol — i.e. make it a
-# garbage-collect of orphaned archive rows, not an unconditional wipe.
-# services.stock_service.delete_stock is left in place for that.
+# services.stock_service.delete_stock now enforces the second half of that
+# itself — it refuses while any Holding or WatchlistEntry in any user still
+# references the symbol, making it a garbage-collect of orphaned archive rows
+# rather than an unconditional wipe. Re-enabling this route would still need
+# an auth dependency on top.
 #
 # @router.delete("/{ticker}")
 # async def delete_stock(ticker: str):
