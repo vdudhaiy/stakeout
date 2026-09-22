@@ -426,17 +426,29 @@ async def _flag_duplicates(session: AsyncSession, rows: list[dict]) -> None:
     seen_in_file: dict[tuple[int, str], dict[tuple, int]] = {}  # -> {signature: first row_num}
     for r in valid_rows:
         key = (r["portfolio_id"], r["ticker"])
-        sig = (r["date"], r["action"], r["shares"], r["price"])
-
-        if sig in existing.get(key, ()):
+        # Match on the snapped date *and* the one the file gave. Transactions
+        # written before dates were snapped are stored off-session, so
+        # comparing only the snapped date would miss them and re-import the
+        # same trade a second time.
+        candidates = {
+            (day, r["action"], r["shares"], r["price"])
+            for day in (r["date"], r["original_date"]) if day
+        }
+        already = candidates & existing.get(key, set())
+        if already:
+            matched_date = sorted(already)[0][0]
             r["duplicate"] = True
             r["duplicate_reason"] = (
                 f"Matches a transaction you already have — {r['action']} {r['shares']} {r['ticker']} "
-                f"@ {r['price']} on {r['date']}."
+                f"@ {r['price']} on {matched_date}."
             )
             continue
 
+        # Within one file, two rows are duplicates only if the file itself
+        # said the same thing — a Saturday and a Sunday row snap to the same
+        # session but are not the same trade.
         file_sigs = seen_in_file.setdefault(key, {})
+        sig = (r["original_date"] or r["date"], r["action"], r["shares"], r["price"])
         if sig in file_sigs:
             r["duplicate"] = True
             r["duplicate_reason"] = f"Duplicate of row {file_sigs[sig]} in this file."

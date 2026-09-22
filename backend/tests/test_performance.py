@@ -439,6 +439,64 @@ async def test_a_first_buy_on_a_closed_day_is_capital_not_an_opening_position(db
     assert result.unrealized_gains == pytest.approx(Decimal("200"))
 
 
+async def test_a_sale_before_the_first_archived_session_still_counts_as_realized(
+    db_session, pid, caplog,
+):
+    """At inception nothing precedes the window, so a buy and a sell on closed
+    days before the first bar are both inside it. Dropping the sale from
+    `realized` while its proceeds stayed in `net_invested` broke the identity
+    the reconciliation checks, on a perfectly ordinary history."""
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 8, skip={0, 1})   # no bar until the third day
+    buy_day, sell_day = start, start + timedelta(days=1)
+
+    # Written the way _replay_fifo leaves them — the sell carries the FIFO
+    # cost of the shares it consumed, and the buy's lot is drawn down. The
+    # shared _add_holding helper zeroes both, which is fine for a value series
+    # but not for anything that has to reconcile.
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", market="US",
+        company_name="AAPL", shares=10, sold_shares=10, average_cost=Decimal("100"),
+    )
+    db_session.add(holding)
+    await db_session.flush()
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=False, date=buy_day.isoformat(), shares=20,
+        bought_at=Decimal("100"), sold_at=Decimal(0), shares_remaining=10,
+    ))
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=True, date=sell_day.isoformat(), shares=10,
+        bought_at=Decimal("100"), sold_at=Decimal("130"), shares_remaining=0,
+    ))
+    await db_session.commit()
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with caplog.at_level("WARNING"), closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.realized_gains == pytest.approx(Decimal("300"))   # (130-100) x 10
+    assert result.net_invested == pytest.approx(Decimal("700"))     # 2000 paid - 1300 back
+    assert "does not reconcile" not in caplog.text
+
+
+async def test_a_dividend_before_the_first_archived_session_counts_at_inception(
+    db_session, pid,
+):
+    start = date(2024, 1, 1)
+    axis = _gapped(start, 40, skip={0, 1})
+    await _add_holding(
+        db_session, pid, "AAPL",
+        transactions=[(False, start, 10, 100.0)],
+        dividends=[(start + timedelta(days=1), 2.0, 10)],
+    )
+
+    closes, index, topup, behind = _mock_data({"AAPL": _flat(axis, 100.0)}, _flat(axis, 4000.0))
+    with closes, index, topup, behind:
+        result = await performance_service.get_performance(db_session, USER_ID, "US")
+
+    assert result.total_dividends == pytest.approx(Decimal("20"))
+
+
 # ── reconciliation tripwire ───────────────────────────────────────────────
 
 async def test_a_healthy_portfolio_reconciles_silently(db_session, pid, caplog):

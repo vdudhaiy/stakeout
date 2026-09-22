@@ -17,6 +17,7 @@ from unittest.mock import patch, AsyncMock
 import pandas as pd
 import pytest
 
+from models.portfolio import Holding, Transaction
 from schemas.portfolio import ImportApplyRow
 from services import import_service
 
@@ -413,6 +414,71 @@ async def test_preview_flags_duplicate_against_existing_transaction(db_session, 
     preview2 = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", second)
     assert preview2.rows[0].duplicate is True
     assert "already have" in preview2.rows[0].duplicate_reason
+
+
+async def test_a_legacy_off_session_transaction_is_still_recognised_as_a_duplicate(
+    db_session, pid, _mock_yfinance,
+):
+    """Transactions written before dates were snapped sit on the date the file
+    gave. Comparing only the snapped date would miss them, and re-importing
+    the same broker export would record every weekend trade twice."""
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", company_name="Apple Inc.",
+        market="US", shares=10, sold_shares=0, average_cost=Decimal("150.0"),
+    )
+    db_session.add(holding)
+    await db_session.flush()
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=False, date="2024-01-06",  # a Saturday, stored as-is
+        shares=10, bought_at=Decimal("150.00"), shares_remaining=10,
+    ))
+    await db_session.commit()
+
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"]])
+    preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    row = preview.rows[0]
+    assert row.date == "2024-01-08"        # still snapped for the write
+    assert row.original_date == "2024-01-06"
+    assert row.duplicate is True
+    assert "2024-01-06" in row.duplicate_reason
+
+
+async def test_a_snapped_transaction_is_recognised_on_re_import(db_session, pid, _mock_yfinance):
+    """The other direction: once a trade is stored on its snapped date, the
+    same file must still match it."""
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", company_name="Apple Inc.",
+        market="US", shares=10, sold_shares=0, average_cost=Decimal("150.0"),
+    )
+    db_session.add(holding)
+    await db_session.flush()
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=False, date="2024-01-08",  # already snapped
+        shares=10, bought_at=Decimal("150.00"), shares_remaining=10,
+    ))
+    await db_session.commit()
+
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"]])
+    preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    assert preview.rows[0].duplicate is True
+
+
+async def test_two_rows_on_different_closed_days_are_not_each_others_duplicate(
+    db_session, _mock_yfinance,
+):
+    """A Saturday and a Sunday row snap to the same session but are two
+    trades, so the in-file check compares what the file actually said."""
+    content = _csv([
+        _HEADER,
+        ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"],  # Saturday
+        ["US", "AAPL", "2024-01-07", "10", "buy", "150.00"],  # Sunday
+    ])
+    preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    assert [r.date for r in preview.rows] == ["2024-01-08", "2024-01-08"]
+    assert all(r.duplicate is False for r in preview.rows)
 
 
 async def test_preview_never_flags_invalid_rows_as_duplicate(db_session, _mock_yfinance):

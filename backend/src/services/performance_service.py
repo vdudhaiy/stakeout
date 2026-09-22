@@ -468,6 +468,19 @@ async def _compute(
     # windowed return and makes the benchmark look worse than it was.
     # For the "max" window nothing was held beforehand, so this is 0.
     from_inception = start <= first_transaction
+
+    def _in_window(day: date) -> bool:
+        """Does `day` belong to this window's figures?
+
+        At inception a date before the first session is the first trade on a
+        closed day, which _project_flows already counts on axis[0]; excluding
+        it here would drop a real sale from `realized` and break the
+        reconciliation for a perfectly valid history.
+        """
+        if day > axis[-1]:
+            return False
+        return day >= axis[0] or from_inception
+
     values = [0.0] * len(axis)
     opening_value = 0.0
     day_before = axis[0] - timedelta(days=1)
@@ -550,9 +563,9 @@ async def _compute(
             day = _parse(d.date)
             # Windowed, like every other figure here. Summing all of them
             # reported a lifetime of income against a one-year return.
-            if axis[0] <= day <= axis[-1]:
+            if _in_window(day):
                 total_dividends += d.total_amount
-                xirr_flows.append((day, float(d.total_amount)))
+                xirr_flows.append((max(day, axis[0]), float(d.total_amount)))
 
     xirr_flows.append((axis[-1], values[-1]))
 
@@ -595,7 +608,7 @@ async def _compute(
             # `bought_at` on a sell row is the FIFO cost of the shares it
             # consumed (set by the replay in portfolio_service). Windowed for
             # the same reason as the dividends above.
-            if t.sale and axis[0] <= _parse(t.date) <= axis[-1]:
+            if t.sale and _in_window(_parse(t.date)):
                 realized += (t.sold_at - t.bought_at) * t.shares
 
     _reconcile(priced, net_invested, realized, excluded, from_inception, axis)

@@ -903,7 +903,11 @@ function DividendModal({ mode, ticker, currency, entry, onClose, onSubmit }: Div
 type ImportSummaryRow = Omit<ImportRowResult, 'action'> & { action: string }
 type ImportSummary = Omit<PortfolioImportResult, 'rows'> & { rows: ImportSummaryRow[] }
 
-/** Tells the user which import rows had their date moved onto a session. */
+/** Tells the user which imported rows had their date moved onto a session.
+ *
+ * Direction-neutral on purpose: the server moves a date forward to the next
+ * open session, but a closed date entered *today* goes back to the previous
+ * one instead of into the future. The per-row lines below show which way. */
 function MovedDatesNotice({ rows }: { rows: ImportPreviewRow[] }) {
   const [open, setOpen] = useState(false)
 
@@ -917,11 +921,11 @@ function MovedDatesNotice({ rows }: { rows: ImportPreviewRow[] }) {
         <CalendarClock size={15} className="text-indigo-400 shrink-0 mt-0.5" />
         <div className="space-y-1 min-w-0">
           <p className="text-xs font-semibold text-indigo-300">
-            {rows.length} date{rows.length !== 1 ? 's' : ''} moved to the next trading day
+            {rows.length} date{rows.length !== 1 ? 's' : ''} moved to a trading session
           </p>
           <p className="text-xs text-zinc-400 leading-relaxed">
             Those rows fell on a weekend or market holiday, which has no closing price
-            behind it. They were recorded on the session the trade would have filled on.
+            behind it. They were recorded on the nearest session instead.
           </p>
         </div>
         <motion.span
@@ -987,10 +991,13 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
   // loud: the stored date won't match the file, and a silent change to a
   // transaction record is the kind of thing that erodes trust in the whole
   // import.
-  const movedRows = useMemo(
-    () => (previewRows ?? []).filter(r => r.original_date && r.valid),
-    [previewRows],
-  )
+  const movedRows = useMemo(() => {
+    if (!result) return []
+    const imported = new Set(
+      result.rows.filter(r => r.status === 'imported').map(r => r.row),
+    )
+    return (previewRows ?? []).filter(r => r.original_date && imported.has(r.row))
+  }, [previewRows, result])
 
   async function runApply(rows: ImportPreviewRow[], finalDecisions: Map<number, boolean>) {
     setApplying(true)
