@@ -17,6 +17,7 @@ from unittest.mock import patch, AsyncMock
 import pandas as pd
 import pytest
 
+from models.portfolio import Holding, Transaction
 from schemas.portfolio import ImportApplyRow
 from services import import_service
 
@@ -98,7 +99,7 @@ def test_read_table_picks_the_transaction_sheet_out_of_a_multi_sheet_workbook():
 # ── _read_table: optional header ──────────────────────────────────────────────
 
 def test_read_table_detects_header_row():
-    content = _csv([_HEADER, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"]])
     df, had_header = import_service._read_table("portfolio.csv", content)
     assert had_header is True
     assert len(df) == 1
@@ -106,7 +107,7 @@ def test_read_table_detects_header_row():
 
 
 def test_read_table_detects_missing_header_and_uses_positional_columns():
-    content = _csv([["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])  # no header row
+    content = _csv([["US", "AAPL", "2024-01-16", "10", "buy", "150.00"]])  # no header row
     df, had_header = import_service._read_table("portfolio.csv", content)
     assert had_header is False
     assert list(df.columns) == import_service._DEFAULT_COLUMN_ORDER
@@ -117,14 +118,14 @@ def test_read_table_detects_missing_header_and_uses_positional_columns():
 def test_read_table_header_aliases_still_detected():
     content = _csv([
         ["Market (US/IND)", "Stock (Ticker)", "Date", "Number", "Buy/Sell", "Price"],
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],
     ])
     _df, had_header = import_service._read_table("portfolio.csv", content)
     assert had_header is True
 
 
 def test_read_table_headerless_xlsx():
-    content = _xlsx_no_header([["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])
+    content = _xlsx_no_header([["US", "AAPL", "2024-01-16", "10", "buy", "150.00"]])
     df, had_header = import_service._read_table("portfolio.xlsx", content)
     assert had_header is False
     assert df.iloc[0]["ticker"] == "AAPL"
@@ -133,15 +134,15 @@ def test_read_table_headerless_xlsx():
 # ── _parse_date ──────────────────────────────────────────────────────────────
 
 def test_parse_date_accepts_iso_format():
-    iso, error = import_service._parse_date("2024-01-15")
+    iso, error = import_service._parse_date("2024-01-16")
     assert error is None
-    assert iso == "2024-01-15"
+    assert iso == "2024-01-16"
 
 
 def test_parse_date_accepts_us_slash_format():
-    iso, error = import_service._parse_date("01/15/2024")
+    iso, error = import_service._parse_date("01/16/2024")
     assert error is None
-    assert iso == "2024-01-15"
+    assert iso == "2024-01-16"
 
 
 def test_parse_date_rejects_future_date():
@@ -170,10 +171,62 @@ def test_parse_rows_missing_required_column_raises():
         import_service._parse_rows(df, had_header=True)
 
 
+# ── broker exports land on trading sessions ──────────────────────────────
+#
+# Statement and settlement dates routinely fall on weekends. A date with no
+# price bar behind it breaks the performance chart silently, so the import
+# moves it and says so rather than importing it as given.
+
+def _one_row(day: str, market: str = "US", ticker: str = "AAPL") -> dict:
+    df = pd.read_csv(io.BytesIO(_csv([
+        _HEADER, [market, ticker, day, "10", "buy", "150.00"],
+    ])), dtype=str, keep_default_na=False)
+    return import_service._parse_rows(df, had_header=True)[0]
+
+
+def test_a_weekend_row_is_moved_to_the_next_session():
+    r = _one_row("2024-01-06")  # a Saturday
+    assert r["date"] == "2024-01-08"
+    assert r["original_date"] == "2024-01-06"
+    assert r["valid"] is True  # moved, not rejected
+
+
+def test_a_holiday_row_is_moved_to_the_next_session():
+    r = _one_row("2024-01-15")  # Martin Luther King Jr. Day
+    assert r["date"] == "2024-01-16"
+    assert r["original_date"] == "2024-01-15"
+
+
+def test_a_row_already_on_a_session_is_not_flagged_as_moved():
+    r = _one_row("2024-01-16")
+    assert r["date"] == "2024-01-16"
+    assert r["original_date"] is None
+
+
+def test_an_indian_row_is_moved_on_the_indian_calendar():
+    r = _one_row("2026-01-26", market="IND", ticker="RELIANCE")  # Republic Day
+    assert r["date"] == "2026-01-27"
+    assert r["original_date"] == "2026-01-26"
+
+
+def test_an_unparseable_date_is_still_an_error_not_a_move():
+    r = _one_row("not-a-date")
+    assert r["valid"] is False
+    assert r["original_date"] is None
+
+
+async def test_the_preview_reports_the_move_to_the_user(db_session, _mock_yfinance):
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"]])
+    result = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    assert result.rows[0].date == "2024-01-08"
+    assert result.rows[0].original_date == "2024-01-06"
+
+
 def test_parse_rows_accepts_header_aliases_and_hint_text():
     df = pd.read_csv(io.BytesIO(_csv([
         ["Market (US/IND)", "Stock (Ticker)", "Date", "Number", "Buy/Sell", "Price"],
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],
     ])), dtype=str, keep_default_na=False)
     rows = import_service._parse_rows(df, had_header=True)
     assert len(rows) == 1
@@ -182,7 +235,7 @@ def test_parse_rows_accepts_header_aliases_and_hint_text():
     assert r["row_num"] == 2
     assert r["market_label"] == "US"
     assert r["ticker"] == "AAPL"
-    assert r["date"] == "2024-01-15"
+    assert r["date"] == "2024-01-16"
     assert r["action"] == "buy"
     assert r["shares"] == 10
     assert r["price"] == Decimal("150.00")
@@ -323,8 +376,8 @@ def _mock_yfinance():
 async def test_preview_flags_duplicate_within_same_file(db_session, _mock_yfinance):
     content = _csv([
         _HEADER,
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"],
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"],  # exact duplicate of row 2
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],  # exact duplicate of row 2
     ])
     result = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
 
@@ -336,11 +389,11 @@ async def test_preview_flags_duplicate_within_same_file(db_session, _mock_yfinan
 async def test_preview_does_not_flag_rows_that_differ_in_one_field(db_session, _mock_yfinance):
     content = _csv([
         _HEADER,
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"],
-        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],  # different date
-        ["US", "AAPL", "2024-01-15", "11", "buy", "150.00"],  # different shares
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.01"],  # different price
-        ["US", "AAPL", "2024-01-15", "10", "sell", "150.00"],  # different action
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],
+        ["US", "AAPL", "2024-01-17", "10", "buy", "150.00"],  # different date
+        ["US", "AAPL", "2024-01-16", "11", "buy", "150.00"],  # different shares
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.01"],  # different price
+        ["US", "AAPL", "2024-01-16", "10", "sell", "150.00"],  # different action
     ])
     result = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
     assert all(r.duplicate is False for r in result.rows)
@@ -348,7 +401,7 @@ async def test_preview_does_not_flag_rows_that_differ_in_one_field(db_session, _
 
 async def test_preview_flags_duplicate_against_existing_transaction(db_session, _mock_yfinance):
     # First upload lands a real transaction...
-    first = _csv([_HEADER, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])
+    first = _csv([_HEADER, ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"]])
     preview1 = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", first)
     await import_service.apply_import(db_session, USER_ID, [
         ImportApplyRow(row=r.row, market=r.market, ticker=r.ticker, date=r.date,
@@ -357,17 +410,82 @@ async def test_preview_flags_duplicate_against_existing_transaction(db_session, 
     ])
 
     # ...a second upload with the exact same row should be flagged as a duplicate.
-    second = _csv([_HEADER, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])
+    second = _csv([_HEADER, ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"]])
     preview2 = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", second)
     assert preview2.rows[0].duplicate is True
     assert "already have" in preview2.rows[0].duplicate_reason
 
 
+async def test_a_legacy_off_session_transaction_is_still_recognised_as_a_duplicate(
+    db_session, pid, _mock_yfinance,
+):
+    """Transactions written before dates were snapped sit on the date the file
+    gave. Comparing only the snapped date would miss them, and re-importing
+    the same broker export would record every weekend trade twice."""
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", company_name="Apple Inc.",
+        market="US", shares=10, sold_shares=0, average_cost=Decimal("150.0"),
+    )
+    db_session.add(holding)
+    await db_session.flush()
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=False, date="2024-01-06",  # a Saturday, stored as-is
+        shares=10, bought_at=Decimal("150.00"), shares_remaining=10,
+    ))
+    await db_session.commit()
+
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"]])
+    preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    row = preview.rows[0]
+    assert row.date == "2024-01-08"        # still snapped for the write
+    assert row.original_date == "2024-01-06"
+    assert row.duplicate is True
+    assert "2024-01-06" in row.duplicate_reason
+
+
+async def test_a_snapped_transaction_is_recognised_on_re_import(db_session, pid, _mock_yfinance):
+    """The other direction: once a trade is stored on its snapped date, the
+    same file must still match it."""
+    holding = Holding(
+        user_id=USER_ID, portfolio_id=pid, ticker="AAPL", company_name="Apple Inc.",
+        market="US", shares=10, sold_shares=0, average_cost=Decimal("150.0"),
+    )
+    db_session.add(holding)
+    await db_session.flush()
+    db_session.add(Transaction(
+        holding_id=holding.id, sale=False, date="2024-01-08",  # already snapped
+        shares=10, bought_at=Decimal("150.00"), shares_remaining=10,
+    ))
+    await db_session.commit()
+
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"]])
+    preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    assert preview.rows[0].duplicate is True
+
+
+async def test_two_rows_on_different_closed_days_are_not_each_others_duplicate(
+    db_session, _mock_yfinance,
+):
+    """A Saturday and a Sunday row snap to the same session but are two
+    trades, so the in-file check compares what the file actually said."""
+    content = _csv([
+        _HEADER,
+        ["US", "AAPL", "2024-01-06", "10", "buy", "150.00"],  # Saturday
+        ["US", "AAPL", "2024-01-07", "10", "buy", "150.00"],  # Sunday
+    ])
+    preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
+
+    assert [r.date for r in preview.rows] == ["2024-01-08", "2024-01-08"]
+    assert all(r.duplicate is False for r in preview.rows)
+
+
 async def test_preview_never_flags_invalid_rows_as_duplicate(db_session, _mock_yfinance):
     content = _csv([
         _HEADER,
-        ["UK", "AAPL", "2024-01-15", "10", "buy", "150.00"],
-        ["UK", "AAPL", "2024-01-15", "10", "buy", "150.00"],
+        ["UK", "AAPL", "2024-01-16", "10", "buy", "150.00"],
+        ["UK", "AAPL", "2024-01-16", "10", "buy", "150.00"],
     ])
     result = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
     assert all(r.valid is False for r in result.rows)
@@ -377,13 +495,13 @@ async def test_preview_never_flags_invalid_rows_as_duplicate(db_session, _mock_y
 # ── apply_import (integration) ─────────────────────────────────────────────
 
 async def test_apply_import_uses_the_given_date_not_today(db_session, _mock_yfinance, pid):
-    rows = [ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-15",
+    rows = [ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-16",
                             action="buy", shares=10, price=Decimal("150.00"), include=True)]
     result = await import_service.apply_import(db_session, USER_ID, rows)
 
     assert result.imported_rows == 1
     holding = await import_service.portfolio_service.get_stock_holding(db_session, pid, "AAPL", price=Decimal("100"))
-    assert holding.trade_history[0].date == "2024-01-15"
+    assert holding.trade_history[0].date == "2024-01-16"
 
 
 async def test_apply_import_skips_rows_with_include_false(db_session, _mock_yfinance, pid):
@@ -454,7 +572,7 @@ async def test_preview_and_apply_work_with_no_header_row(db_session, _mock_yfina
     # Bare data, no header line at all — six columns in the fixed
     # market/stock/date/number/buy-sell/price order.
     content = _csv([
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"],
         ["IND", "RELIANCE", "2024-02-01", "5", "buy", "2500.00"],
     ])
     preview = await import_service.preview_import(db_session, USER_ID, "portfolio.csv", content)
@@ -488,7 +606,7 @@ async def _make_portfolio(session, market: str, name: str):
 
 
 async def test_no_portfolio_column_sends_everything_to_the_default(db_session, _mock_yfinance, pid):
-    content = _csv([_HEADER, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00"]])
+    content = _csv([_HEADER, ["US", "AAPL", "2024-01-16", "10", "buy", "150.00"]])
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
 
     assert preview.blocking_errors == []
@@ -498,7 +616,7 @@ async def test_no_portfolio_column_sends_everything_to_the_default(db_session, _
 
 async def test_named_portfolio_routes_the_row_there(db_session, _mock_yfinance):
     zerodha = await _make_portfolio(db_session, "US", "Zerodha")
-    content = _csv([_HEADER_P, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Zerodha"]])
+    content = _csv([_HEADER_P, ["US", "AAPL", "2024-01-16", "10", "buy", "150.00", "Zerodha"]])
 
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
     assert preview.blocking_errors == []
@@ -519,7 +637,7 @@ async def test_named_portfolio_routes_the_row_there(db_session, _mock_yfinance):
 
 async def test_portfolio_name_matching_ignores_case_and_padding(db_session, _mock_yfinance):
     zerodha = await _make_portfolio(db_session, "US", "Zerodha")
-    content = _csv([_HEADER_P, ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "  zERODHA "]])
+    content = _csv([_HEADER_P, ["US", "AAPL", "2024-01-16", "10", "buy", "150.00", "  zERODHA "]])
 
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
     assert preview.blocking_errors == []
@@ -529,8 +647,8 @@ async def test_portfolio_name_matching_ignores_case_and_padding(db_session, _moc
 async def test_unknown_portfolio_blocks_the_import(db_session, _mock_yfinance, pid):
     content = _csv([
         _HEADER_P,
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Nope"],
-        ["US", "MSFT", "2024-01-15", "5", "buy", "300.00", "Nope"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00", "Nope"],
+        ["US", "MSFT", "2024-01-16", "5", "buy", "300.00", "Nope"],
     ])
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
 
@@ -542,8 +660,8 @@ async def test_blank_portfolio_cell_among_named_rows_blocks_the_import(db_sessio
     await _make_portfolio(db_session, "US", "Zerodha")
     content = _csv([
         _HEADER_P,
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Zerodha"],
-        ["US", "MSFT", "2024-01-15", "5", "buy", "300.00", ""],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00", "Zerodha"],
+        ["US", "MSFT", "2024-01-16", "5", "buy", "300.00", ""],
     ])
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
 
@@ -553,7 +671,7 @@ async def test_blank_portfolio_cell_among_named_rows_blocks_the_import(db_sessio
 
 async def test_portfolio_from_the_other_market_says_so(db_session, _mock_yfinance):
     await _make_portfolio(db_session, "US", "Zerodha")
-    content = _csv([_HEADER_P, ["IND", "RELIANCE", "2024-01-15", "5", "buy", "2500.00", "Zerodha"]])
+    content = _csv([_HEADER_P, ["IND", "RELIANCE", "2024-01-16", "5", "buy", "2500.00", "Zerodha"]])
 
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
     assert len(preview.blocking_errors) == 1
@@ -574,14 +692,14 @@ async def test_duplicate_detection_is_per_portfolio(db_session, _mock_yfinance, 
     """The same transaction in a different portfolio is not a duplicate."""
     zerodha = await _make_portfolio(db_session, "US", "Zerodha")
     await import_service.apply_import(db_session, USER_ID, [
-        ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-15", action="buy",
+        ImportApplyRow(row=2, market="US", ticker="AAPL", date="2024-01-16", action="buy",
                        shares=10, price=Decimal("150.00"), include=True),
     ])
 
     content = _csv([
         _HEADER_P,
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "main"],
-        ["US", "AAPL", "2024-01-15", "10", "buy", "150.00", "Zerodha"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00", "main"],
+        ["US", "AAPL", "2024-01-16", "10", "buy", "150.00", "Zerodha"],
     ])
     preview = await import_service.preview_import(db_session, USER_ID, "p.csv", content)
 

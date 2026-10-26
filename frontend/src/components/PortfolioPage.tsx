@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import {
   Plus, ChevronDown, ChevronUp,
   Trash2, RefreshCw, X, Briefcase, ArrowDownLeft, ArrowUpRight,
-  BarChart2, AlertTriangle, FileDown, FileUp, Upload, Pencil, Coins,
+  BarChart2, AlertTriangle, FileDown, FileUp, Upload, Pencil, Coins, CalendarClock,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { PieChart, Pie, Cell, Tooltip as ChartTooltip, ResponsiveContainer } from 'recharts'
@@ -903,6 +903,64 @@ function DividendModal({ mode, ticker, currency, entry, onClose, onSubmit }: Div
 type ImportSummaryRow = Omit<ImportRowResult, 'action'> & { action: string }
 type ImportSummary = Omit<PortfolioImportResult, 'rows'> & { rows: ImportSummaryRow[] }
 
+/** Tells the user which imported rows had their date moved onto a session.
+ *
+ * Direction-neutral on purpose: the server moves a date forward to the next
+ * open session, but a closed date entered *today* goes back to the previous
+ * one instead of into the future. The per-row lines below show which way. */
+function MovedDatesNotice({ rows }: { rows: ImportPreviewRow[] }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="bg-indigo-500/8 border border-indigo-500/25 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className="tap-target w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-indigo-500/5 transition-colors"
+      >
+        <CalendarClock size={15} className="text-indigo-400 shrink-0 mt-0.5" />
+        <div className="space-y-1 min-w-0">
+          <p className="text-xs font-semibold text-indigo-300">
+            {rows.length} date{rows.length !== 1 ? 's' : ''} moved to a trading session
+          </p>
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            Those rows fell on a weekend or market holiday, which has no closing price
+            behind it. They were recorded on the nearest session instead.
+          </p>
+        </div>
+        <motion.span
+          animate={{ rotate: open ? 180 : 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="ml-auto shrink-0 mt-0.5 text-indigo-400"
+        >
+          <ChevronDown size={14} />
+        </motion.span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div variants={collapse} initial="hidden" animate="show" exit="exit" style={{ overflow: 'hidden' }}>
+            <div className="max-h-40 overflow-y-auto divide-y divide-indigo-500/10 border-t border-indigo-500/15">
+              {rows.map(r => (
+                <div key={r.row} className="flex items-center gap-2 px-4 py-1.5 text-[0.6875rem] font-mono">
+                  <span className="text-zinc-600 whitespace-nowrap">Row {r.row}</span>
+                  <span className="text-zinc-400 truncate">{r.ticker}</span>
+                  <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                    <span className="text-zinc-600 line-through">{r.original_date}</span>
+                    <span className="text-zinc-600">&rarr;</span>
+                    <span className="text-indigo-300">{r.date}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+
 function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)   // preview fetch in flight
@@ -928,6 +986,18 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
     [previewRows],
   )
   const reviewingRow = reviewIndex < duplicateQueue.length ? duplicateQueue[reviewIndex] : null
+
+  // Rows whose date the server moved onto a trading session. Worth saying out
+  // loud: the stored date won't match the file, and a silent change to a
+  // transaction record is the kind of thing that erodes trust in the whole
+  // import.
+  const movedRows = useMemo(() => {
+    if (!result) return []
+    const imported = new Set(
+      result.rows.filter(r => r.status === 'imported').map(r => r.row),
+    )
+    return (previewRows ?? []).filter(r => r.original_date && imported.has(r.row))
+  }, [previewRows, result])
 
   async function runApply(rows: ImportPreviewRow[], finalDecisions: Map<number, boolean>) {
     setApplying(true)
@@ -1056,6 +1126,8 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
                 <div className="text-[0.5625rem] text-zinc-500 tracking-widest">FAILED</div>
               </div>
             </div>
+
+            {movedRows.length > 0 && <MovedDatesNotice rows={movedRows} />}
 
             {problemRows.length > 0 && (
               <div className="border border-zinc-800 rounded-lg overflow-hidden">

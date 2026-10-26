@@ -221,6 +221,9 @@ export interface ImportPreviewRow {
   error: string | null
   duplicate: boolean               // true if this exactly matches another transaction
   duplicate_reason: string | null   // e.g. "Matches a transaction..." or "Duplicate of row 4 in this file"
+  // Set when the file's date fell on a weekend or holiday and was moved onto
+  // the session it would have filled on. Informational — the row still imports.
+  original_date: string | null
   portfolio: string | null          // portfolio name as written in the file, if the column was present
   portfolio_id: number | null       // resolved portfolio; null if the name didn't resolve
 }

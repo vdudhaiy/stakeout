@@ -56,6 +56,9 @@ class ImportPreviewRow(BaseModel):
     error: str | None = None
     duplicate: bool = False             # True if this exactly matches another transaction
     duplicate_reason: str | None = None  # e.g. "Matches an existing transaction..." or "Duplicate of row 4 in this file"
+    # Set when `date` was moved onto a trading session (the file had a
+    # weekend or a holiday). Not an error — the row still imports.
+    original_date: str | None = None
     portfolio: str | None = None        # portfolio name as written in the file, if the column was present
     portfolio_id: int | None = None     # resolved portfolio; None if the name didn't resolve
 

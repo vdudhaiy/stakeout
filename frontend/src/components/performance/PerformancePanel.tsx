@@ -46,7 +46,7 @@ function formatSpan(days: number): string {
  * Falls back to plain profit when the index couldn't be priced. It used to
  * treat an unavailable benchmark as one worth $0, which turned "we have no
  * S&P data" into "you beat the S&P by your entire portfolio". */
-function Verdict({ data }: { data: PerformanceResponse }) {
+function Verdict({ data, excluded }: { data: PerformanceResponse; excluded: string[] }) {
   const comparable = data.benchmark_available && data.value_added != null
   const headline = comparable ? data.value_added! : data.current_value - data.net_invested
   const ahead = headline >= 0
@@ -91,6 +91,20 @@ function Verdict({ data }: { data: PerformanceResponse }) {
               nothing to compare against yet.</>
             )}
           </p>
+          {/* The figures above cover only the priced holdings. Said here as
+              well as at the foot of the panel, because this sentence is the
+              one people read and it otherwise claims to be the whole
+              portfolio. */}
+          {excluded.length > 0 && (
+            <p className="mt-1.5 flex items-start gap-1.5 text-[0.6875rem] text-amber-400 leading-relaxed">
+              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+              <span>
+                Excludes <span className="font-mono">{excluded.join(', ')}</span> — no price
+                history archived yet, so {excluded.length > 1 ? 'they are' : 'it is'} in
+                neither figure.
+              </span>
+            </p>
+          )}
         </div>
       </div>
     </motion.div>
@@ -344,7 +358,7 @@ export function PerformancePanel({ market, portfolioId, guest }: Props) {
               />
             ) : (
               <div className="space-y-4">
-                <Verdict data={data} />
+                <Verdict data={data} excluded={excluded} />
 
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                   {tiles.map((tile, i) => (
